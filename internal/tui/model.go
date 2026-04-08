@@ -1262,11 +1262,12 @@ func (m *Model) renderSplitDetail(width, height int, focused bool, borderColor l
 	} else {
 		desc := t.Description
 		if desc == "" {
-			desc = lipgloss.NewStyle().Foreground(subtle).Render("(empty)")
+			descContent = lipgloss.NewStyle().Foreground(subtle).Render("(empty)")
 		} else {
-			desc = lipgloss.NewStyle().Foreground(softWhite).Render(desc)
+			// Pre-wrap to innerWidth, then style each line
+			wrapped := lipgloss.NewStyle().Width(innerWidth).Render(desc)
+			descContent = lipgloss.NewStyle().Foreground(softWhite).Render(wrapped)
 		}
-		descContent = desc
 	}
 	descPanel := renderPanel("Description", descContent, width, descPanelHeight, descColor, focused && m.editField == 2)
 

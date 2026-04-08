@@ -24,6 +24,7 @@ type keyMap struct {
 	MoveLeft   key.Binding
 	MoveRight  key.Binding
 	Focus      key.Binding
+	Edit       key.Binding
 }
 
 var keys = keyMap{
@@ -48,4 +49,5 @@ var keys = keyMap{
 	MoveLeft:  key.NewBinding(key.WithKeys("H"), key.WithHelp("H", "move left")),
 	MoveRight: key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "move right")),
 	Focus:     key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "focus")),
+	Edit:      key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
 }

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -58,6 +59,13 @@ type Model struct {
 	selectIdx     int
 	selectLabel   string
 	onSelect      func(string) // called when user picks an option
+
+	// Edit state within detail view
+	editTitle    textinput.Model
+	editDesc     textarea.Model
+	editField    int    // 0 = metadata, 1 = title, 2 = description
+	editTicketID string // ID of ticket being edited
+	metaIdx      int    // selected sub-field within metadata (0=status, 1=tags, 2=assigned)
 }
 
 func NewModel(s *store.Store) (*Model, error) {
@@ -237,7 +245,7 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case key.Matches(msg, keys.Enter):
 		if m.selectedTicket() != nil {
-			m.view = detailView
+			return m.enterDetail()
 		}
 	case key.Matches(msg, keys.Tab):
 		m.view = columnView
@@ -286,7 +294,7 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case key.Matches(msg, keys.Enter):
 		if m.selectedTicket() != nil {
-			m.view = detailView
+			return m.enterDetail()
 		}
 	case key.Matches(msg, keys.Add):
 		m.startInput(inputAdd, "New ticket: ")
@@ -312,33 +320,72 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// enterDetail sets up the detail/edit view for the selected ticket.
+func (m *Model) enterDetail() (tea.Model, tea.Cmd) {
+	t := m.selectedTicket()
+	if t == nil {
+		return m, nil
+	}
+	m.editTicketID = t.ID
+	m.editField = 0 // start on metadata
+	m.metaIdx = 0
+
+	ti := textinput.New()
+	ti.Prompt = ""
+	ti.CharLimit = 200
+	ti.SetValue(t.Title)
+	ti.Blur()
+	m.editTitle = ti
+
+	ta := textarea.New()
+	ta.Prompt = ""
+	ta.SetValue(t.Description)
+	ta.ShowLineNumbers = false
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	ta.FocusedStyle.Base = lipgloss.NewStyle()
+	ta.Blur()
+	m.editDesc = ta
+
+	m.view = detailView
+	return m, nil
+}
+
 // updateDetail handles keys in detail view.
+// editField: 0 = metadata, 1 = title, 2 = description
 func (m *Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch m.editField {
+	case 0:
+		return m.updateDetailMeta(msg)
+	case 1:
+		return m.updateDetailTitle(msg)
+	case 2:
+		return m.updateDetailDesc(msg)
+	}
+	return m, nil
+}
+
+// updateDetailMeta handles keys when metadata bar is focused.
+func (m *Model) updateDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
 	case key.Matches(msg, keys.Esc):
+		m.saveEdit()
 		m.view = boardView
-	case key.Matches(msg, keys.Status):
-		m.startSelect("Status", []string{"Backlog", "Todo", "Doing", "Done", "Hold"}, func(val string) {
-			t := m.selectedTicket()
-			if t == nil {
-				return
-			}
-			status, err := model.ParseStatus(val)
-			if err != nil {
-				return
-			}
-			m.store.Update(t.ID, func(ticket *model.Ticket) {
-				ticket.Status = status
-			})
-			m.reload()
-			m.clampCursors()
-		})
-		return m, nil
-	case key.Matches(msg, keys.Assign):
-		m.startInput(inputAssign, "Assign to: ")
+	case key.Matches(msg, keys.Tab):
+		m.editField = 1
+		m.editTitle.Focus()
 		return m, textinput.Blink
+	case key.Matches(msg, keys.Left):
+		if m.metaIdx > 0 {
+			m.metaIdx--
+		}
+	case key.Matches(msg, keys.Right):
+		if m.metaIdx < 2 {
+			m.metaIdx++
+		}
+	case key.Matches(msg, keys.Enter):
+		return m.editMetaField()
 	case key.Matches(msg, keys.Delete):
 		m.deleteTicket()
 		m.view = boardView
@@ -348,6 +395,87 @@ func (m *Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveTicket(1)
 	}
 	return m, nil
+}
+
+// editMetaField triggers inline edit for the selected metadata sub-field.
+func (m *Model) editMetaField() (tea.Model, tea.Cmd) {
+	switch m.metaIdx {
+	case 0: // status
+		m.startSelect("Status", []string{"Backlog", "Todo", "Doing", "Done", "Hold"}, func(val string) {
+			status, err := model.ParseStatus(val)
+			if err != nil {
+				return
+			}
+			m.store.Update(m.editTicketID, func(ticket *model.Ticket) {
+				ticket.Status = status
+			})
+			m.reload()
+			m.clampCursors()
+		})
+	case 1: // tags
+		t := m.selectedTicket()
+		current := ""
+		if t != nil && len(t.Tags) > 0 {
+			current = strings.Join(t.Tags, ", ")
+		}
+		m.startInput(inputAssign, "Tags (comma separated): ")
+		m.input.SetValue(current)
+		// Override the submit to handle tags
+		m.inputMode = inputAdd // reuse, we'll check prompt
+		m.input.Prompt = "Tags: "
+		return m, textinput.Blink
+	case 2: // assigned
+		m.startInput(inputAssign, "Assign to: ")
+		t := m.selectedTicket()
+		if t != nil {
+			m.input.SetValue(t.AssignedTo)
+		}
+		return m, textinput.Blink
+	}
+	return m, nil
+}
+
+// updateDetailTitle handles keys when editing the title field.
+func (m *Model) updateDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.editTitle.Blur()
+		m.editField = 0
+		m.saveEdit()
+		return m, nil
+	case "tab":
+		m.editField = 2
+		m.editTitle.Blur()
+		m.editDesc.Focus()
+		return m, nil
+	case "enter":
+		m.saveEdit()
+		m.view = boardView
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.editTitle, cmd = m.editTitle.Update(msg)
+	return m, cmd
+}
+
+// updateDetailDesc handles keys when editing the description field.
+func (m *Model) updateDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.editDesc.Blur()
+		m.editField = 0
+		m.saveEdit()
+		return m, nil
+	case "tab":
+		m.editField = 0
+		m.editDesc.Blur()
+		m.saveEdit()
+		return m, nil
+	}
+	// Enter adds newline in description
+	var cmd tea.Cmd
+	m.editDesc, cmd = m.editDesc.Update(msg)
+	return m, cmd
 }
 
 func (m *Model) startInput(mode inputMode, prompt string) {
@@ -395,12 +523,35 @@ func (m *Model) submitInput() {
 		m.reload()
 		m.clampCursors()
 
-	case strings.HasPrefix(prompt, "Assign"):
-		t := m.selectedTicket()
-		if t == nil {
+	case strings.HasPrefix(prompt, "Tags"):
+		id := m.editTicketID
+		if id == "" {
 			return
 		}
-		m.store.Update(t.ID, func(ticket *model.Ticket) {
+		var tags []string
+		for _, t := range strings.Split(value, ",") {
+			t = strings.TrimSpace(t)
+			if t != "" {
+				tags = append(tags, t)
+			}
+		}
+		m.store.Update(id, func(ticket *model.Ticket) {
+			ticket.Tags = tags
+		})
+		m.reload()
+
+	case strings.HasPrefix(prompt, "Assign"):
+		id := m.editTicketID
+		if id == "" {
+			t := m.selectedTicket()
+			if t != nil {
+				id = t.ID
+			}
+		}
+		if id == "" {
+			return
+		}
+		m.store.Update(id, func(ticket *model.Ticket) {
 			ticket.AssignedTo = value
 		})
 		m.reload()
@@ -447,6 +598,21 @@ func (m *Model) viewSelect() string {
 		}
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, parts...)
+}
+
+func (m *Model) saveEdit() {
+	title := strings.TrimSpace(m.editTitle.Value())
+	desc := m.editDesc.Value()
+
+	if title == "" {
+		return
+	}
+
+	m.store.Update(m.editTicketID, func(t *model.Ticket) {
+		t.Title = title
+		t.Description = desc
+	})
+	m.reload()
 }
 
 func (m *Model) moveTicket(dir int) {
@@ -516,7 +682,14 @@ func (m *Model) helpText() string {
 		}
 		return fmt.Sprintf("tab next | H/L move | enter detail | esc board | a add | %s | q quit", focusLabel)
 	case detailView:
-		return "s status | A assign | H/L move | d delete | esc back | q quit"
+		switch m.editField {
+		case 0:
+			return "tab next field | h/l select | enter edit | H/L move | d delete | esc back | q quit"
+		case 1:
+			return "tab next field | enter save & back | esc done editing"
+		case 2:
+			return "tab next field | esc done editing"
+		}
 	}
 	return ""
 }
@@ -763,49 +936,90 @@ func (m *Model) viewDetail() string {
 		return m.viewBoard()
 	}
 
-	header := titleBar.Render("kanban — Detail")
-	availHeight := m.height - 2
-
 	innerWidth := m.width - 4
-	sep := detailSep.Render(strings.Repeat("─", innerWidth))
 
-	var lines []string
-	lines = append(lines, "")
-	lines = append(lines, detailTitle.Render(t.Title))
-	lines = append(lines, sep)
-	lines = append(lines, fmt.Sprintf("%s%s", detailLabel.Render("ID:"), detailValue.Render(t.ShortID)))
-	lines = append(lines, fmt.Sprintf("%s%s", detailLabel.Render("Status:"),
-		lipgloss.NewStyle().Foreground(green).Bold(true).Render(statusDisplay[t.Status])))
-	if len(t.Tags) > 0 {
-		lines = append(lines, fmt.Sprintf("%s%s", detailLabel.Render("Tags:"),
-			tagStyle.Render(strings.Join(t.Tags, ", "))))
+	// Metadata bar — navigable fields
+	metaBorderColor := softWhite
+	if m.editField == 0 {
+		metaBorderColor = green
 	}
-	if t.AssignedTo != "" {
-		lines = append(lines, fmt.Sprintf("%s%s", detailLabel.Render("Assigned:"),
-			assigneeStyle.Render(t.AssignedTo)))
-	}
-	if t.CreatedBy != "" {
-		lines = append(lines, fmt.Sprintf("%s%s", detailLabel.Render("Created by:"),
-			detailValue.Render(t.CreatedBy)))
-	}
-	lines = append(lines, fmt.Sprintf("%s%s", detailLabel.Render("Created:"),
-		detailValue.Render(t.CreatedAt.Format("2006-01-02 15:04"))))
-	lines = append(lines, fmt.Sprintf("%s%s", detailLabel.Render("Updated:"),
-		detailValue.Render(t.UpdatedAt.Format("2006-01-02 15:04"))))
+	metaContent := m.renderMetaBar(t)
+	metaPanel := renderPanel("Info", metaContent, innerWidth+2, 3, metaBorderColor, m.editField == 0)
 
-	if t.Description != "" {
-		lines = append(lines, sep)
-		// Wrap description
-		descLines := strings.Split(t.Description, "\n")
-		for _, dl := range descLines {
-			lines = append(lines, detailValue.Render(dl))
-		}
+	// Title field — 1 line tall
+	titleBorderColor := softWhite
+	if m.editField == 1 {
+		titleBorderColor = green
 	}
-	lines = append(lines, "")
+	m.editTitle.Width = innerWidth - 2
+	titlePanel := renderPanel("Title", m.editTitle.View(), innerWidth+2, 3, titleBorderColor, m.editField == 1)
 
-	content := strings.Join(lines, "\n")
-	panel := renderPanel("Detail", content, m.width, availHeight, green, true)
+	// Description field — fills remaining space
+	descBorderColor := softWhite
+	if m.editField == 2 {
+		descBorderColor = green
+	}
+	// Height: total - meta(3) - title(3) - help(1)
+	descPanelHeight := m.height - 7
+	if descPanelHeight < 4 {
+		descPanelHeight = 4
+	}
+	m.editDesc.SetWidth(innerWidth - 2)
+	m.editDesc.SetHeight(descPanelHeight - 2)
+	descPanel := renderPanel("Description", m.editDesc.View(), innerWidth+2, descPanelHeight, descBorderColor, m.editField == 2)
+
 	help := helpStyle.Render(m.helpText())
 
-	return lipgloss.JoinVertical(lipgloss.Left, header, panel, help)
+	return lipgloss.JoinVertical(lipgloss.Left,
+		metaPanel,
+		titlePanel,
+		descPanel,
+		help,
+	)
+}
+
+// renderMetaBar renders the metadata fields with the selected one highlighted.
+func (m *Model) renderMetaBar(t *model.Ticket) string {
+	isMeta := m.editField == 0
+
+	statusText := statusDisplay[t.Status]
+	tagsText := "no tags"
+	if len(t.Tags) > 0 {
+		tagsText = "#" + strings.Join(t.Tags, " #")
+	}
+	assignText := "unassigned"
+	if t.AssignedTo != "" {
+		assignText = "● " + t.AssignedTo
+	}
+
+	fields := []struct {
+		label string
+		value string
+		style lipgloss.Style
+	}{
+		{"status", statusText, lipgloss.NewStyle().Foreground(green).Bold(true)},
+		{"tags", tagsText, tagStyle},
+		{"assigned", assignText, assigneeStyle},
+	}
+
+	var parts []string
+	for i, f := range fields {
+		rendered := f.style.Render(f.value)
+		if isMeta && i == m.metaIdx {
+			// Highlight selected field
+			rendered = lipgloss.NewStyle().
+				Background(lipgloss.Color("#313244")).
+				Bold(true).
+				Foreground(white).
+				Padding(0, 1).
+				Render(f.value)
+		}
+		parts = append(parts, rendered)
+	}
+
+	// Add read-only info at the end
+	parts = append(parts, lipgloss.NewStyle().Foreground(midGray).Render(t.ShortID))
+	parts = append(parts, lipgloss.NewStyle().Foreground(midGray).Render(t.CreatedAt.Format("2006-01-02 15:04")))
+
+	return strings.Join(parts, "  ")
 }

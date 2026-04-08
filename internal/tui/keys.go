@@ -23,6 +23,7 @@ type keyMap struct {
 	Delete     key.Binding
 	MoveLeft   key.Binding
 	MoveRight  key.Binding
+	Focus      key.Binding
 }
 
 var keys = keyMap{
@@ -38,12 +39,13 @@ var keys = keyMap{
 	Status:    key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "status")),
 	Assign:    key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "assign")),
 	Help:      key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
-	One:       key.NewBinding(key.WithKeys("1"), key.WithHelp("1", "BACKLOG")),
-	Two:       key.NewBinding(key.WithKeys("2"), key.WithHelp("2", "TODO")),
-	Three:     key.NewBinding(key.WithKeys("3"), key.WithHelp("3", "DOING")),
-	Four:      key.NewBinding(key.WithKeys("4"), key.WithHelp("4", "DONE")),
-	Five:      key.NewBinding(key.WithKeys("5"), key.WithHelp("5", "HOLD")),
+	One:       key.NewBinding(key.WithKeys("0"), key.WithHelp("0", "Backlog")),
+	Two:       key.NewBinding(key.WithKeys("1"), key.WithHelp("1", "Todo")),
+	Three:     key.NewBinding(key.WithKeys("2"), key.WithHelp("2", "Doing")),
+	Four:      key.NewBinding(key.WithKeys("3"), key.WithHelp("3", "Done")),
+	Five:      key.NewBinding(key.WithKeys("4"), key.WithHelp("4", "Hold")),
 	Delete:    key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
 	MoveLeft:  key.NewBinding(key.WithKeys("H"), key.WithHelp("H", "move left")),
 	MoveRight: key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "move right")),
+	Focus:     key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "focus")),
 }

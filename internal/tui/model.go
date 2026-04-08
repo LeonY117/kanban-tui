@@ -51,6 +51,7 @@ type Model struct {
 	input      textinput.Model
 	inputMode  inputMode
 	err        error
+	focusMode  bool // when true, only show Todo/Doing/Done
 
 	// Selection picker state (for status)
 	selectOptions []string
@@ -153,6 +154,56 @@ func (m *Model) selectedTicket() *model.Ticket {
 	return &tickets[idx]
 }
 
+// visibleColumns returns the column indices currently shown.
+func (m *Model) visibleColumns() []int {
+	if m.focusMode {
+		return []int{1, 2, 3} // Todo, Doing, Done
+	}
+	return []int{0, 1, 2, 3, 4}
+}
+
+// isColVisible returns whether a column index is currently visible.
+func (m *Model) isColVisible(col int) bool {
+	for _, c := range m.visibleColumns() {
+		if c == col {
+			return true
+		}
+	}
+	return false
+}
+
+// clampFocusedCol ensures focusedCol is within visible columns.
+func (m *Model) clampFocusedCol() {
+	vis := m.visibleColumns()
+	for _, c := range vis {
+		if c == m.focusedCol {
+			return
+		}
+	}
+	// Not visible, snap to first visible
+	m.focusedCol = vis[0]
+}
+
+// moveFocus moves focus left/right within visible columns.
+func (m *Model) moveFocus(dir int) {
+	vis := m.visibleColumns()
+	curIdx := -1
+	for i, c := range vis {
+		if c == m.focusedCol {
+			curIdx = i
+			break
+		}
+	}
+	if curIdx < 0 {
+		m.focusedCol = vis[0]
+		return
+	}
+	newIdx := curIdx + dir
+	if newIdx >= 0 && newIdx < len(vis) {
+		m.focusedCol = vis[newIdx]
+	}
+}
+
 func (m *Model) clampCursors() {
 	for i, status := range model.ColumnOrder {
 		count := len(m.board.ByStatus(status))
@@ -171,13 +222,9 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
 	case key.Matches(msg, keys.Left):
-		if m.focusedCol > 0 {
-			m.focusedCol--
-		}
+		m.moveFocus(-1)
 	case key.Matches(msg, keys.Right):
-		if m.focusedCol < len(model.ColumnOrder)-1 {
-			m.focusedCol++
-		}
+		m.moveFocus(1)
 	case key.Matches(msg, keys.Up):
 		if m.cursors[m.focusedCol] > 0 {
 			m.cursors[m.focusedCol]--
@@ -197,16 +244,19 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Add):
 		m.startInput(inputAdd, "New ticket: ")
 		return m, textinput.Blink
+	case key.Matches(msg, keys.Focus):
+		m.focusMode = !m.focusMode
+		m.clampFocusedCol()
 	case key.Matches(msg, keys.One):
-		m.focusedCol = 0
+		if m.isColVisible(0) { m.focusedCol = 0 }
 	case key.Matches(msg, keys.Two):
-		m.focusedCol = 1
+		if m.isColVisible(1) { m.focusedCol = 1 }
 	case key.Matches(msg, keys.Three):
-		m.focusedCol = 2
+		if m.isColVisible(2) { m.focusedCol = 2 }
 	case key.Matches(msg, keys.Four):
-		m.focusedCol = 3
+		if m.isColVisible(3) { m.focusedCol = 3 }
 	case key.Matches(msg, keys.Five):
-		m.focusedCol = 4
+		if m.isColVisible(4) { m.focusedCol = 4 }
 	case key.Matches(msg, keys.MoveLeft):
 		m.moveTicket(-1)
 	case key.Matches(msg, keys.MoveRight):
@@ -223,7 +273,7 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Esc):
 		m.view = boardView
 	case key.Matches(msg, keys.Tab):
-		m.focusedCol = (m.focusedCol + 1) % len(model.ColumnOrder)
+		m.moveFocus(1)
 	case key.Matches(msg, keys.Up):
 		if m.cursors[m.focusedCol] > 0 {
 			m.cursors[m.focusedCol]--
@@ -241,16 +291,19 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Add):
 		m.startInput(inputAdd, "New ticket: ")
 		return m, textinput.Blink
+	case key.Matches(msg, keys.Focus):
+		m.focusMode = !m.focusMode
+		m.clampFocusedCol()
 	case key.Matches(msg, keys.One):
-		m.focusedCol = 0
+		if m.isColVisible(0) { m.focusedCol = 0 }
 	case key.Matches(msg, keys.Two):
-		m.focusedCol = 1
+		if m.isColVisible(1) { m.focusedCol = 1 }
 	case key.Matches(msg, keys.Three):
-		m.focusedCol = 2
+		if m.isColVisible(2) { m.focusedCol = 2 }
 	case key.Matches(msg, keys.Four):
-		m.focusedCol = 3
+		if m.isColVisible(3) { m.focusedCol = 3 }
 	case key.Matches(msg, keys.Five):
-		m.focusedCol = 4
+		if m.isColVisible(4) { m.focusedCol = 4 }
 	case key.Matches(msg, keys.MoveLeft):
 		m.moveTicket(-1)
 	case key.Matches(msg, keys.MoveRight):
@@ -451,18 +504,26 @@ func (m *Model) viewInput() string {
 func (m *Model) helpText() string {
 	switch m.view {
 	case boardView:
-		return "←/h →/l col  ↑/k ↓/j item  H/L move  enter detail  tab column  a add  1-5 jump  q quit"
+		focusLabel := "f focus"
+		if m.focusMode {
+			focusLabel = "f all"
+		}
+		return fmt.Sprintf("H/L move | enter detail | tab column | a add | %s | q quit", focusLabel)
 	case columnView:
-		return "tab next  1-5 jump  ↑/k ↓/j select  H/L move  enter detail  esc board  a add  q quit"
+		focusLabel := "f focus"
+		if m.focusMode {
+			focusLabel = "f all"
+		}
+		return fmt.Sprintf("tab next | H/L move | enter detail | esc board | a add | %s | q quit", focusLabel)
 	case detailView:
-		return "s status  A assign  H/L move  d delete  esc back  q quit"
+		return "s status | A assign | H/L move | d delete | esc back | q quit"
 	}
 	return ""
 }
 
 // renderPanel draws a bordered panel with the title embedded in the top border (lazygit style).
 // Example: ╭─[1] Backlog────────────╮
-func renderPanel(title string, content string, width, height int, borderColor lipgloss.Color) string {
+func renderPanel(title string, content string, width, height int, borderColor lipgloss.Color, boldTitle bool) string {
 	// Border characters (rounded)
 	tl, tr, bl, br := "╭", "╮", "╰", "╯"
 	h, v := "─", "│"
@@ -472,24 +533,25 @@ func renderPanel(title string, content string, width, height int, borderColor li
 		innerWidth = 1
 	}
 
-	// Top border with embedded title
-	titleStr := fmt.Sprintf("%s%s", h, title)
-	remaining := innerWidth - len([]rune(titleStr))
+	borderStyle := lipgloss.NewStyle().Foreground(borderColor)
+
+	// Render title with optional bold
+	titleStyle := lipgloss.NewStyle().Foreground(borderColor)
+	if boldTitle {
+		titleStyle = titleStyle.Bold(true)
+	}
+	renderedTitle := titleStyle.Render(title)
+
+	// Calculate remaining border chars (use raw title length for spacing math)
+	titleLen := len([]rune(title))
+	remaining := innerWidth - 1 - titleLen // 1 for the leading ─
 	if remaining < 0 {
-		// Title too long, truncate
-		runes := []rune(titleStr)
-		if innerWidth > 1 {
-			titleStr = string(runes[:innerWidth-1]) + "…"
-		}
 		remaining = 0
 	}
-	topBorder := tl + titleStr + strings.Repeat(h, remaining) + tr
+	topBorder := borderStyle.Render(tl+h) + renderedTitle + borderStyle.Render(strings.Repeat(h, remaining)+tr)
 
 	// Bottom border
-	bottomBorder := bl + strings.Repeat(h, innerWidth) + br
-
-	// Style the borders
-	borderStyle := lipgloss.NewStyle().Foreground(borderColor)
+	bottomBorder := borderStyle.Render(bl + strings.Repeat(h, innerWidth) + br)
 
 	// Split content into lines and pad/truncate to fit
 	contentLines := strings.Split(content, "\n")
@@ -508,9 +570,9 @@ func renderPanel(title string, content string, width, height int, borderColor li
 		bodyLines = append(bodyLines, borderStyle.Render(v)+paddedLine+borderStyle.Render(v))
 	}
 
-	result := borderStyle.Render(topBorder) + "\n"
+	result := topBorder + "\n"
 	result += strings.Join(bodyLines, "\n") + "\n"
-	result += borderStyle.Render(bottomBorder)
+	result += bottomBorder
 
 	return result
 }
@@ -520,16 +582,24 @@ func (m *Model) viewBoard() string {
 	availHeight := m.height - 2 // title bar + help bar
 	availWidth := m.width
 
-	numCols := len(model.ColumnOrder)
+	visCols := m.visibleColumns()
+	numCols := len(visCols)
 
 	// Distribute widths evenly, giving focused column more space on small terminals
 	colWidths := make([]int, numCols)
 	if availWidth < 120 && numCols > 1 {
+		focusedIdx := -1
+		for i, c := range visCols {
+			if c == m.focusedCol {
+				focusedIdx = i
+				break
+			}
+		}
 		focusedWidth := availWidth * 40 / 100
 		remaining := availWidth - focusedWidth
 		unfocusedWidth := remaining / (numCols - 1)
 		for i := range colWidths {
-			if i == m.focusedCol {
+			if i == focusedIdx {
 				colWidths[i] = focusedWidth
 			} else {
 				colWidths[i] = unfocusedWidth
@@ -549,8 +619,9 @@ func (m *Model) viewBoard() string {
 	colWidths[numCols-1] += availWidth - total
 
 	columns := make([]string, numCols)
-	for i, status := range model.ColumnOrder {
-		columns[i] = m.renderColumn(i, status, colWidths[i], availHeight, i == m.focusedCol)
+	for i, colIdx := range visCols {
+		status := model.ColumnOrder[colIdx]
+		columns[i] = m.renderColumn(colIdx, status, colWidths[i], availHeight, colIdx == m.focusedCol)
 	}
 
 	board := lipgloss.JoinHorizontal(lipgloss.Top, columns...)
@@ -564,9 +635,9 @@ func (m *Model) viewBoard() string {
 // renderColumn renders a single column panel with lazygit-style title in border.
 func (m *Model) renderColumn(colIdx int, status model.Status, width, height int, focused bool) string {
 	tickets := m.board.ByStatus(status)
-	title := fmt.Sprintf("[%d] %s", colIdx+1, statusDisplay[status])
+	title := fmt.Sprintf("[%d] %s", colIdx, statusDisplay[status])
 
-	borderColor := dimGray
+	borderColor := softWhite
 	if focused {
 		borderColor = green
 	}
@@ -588,14 +659,17 @@ func (m *Model) renderColumn(colIdx int, status model.Status, width, height int,
 	}
 
 	content := strings.Join(lines, "\n")
-	return renderPanel(title, content, width, height, borderColor)
+	return renderPanel(title, content, width, height, borderColor, focused)
 }
 
 // renderTicketLine renders a single ticket in a column.
 func (m *Model) renderTicketLine(t model.Ticket, selected bool, width int) string {
 	title := t.Title
-	// Reserve space for " * " prefix (3 chars) + possible "●" suffix (2 chars)
-	maxTitle := width - 3
+	// Reserve space for prefix: " * " (3 chars) if selected, " " (1 char) if not
+	maxTitle := width - 1 // default for unselected
+	if selected {
+		maxTitle = width - 3
+	}
 	if t.AssignedTo != "" && selected {
 		maxTitle -= 2
 	}
@@ -616,7 +690,7 @@ func (m *Model) renderTicketLine(t model.Ticket, selected bool, width int) strin
 		return line
 	}
 
-	return lipgloss.NewStyle().Foreground(midGray).PaddingLeft(3).Render(title)
+	return lipgloss.NewStyle().Foreground(softWhite).PaddingLeft(1).Render(title)
 }
 
 // viewColumn renders the expanded single-column view.
@@ -625,7 +699,7 @@ func (m *Model) viewColumn() string {
 	tickets := m.board.ByStatus(status)
 	availHeight := m.height - 2
 
-	title := fmt.Sprintf("[%d] %s (%d)", m.focusedCol+1, statusDisplay[status], len(tickets))
+	title := fmt.Sprintf("[%d] %s (%d)", m.focusedCol, statusDisplay[status], len(tickets))
 
 	innerWidth := m.width - 2
 
@@ -673,7 +747,7 @@ func (m *Model) viewColumn() string {
 	}
 
 	content := strings.Join(lines, "\n")
-	panel := renderPanel(title, content, m.width, availHeight, green)
+	panel := renderPanel(title, content, m.width, availHeight, green, true)
 
 	header := titleBar.Render("kanban")
 	help := helpStyle.Render(m.helpText())
@@ -730,7 +804,7 @@ func (m *Model) viewDetail() string {
 	lines = append(lines, "")
 
 	content := strings.Join(lines, "\n")
-	panel := renderPanel("Detail", content, m.width, availHeight, green)
+	panel := renderPanel("Detail", content, m.width, availHeight, green, true)
 	help := helpStyle.Render(m.helpText())
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, panel, help)

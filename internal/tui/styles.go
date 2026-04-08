@@ -4,9 +4,10 @@ import "github.com/charmbracelet/lipgloss"
 
 var (
 	// Colors
-	green     = lipgloss.Color("#04B575")
+	green     = lipgloss.Color("#A6E3A1")
 	dimGray   = lipgloss.Color("#383838")
 	midGray   = lipgloss.Color("#777777")
+	softWhite = lipgloss.Color("#CDD6F4")
 	white     = lipgloss.Color("#FAFAFA")
 	red       = lipgloss.Color("#FF4444")
 	orange    = lipgloss.Color("#FF8800")

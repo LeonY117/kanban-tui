@@ -2,7 +2,9 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -66,6 +68,16 @@ type Model struct {
 	editField    int    // 0 = metadata, 1 = title, 2 = description
 	editTicketID string // ID of ticket being edited
 	metaIdx      int    // selected sub-field within metadata (0=status, 1=tags, 2=assigned)
+
+	lastModTime time.Time // last known mod time of board.json
+}
+
+type tickMsg time.Time
+
+func tickCmd() tea.Cmd {
+	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
 }
 
 func NewModel(s *store.Store) (*Model, error) {
@@ -77,19 +89,35 @@ func NewModel(s *store.Store) (*Model, error) {
 	ti := textinput.New()
 	ti.CharLimit = 200
 
+	var modTime time.Time
+	if info, err := os.Stat(s.BoardPath()); err == nil {
+		modTime = info.ModTime()
+	}
+
 	return &Model{
-		store: s,
-		board: board,
-		input: ti,
+		store:       s,
+		board:       board,
+		input:       ti,
+		lastModTime: modTime,
 	}, nil
 }
 
 func (m *Model) Init() tea.Cmd {
-	return nil
+	return tickCmd()
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tickMsg:
+		if info, err := os.Stat(m.store.BoardPath()); err == nil {
+			if info.ModTime().After(m.lastModTime) {
+				m.lastModTime = info.ModTime()
+				m.reload()
+				m.clampCursors()
+			}
+		}
+		return m, tickCmd()
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -738,8 +766,8 @@ func renderPanel(title string, content string, width, height int, borderColor li
 		if i < len(contentLines) {
 			line = contentLines[i]
 		}
-		// Pad line to inner width using a fixed-width style
-		paddedLine := lipgloss.NewStyle().Width(innerWidth).Render(line)
+		// Pad line to inner width, truncate if longer to prevent wrapping
+		paddedLine := lipgloss.NewStyle().Width(innerWidth).MaxWidth(innerWidth).Render(line)
 		bodyLines = append(bodyLines, borderStyle.Render(v)+paddedLine+borderStyle.Render(v))
 	}
 
@@ -893,12 +921,27 @@ func (m *Model) viewColumn() string {
 			titleStyle = titleStyle.Foreground(lipgloss.Color("#CCCCCC"))
 		}
 
-		line := marker + titleStyle.Render(titleText)
-
-		// Tags
+		// Build suffix (tags + assignee) first so we can truncate title to fit
+		suffix := ""
 		if len(t.Tags) > 0 {
-			tags := tagStyle.Render(" #" + strings.Join(t.Tags, " #"))
-			line += tags
+			suffix += " #" + strings.Join(t.Tags, " #")
+		}
+		if t.AssignedTo != "" {
+			suffix += " " + "● " + t.AssignedTo
+		}
+
+		// Available width for title: innerWidth - marker(3) - suffix length
+		maxTitle := innerWidth - 3 - len([]rune(suffix))
+		if maxTitle < 3 {
+			maxTitle = 3
+		}
+		if len([]rune(titleText)) > maxTitle {
+			titleText = string([]rune(titleText)[:maxTitle-1]) + "…"
+		}
+
+		line := marker + titleStyle.Render(titleText)
+		if len(t.Tags) > 0 {
+			line += tagStyle.Render(" #" + strings.Join(t.Tags, " #"))
 		}
 		if t.AssignedTo != "" {
 			line += " " + assigneeStyle.Render("● "+t.AssignedTo)

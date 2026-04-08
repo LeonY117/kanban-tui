@@ -35,6 +35,11 @@ func New(dir string) *Store {
 	return &Store{dir: dir}
 }
 
+// BoardPath returns the path to the board JSON file.
+func (s *Store) BoardPath() string {
+	return s.boardPath()
+}
+
 func (s *Store) boardPath() string {
 	if env := os.Getenv("KANBAN_FILE"); env != "" {
 		return env

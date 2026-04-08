@@ -15,6 +15,7 @@ import (
 
 const defaultDir = ".kanban"
 const boardFile = "board.json"
+const archiveFile = "archive.json"
 const lockFile = ".board.lock"
 
 // Store manages reading and writing the board JSON file with file locking.
@@ -39,6 +40,10 @@ func (s *Store) boardPath() string {
 		return env
 	}
 	return filepath.Join(s.dir, boardFile)
+}
+
+func (s *Store) archivePath() string {
+	return filepath.Join(s.dir, archiveFile)
 }
 
 func (s *Store) lockPath() string {
@@ -156,6 +161,90 @@ func (s *Store) Update(id string, apply func(*model.Ticket)) error {
 		t.UpdatedAt = time.Now()
 		return s.Save(board)
 	})
+}
+
+// Archive moves DONE tickets to archive.json. If before is non-nil, only archives
+// tickets updated before that time.
+func (s *Store) Archive(before *time.Time) (int, error) {
+	var count int
+	err := s.WithLock(func() error {
+		board, err := s.Load()
+		if err != nil {
+			return err
+		}
+
+		// Load existing archive
+		archive, err := s.loadArchive()
+		if err != nil {
+			return err
+		}
+
+		// Split tickets into keep and archive
+		var keep []model.Ticket
+		for _, t := range board.Tickets {
+			if t.Status == model.StatusDone {
+				if before == nil || t.UpdatedAt.Before(*before) {
+					archive.Tickets = append(archive.Tickets, t)
+					count++
+					continue
+				}
+			}
+			keep = append(keep, t)
+		}
+
+		if count == 0 {
+			return nil
+		}
+
+		if keep == nil {
+			keep = []model.Ticket{}
+		}
+		board.Tickets = keep
+
+		if err := s.Save(board); err != nil {
+			return err
+		}
+		return s.saveArchive(archive)
+	})
+	return count, err
+}
+
+func (s *Store) loadArchive() (*model.Board, error) {
+	data, err := os.ReadFile(s.archivePath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &model.Board{Version: 1, Tickets: []model.Ticket{}}, nil
+		}
+		return nil, fmt.Errorf("reading archive: %w", err)
+	}
+	var board model.Board
+	if err := json.Unmarshal(data, &board); err != nil {
+		return nil, fmt.Errorf("parsing archive: %w", err)
+	}
+	if board.Tickets == nil {
+		board.Tickets = []model.Ticket{}
+	}
+	return &board, nil
+}
+
+func (s *Store) saveArchive(board *model.Board) error {
+	if err := s.ensureDir(); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(board, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling archive: %w", err)
+	}
+	data = append(data, '\n')
+	tmp := s.archivePath() + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return fmt.Errorf("writing archive temp: %w", err)
+	}
+	if err := os.Rename(tmp, s.archivePath()); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("renaming archive temp: %w", err)
+	}
+	return nil
 }
 
 // uniqueShortID returns the shortest unique prefix of the UUID (min 6 chars).

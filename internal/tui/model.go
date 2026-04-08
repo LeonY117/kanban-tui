@@ -19,8 +19,9 @@ type viewMode int
 
 const (
 	boardView viewMode = iota
-	columnView
-	detailView
+	splitView  // list + detail side by side
+	columnView // full-width single column
+	detailView // full-screen detail editor
 )
 
 // inputMode tracks what the user is typing into.
@@ -49,12 +50,12 @@ type Model struct {
 	height     int
 	ready      bool
 	view       viewMode
-	focusedCol int // index into model.ColumnOrder
+	focusedCol int    // index into model.ColumnOrder
 	cursors    [5]int // selected item index per column
 	input      textinput.Model
 	inputMode  inputMode
 	err        error
-	focusMode  bool // when true, only show Todo/Doing/Done
+	focusMode  bool // when true, only show Todo/Doing
 
 	// Selection picker state (for status)
 	selectOptions []string
@@ -68,6 +69,9 @@ type Model struct {
 	editField    int    // 0 = metadata, 1 = title, 2 = description
 	editTicketID string // ID of ticket being edited
 	metaIdx      int    // selected sub-field within metadata (0=status, 1=tags, 2=assigned)
+
+	// Split view state
+	splitFocus int // 0 = list panel, 1 = detail panel
 
 	lastModTime time.Time // last known mod time of board.json
 }
@@ -98,6 +102,7 @@ func NewModel(s *store.Store) (*Model, error) {
 		store:       s,
 		board:       board,
 		input:       ti,
+		focusedCol:  1, // default to Todo
 		lastModTime: modTime,
 	}, nil
 }
@@ -137,6 +142,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.view {
 		case boardView:
 			return m.updateBoard(msg)
+		case splitView:
+			return m.updateSplit(msg)
 		case columnView:
 			return m.updateColumn(msg)
 		case detailView:
@@ -155,6 +162,8 @@ func (m *Model) View() string {
 	switch m.view {
 	case boardView:
 		content = m.viewBoard()
+	case splitView:
+		content = m.viewSplit()
 	case columnView:
 		content = m.viewColumn()
 	case detailView:
@@ -190,12 +199,12 @@ func (m *Model) selectedTicket() *model.Ticket {
 	return &tickets[idx]
 }
 
-// visibleColumns returns the column indices currently shown.
+// visibleColumns returns the column indices currently shown (into model.ColumnOrder).
 func (m *Model) visibleColumns() []int {
 	if m.focusMode {
-		return []int{1, 2, 3} // Todo, Doing, Done
+		return []int{1, 2} // Todo, Doing
 	}
-	return []int{0, 1, 2, 3, 4}
+	return []int{1, 2, 3, 4} // Todo, Doing, Done, Hold (no Backlog)
 }
 
 // isColVisible returns whether a column index is currently visible.
@@ -216,7 +225,6 @@ func (m *Model) clampFocusedCol() {
 			return
 		}
 	}
-	// Not visible, snap to first visible
 	m.focusedCol = vis[0]
 }
 
@@ -252,7 +260,8 @@ func (m *Model) clampCursors() {
 	}
 }
 
-// updateBoard handles keys in board view.
+// ─── Board view ──────────────────────────────────────────────────────
+
 func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, keys.Quit):
@@ -271,12 +280,9 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.cursors[m.focusedCol] < count-1 {
 			m.cursors[m.focusedCol]++
 		}
-	case key.Matches(msg, keys.Enter):
-		if m.selectedTicket() != nil {
-			return m.enterDetail()
-		}
-	case key.Matches(msg, keys.Tab):
-		m.view = columnView
+	case key.Matches(msg, keys.Enter), key.Matches(msg, keys.Zoom):
+		m.enterSplit()
+		return m, nil
 	case key.Matches(msg, keys.Add):
 		m.startInput(inputAdd, "New ticket: ")
 		return m, textinput.Blink
@@ -284,14 +290,12 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.focusMode = !m.focusMode
 		m.clampFocusedCol()
 	case key.Matches(msg, keys.One):
-		if m.isColVisible(0) { m.focusedCol = 0 }
-	case key.Matches(msg, keys.Two):
 		if m.isColVisible(1) { m.focusedCol = 1 }
-	case key.Matches(msg, keys.Three):
+	case key.Matches(msg, keys.Two):
 		if m.isColVisible(2) { m.focusedCol = 2 }
-	case key.Matches(msg, keys.Four):
+	case key.Matches(msg, keys.Three):
 		if m.isColVisible(3) { m.focusedCol = 3 }
-	case key.Matches(msg, keys.Five):
+	case key.Matches(msg, keys.Four):
 		if m.isColVisible(4) { m.focusedCol = 4 }
 	case key.Matches(msg, keys.MoveLeft):
 		m.moveTicket(-1)
@@ -301,13 +305,246 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateColumn handles keys in column view.
+// ─── Split view ──────────────────────────────────────────────────────
+
+func (m *Model) enterSplit() {
+	m.splitFocus = 0 // start on list
+	m.refreshDetailEditors()
+	m.view = splitView
+}
+
+// refreshDetailEditors sets up the edit widgets for the currently selected ticket.
+func (m *Model) refreshDetailEditors() {
+	t := m.selectedTicket()
+	if t == nil {
+		m.editTicketID = ""
+		return
+	}
+	m.editTicketID = t.ID
+	m.editField = 0
+	m.metaIdx = 0
+
+	ti := textinput.New()
+	ti.Prompt = ""
+	ti.CharLimit = 200
+	ti.SetValue(t.Title)
+	ti.Blur()
+	m.editTitle = ti
+
+	ta := textarea.New()
+	ta.Prompt = ""
+	ta.SetValue(t.Description)
+	ta.ShowLineNumbers = false
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	ta.FocusedStyle.Base = lipgloss.NewStyle()
+	ta.Blur()
+	m.editDesc = ta
+}
+
+func (m *Model) updateSplit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.splitFocus == 0 {
+		return m.updateSplitList(msg)
+	}
+	return m.updateSplitDetail(msg)
+}
+
+func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, keys.Quit):
+		return m, tea.Quit
+	case key.Matches(msg, keys.Unzoom), key.Matches(msg, keys.Esc):
+		m.view = boardView
+	case key.Matches(msg, keys.Zoom):
+		m.view = columnView
+	case key.Matches(msg, keys.PanelNext), key.Matches(msg, keys.Enter), key.Matches(msg, keys.Right):
+		m.splitFocus = 1
+		m.refreshDetailEditors() // start on meta, nothing focused
+	case key.Matches(msg, keys.Up):
+		if m.cursors[m.focusedCol] > 0 {
+			m.cursors[m.focusedCol]--
+			m.refreshDetailEditors()
+		}
+	case key.Matches(msg, keys.Down):
+		status := model.ColumnOrder[m.focusedCol]
+		count := len(m.board.ByStatus(status))
+		if m.cursors[m.focusedCol] < count-1 {
+			m.cursors[m.focusedCol]++
+			m.refreshDetailEditors()
+		}
+	case key.Matches(msg, keys.Add):
+		m.startInput(inputAdd, "New ticket: ")
+		return m, textinput.Blink
+	case key.Matches(msg, keys.One):
+		if m.isColVisible(1) { m.focusedCol = 1; m.refreshDetailEditors() }
+	case key.Matches(msg, keys.Two):
+		if m.isColVisible(2) { m.focusedCol = 2; m.refreshDetailEditors() }
+	case key.Matches(msg, keys.Three):
+		if m.isColVisible(3) { m.focusedCol = 3; m.refreshDetailEditors() }
+	case key.Matches(msg, keys.Four):
+		if m.isColVisible(4) { m.focusedCol = 4; m.refreshDetailEditors() }
+	case key.Matches(msg, keys.MoveLeft):
+		m.moveTicket(-1)
+		m.refreshDetailEditors()
+	case key.Matches(msg, keys.MoveRight):
+		m.moveTicket(1)
+		m.refreshDetailEditors()
+	}
+	return m, nil
+}
+
+func (m *Model) updateSplitDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch m.editField {
+	case 0: // metadata bar
+		return m.updateSplitDetailMeta(msg)
+	case 1: // title
+		return m.updateSplitDetailTitle(msg)
+	case 2: // description
+		return m.updateSplitDetailDesc(msg)
+	}
+	return m, nil
+}
+
+func (m *Model) updateSplitDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "shift+tab" {
+		if m.metaIdx > 0 {
+			m.metaIdx--
+		}
+		return m, nil
+	}
+	switch {
+	case key.Matches(msg, keys.Quit):
+		return m, tea.Quit
+	case key.Matches(msg, keys.Left):
+		m.splitFocus = 0
+	case key.Matches(msg, keys.PanelPrev), key.Matches(msg, keys.Esc):
+		m.splitFocus = 0
+	case key.Matches(msg, keys.Unzoom):
+		m.splitFocus = 0
+		m.view = boardView
+	case key.Matches(msg, keys.Zoom):
+		m.enterDetail()
+		return m, nil
+	case key.Matches(msg, keys.Down):
+		m.editField = 1
+	case key.Matches(msg, keys.Tab):
+		if m.metaIdx < 2 {
+			m.metaIdx++
+		}
+	case key.Matches(msg, keys.Enter):
+		return m.editMetaField()
+	case key.Matches(msg, keys.Delete):
+		m.deleteTicket()
+		m.splitFocus = 0
+		m.refreshDetailEditors()
+	case key.Matches(msg, keys.MoveLeft):
+		m.moveTicket(-1)
+		m.refreshDetailEditors()
+	case key.Matches(msg, keys.MoveRight):
+		m.moveTicket(1)
+		m.refreshDetailEditors()
+	}
+	return m, nil
+}
+
+func (m *Model) updateSplitDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.editTitle.Focused() {
+		// Editing mode
+		switch msg.String() {
+		case "esc":
+			m.editTitle.Blur()
+			m.saveEdit()
+			return m, nil
+		case "enter":
+			m.editTitle.Blur()
+			m.saveEdit()
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.editTitle, cmd = m.editTitle.Update(msg)
+		return m, cmd
+	}
+	// Viewing mode — hjkl to navigate fields
+	switch {
+	case key.Matches(msg, keys.Quit):
+		return m, tea.Quit
+	case key.Matches(msg, keys.Up):
+		m.editField = 0
+	case key.Matches(msg, keys.Down):
+		m.editField = 2
+	case key.Matches(msg, keys.Left):
+		m.splitFocus = 0
+	case key.Matches(msg, keys.Enter), key.Matches(msg, keys.Edit):
+		m.editTitle.Focus()
+		return m, textinput.Blink
+	case key.Matches(msg, keys.PanelPrev), key.Matches(msg, keys.Esc):
+		m.splitFocus = 0
+	case key.Matches(msg, keys.Unzoom):
+		m.splitFocus = 0
+		m.view = boardView
+	case key.Matches(msg, keys.Zoom):
+		m.enterDetail()
+		return m, nil
+	case key.Matches(msg, keys.MoveLeft):
+		m.moveTicket(-1)
+		m.refreshDetailEditors()
+	case key.Matches(msg, keys.MoveRight):
+		m.moveTicket(1)
+		m.refreshDetailEditors()
+	}
+	return m, nil
+}
+
+func (m *Model) updateSplitDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.editDesc.Focused() {
+		// Editing mode
+		switch msg.String() {
+		case "esc":
+			m.editDesc.Blur()
+			m.saveEdit()
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.editDesc, cmd = m.editDesc.Update(msg)
+		return m, cmd
+	}
+	// Viewing mode — hjkl to navigate fields
+	switch {
+	case key.Matches(msg, keys.Quit):
+		return m, tea.Quit
+	case key.Matches(msg, keys.Up):
+		m.editField = 1
+	case key.Matches(msg, keys.Left):
+		m.splitFocus = 0
+	case key.Matches(msg, keys.Enter), key.Matches(msg, keys.Edit):
+		m.editDesc.Focus()
+		return m, nil
+	case key.Matches(msg, keys.PanelPrev), key.Matches(msg, keys.Esc):
+		m.splitFocus = 0
+	case key.Matches(msg, keys.Unzoom):
+		m.splitFocus = 0
+		m.view = boardView
+	case key.Matches(msg, keys.Zoom):
+		m.enterDetail()
+		return m, nil
+	case key.Matches(msg, keys.MoveLeft):
+		m.moveTicket(-1)
+		m.refreshDetailEditors()
+	case key.Matches(msg, keys.MoveRight):
+		m.moveTicket(1)
+		m.refreshDetailEditors()
+	}
+	return m, nil
+}
+
+// ─── Column view (full-width list) ──────────────────────────────────
+
 func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
-	case key.Matches(msg, keys.Esc):
-		m.view = boardView
+	case key.Matches(msg, keys.Unzoom), key.Matches(msg, keys.Esc):
+		m.enterSplit()
+		return m, nil
 	case key.Matches(msg, keys.Tab):
 		m.moveFocus(1)
 	case key.Matches(msg, keys.Up):
@@ -331,14 +568,12 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.focusMode = !m.focusMode
 		m.clampFocusedCol()
 	case key.Matches(msg, keys.One):
-		if m.isColVisible(0) { m.focusedCol = 0 }
-	case key.Matches(msg, keys.Two):
 		if m.isColVisible(1) { m.focusedCol = 1 }
-	case key.Matches(msg, keys.Three):
+	case key.Matches(msg, keys.Two):
 		if m.isColVisible(2) { m.focusedCol = 2 }
-	case key.Matches(msg, keys.Four):
+	case key.Matches(msg, keys.Three):
 		if m.isColVisible(3) { m.focusedCol = 3 }
-	case key.Matches(msg, keys.Five):
+	case key.Matches(msg, keys.Four):
 		if m.isColVisible(4) { m.focusedCol = 4 }
 	case key.Matches(msg, keys.MoveLeft):
 		m.moveTicket(-1)
@@ -348,14 +583,15 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// enterDetail sets up the detail/edit view for the selected ticket.
+// ─── Detail view (full-screen editor) ───────────────────────────────
+
 func (m *Model) enterDetail() (tea.Model, tea.Cmd) {
 	t := m.selectedTicket()
 	if t == nil {
 		return m, nil
 	}
 	m.editTicketID = t.ID
-	m.editField = 0 // start on metadata
+	m.editField = 0
 	m.metaIdx = 0
 
 	ti := textinput.New()
@@ -379,7 +615,6 @@ func (m *Model) enterDetail() (tea.Model, tea.Cmd) {
 }
 
 // updateDetail handles keys in detail view.
-// editField: 0 = metadata, 1 = title, 2 = description
 func (m *Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.editField {
 	case 0:
@@ -392,14 +627,19 @@ func (m *Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateDetailMeta handles keys when metadata bar is focused.
 func (m *Model) updateDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "shift+tab" {
+		m.editField = 2
+		m.editDesc.Focus()
+		return m, nil
+	}
 	switch {
 	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
-	case key.Matches(msg, keys.Esc):
+	case key.Matches(msg, keys.Esc), key.Matches(msg, keys.Unzoom):
 		m.saveEdit()
-		m.view = boardView
+		m.enterSplit()
+		return m, nil
 	case key.Matches(msg, keys.Tab):
 		m.editField = 1
 		m.editTitle.Focus()
@@ -425,11 +665,10 @@ func (m *Model) updateDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// editMetaField triggers inline edit for the selected metadata sub-field.
 func (m *Model) editMetaField() (tea.Model, tea.Cmd) {
 	switch m.metaIdx {
 	case 0: // status
-		m.startSelect("Status", []string{"Backlog", "Todo", "Doing", "Done", "Hold"}, func(val string) {
+		m.startSelect("Status", []string{"Todo", "Doing", "Done", "Hold"}, func(val string) {
 			status, err := model.ParseStatus(val)
 			if err != nil {
 				return
@@ -448,8 +687,7 @@ func (m *Model) editMetaField() (tea.Model, tea.Cmd) {
 		}
 		m.startInput(inputAssign, "Tags (comma separated): ")
 		m.input.SetValue(current)
-		// Override the submit to handle tags
-		m.inputMode = inputAdd // reuse, we'll check prompt
+		m.inputMode = inputAdd
 		m.input.Prompt = "Tags: "
 		return m, textinput.Blink
 	case 2: // assigned
@@ -463,7 +701,6 @@ func (m *Model) editMetaField() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateDetailTitle handles keys when editing the title field.
 func (m *Model) updateDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
@@ -476,9 +713,15 @@ func (m *Model) updateDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.editTitle.Blur()
 		m.editDesc.Focus()
 		return m, nil
-	case "enter":
+	case "shift+tab":
+		m.editTitle.Blur()
+		m.editField = 0
 		m.saveEdit()
-		m.view = boardView
+		return m, nil
+	case "enter":
+		m.editTitle.Blur()
+		m.editField = 0
+		m.saveEdit()
 		return m, nil
 	}
 	var cmd tea.Cmd
@@ -486,7 +729,6 @@ func (m *Model) updateDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// updateDetailDesc handles keys when editing the description field.
 func (m *Model) updateDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
@@ -499,12 +741,18 @@ func (m *Model) updateDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.editDesc.Blur()
 		m.saveEdit()
 		return m, nil
+	case "shift+tab":
+		m.editField = 1
+		m.editDesc.Blur()
+		m.editTitle.Focus()
+		return m, textinput.Blink
 	}
-	// Enter adds newline in description
 	var cmd tea.Cmd
 	m.editDesc, cmd = m.editDesc.Update(msg)
 	return m, cmd
 }
+
+// ─── Input / selection helpers ──────────────────────────────────────
 
 func (m *Model) startInput(mode inputMode, prompt string) {
 	m.inputMode = mode
@@ -628,6 +876,8 @@ func (m *Model) viewSelect() string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, parts...)
 }
 
+// ─── Persistence helpers ────────────────────────────────────────────
+
 func (m *Model) saveEdit() {
 	title := strings.TrimSpace(m.editTitle.Value())
 	desc := m.editDesc.Value()
@@ -659,7 +909,6 @@ func (m *Model) moveTicket(dir int) {
 	})
 	m.focusedCol = colIdx
 	m.reload()
-	// Find the moved ticket in the new column and select it
 	newColTickets := m.board.ByStatus(newStatus)
 	for i, nt := range newColTickets {
 		if nt.ID == ticketID {
@@ -694,7 +943,8 @@ func (m *Model) viewInput() string {
 	return m.input.View()
 }
 
-// helpText returns context-sensitive help for the current view.
+// ─── Help text ──────────────────────────────────────────────────────
+
 func (m *Model) helpText() string {
 	switch m.view {
 	case boardView:
@@ -702,62 +952,67 @@ func (m *Model) helpText() string {
 		if m.focusMode {
 			focusLabel = "f all"
 		}
-		return fmt.Sprintf("H/L move | enter detail | tab column | a add | %s | q quit", focusLabel)
-	case columnView:
-		focusLabel := "f focus"
-		if m.focusMode {
-			focusLabel = "f all"
+		return fmt.Sprintf("h/l nav | j/k select | + zoom | H/L move | a add | %s | q quit", focusLabel)
+	case splitView:
+		if m.splitFocus == 0 {
+			return "j/k select | ] edit | + zoom | H/L move | - back | a add | q quit"
 		}
-		return fmt.Sprintf("tab next | H/L move | enter detail | esc board | a add | %s | q quit", focusLabel)
+		if m.editTitle.Focused() || m.editDesc.Focused() {
+			return "esc done editing"
+		}
+		switch m.editField {
+		case 0:
+			return "j/k nav | tab/S-tab meta | enter edit | H/L move | h list | q quit"
+		case 1, 2:
+			return "j/k nav | enter/e edit | H/L move | h list | q quit"
+		}
+	case columnView:
+		return "j/k select | tab next col | H/L move | enter detail | - back | a add | q quit"
 	case detailView:
 		switch m.editField {
 		case 0:
-			return "tab next field | h/l select | enter edit | H/L move | d delete | esc back | q quit"
+			return "tab title | h/l meta | enter edit | H/L move | d delete | - back | q quit"
 		case 1:
-			return "tab next field | enter save & back | esc done editing"
+			return "tab desc | enter done | esc back"
 		case 2:
-			return "tab next field | esc done editing"
+			return "tab meta | esc back"
 		}
 	}
 	return ""
 }
 
+// ─── Rendering ──────────────────────────────────────────────────────
+
 // renderPanel draws a bordered panel with the title embedded in the top border (lazygit style).
-// Example: ╭─[1] Backlog────────────╮
 func renderPanel(title string, content string, width, height int, borderColor lipgloss.Color, boldTitle bool) string {
-	// Border characters (rounded)
 	tl, tr, bl, br := "╭", "╮", "╰", "╯"
 	h, v := "─", "│"
 
-	innerWidth := width - 2 // subtract left+right border
+	innerWidth := width - 2
 	if innerWidth < 1 {
 		innerWidth = 1
 	}
 
 	borderStyle := lipgloss.NewStyle().Foreground(borderColor)
 
-	// Render title with optional bold
 	titleStyle := lipgloss.NewStyle().Foreground(borderColor)
 	if boldTitle {
 		titleStyle = titleStyle.Bold(true)
 	}
 	renderedTitle := titleStyle.Render(title)
 
-	// Calculate remaining border chars (use raw title length for spacing math)
 	titleLen := len([]rune(title))
-	remaining := innerWidth - 1 - titleLen // 1 for the leading ─
+	remaining := innerWidth - 1 - titleLen
 	if remaining < 0 {
 		remaining = 0
 	}
 	topBorder := borderStyle.Render(tl+h) + renderedTitle + borderStyle.Render(strings.Repeat(h, remaining)+tr)
 
-	// Bottom border
 	bottomBorder := borderStyle.Render(bl + strings.Repeat(h, innerWidth) + br)
 
-	// Split content into lines and pad/truncate to fit
 	contentLines := strings.Split(content, "\n")
 	var bodyLines []string
-	innerHeight := height - 2 // subtract top+bottom border
+	innerHeight := height - 2
 	if innerHeight < 0 {
 		innerHeight = 0
 	}
@@ -766,8 +1021,7 @@ func renderPanel(title string, content string, width, height int, borderColor li
 		if i < len(contentLines) {
 			line = contentLines[i]
 		}
-		// Pad line to inner width, truncate if longer to prevent wrapping
-		paddedLine := lipgloss.NewStyle().Width(innerWidth).MaxWidth(innerWidth).Render(line)
+		paddedLine := lipgloss.NewStyle().Inline(true).Width(innerWidth).MaxWidth(innerWidth).Render(line)
 		bodyLines = append(bodyLines, borderStyle.Render(v)+paddedLine+borderStyle.Render(v))
 	}
 
@@ -780,15 +1034,14 @@ func renderPanel(title string, content string, width, height int, borderColor li
 
 // viewBoard renders the board view with all columns.
 func (m *Model) viewBoard() string {
-	availHeight := m.height - 2 // title bar + help bar
+	availHeight := m.height - 1 // just help bar
 	availWidth := m.width
 
 	visCols := m.visibleColumns()
 	numCols := len(visCols)
 
-	// Distribute widths evenly, giving focused column more space on small terminals
 	colWidths := make([]int, numCols)
-	if availWidth < 120 && numCols > 1 {
+	if availWidth < 120 && numCols > 2 {
 		focusedIdx := -1
 		for i, c := range visCols {
 			if c == m.focusedCol {
@@ -812,7 +1065,6 @@ func (m *Model) viewBoard() string {
 			colWidths[i] = baseWidth
 		}
 	}
-	// Give remainder to last column so total = availWidth
 	total := 0
 	for _, w := range colWidths {
 		total += w
@@ -826,21 +1078,19 @@ func (m *Model) viewBoard() string {
 	}
 
 	board := lipgloss.JoinHorizontal(lipgloss.Top, columns...)
-
-	title := titleBar.Render(fmt.Sprintf("kanban — %d tickets", len(m.board.Tickets)))
 	help := helpStyle.Render(m.helpText())
 
-	return lipgloss.JoinVertical(lipgloss.Left, title, board, help)
+	return lipgloss.JoinVertical(lipgloss.Left, board, help)
 }
 
-// renderColumn renders a single column panel with lazygit-style title in border.
+// renderColumn renders a single column panel.
 func (m *Model) renderColumn(colIdx int, status model.Status, width, height int, focused bool) string {
 	tickets := m.board.ByStatus(status)
 	title := fmt.Sprintf("[%d] %s", colIdx, statusDisplay[status])
 
-	borderColor := softWhite
+	color := softWhite
 	if focused {
-		borderColor = green
+		color = columnColor(status)
 	}
 
 	innerWidth := width - 2
@@ -848,26 +1098,29 @@ func (m *Model) renderColumn(colIdx int, status model.Status, width, height int,
 		innerWidth = 3
 	}
 
-	// Build content lines
-	var lines []string
+	visibleCount := height - 2
 	cursor := m.cursors[colIdx]
-	for i, t := range tickets {
-		if len(lines) >= height-2 {
-			break
-		}
-		line := m.renderTicketLine(t, i == cursor && focused, innerWidth)
+
+	// Scroll window: ensure cursor is always visible
+	startIdx := 0
+	if cursor >= visibleCount {
+		startIdx = cursor - visibleCount + 1
+	}
+
+	var lines []string
+	for i := startIdx; i < len(tickets) && len(lines) < visibleCount; i++ {
+		line := m.renderTicketLine(tickets[i], i == cursor && focused, innerWidth, color)
 		lines = append(lines, line)
 	}
 
 	content := strings.Join(lines, "\n")
-	return renderPanel(title, content, width, height, borderColor, focused)
+	return renderPanel(title, content, width, height, color, focused)
 }
 
 // renderTicketLine renders a single ticket in a column.
-func (m *Model) renderTicketLine(t model.Ticket, selected bool, width int) string {
+func (m *Model) renderTicketLine(t model.Ticket, selected bool, width int, accentColor lipgloss.Color) string {
 	title := t.Title
-	// Reserve space for prefix: " * " (3 chars) if selected, " " (1 char) if not
-	maxTitle := width - 1 // default for unselected
+	maxTitle := width - 1
 	if selected {
 		maxTitle = width - 3
 	}
@@ -882,7 +1135,7 @@ func (m *Model) renderTicketLine(t model.Ticket, selected bool, width int) strin
 	}
 
 	if selected {
-		marker := selectedMarker.Render(" * ")
+		marker := lipgloss.NewStyle().Foreground(accentColor).Bold(true).Render(" * ")
 		titleRendered := lipgloss.NewStyle().Bold(true).Foreground(white).Render(title)
 		line := marker + titleRendered
 		if t.AssignedTo != "" {
@@ -894,11 +1147,138 @@ func (m *Model) renderTicketLine(t model.Ticket, selected bool, width int) strin
 	return lipgloss.NewStyle().Foreground(softWhite).PaddingLeft(1).Render(title)
 }
 
+// viewSplit renders the split view: list on left, detail on right.
+func (m *Model) viewSplit() string {
+	availHeight := m.height - 1
+	availWidth := m.width
+
+	// 35/65 split
+	listWidth := availWidth * 35 / 100
+	if listWidth < 20 {
+		listWidth = 20
+	}
+	detailWidth := availWidth - listWidth
+
+	status := model.ColumnOrder[m.focusedCol]
+	color := columnColor(status)
+
+	// Left panel: ticket list
+	listFocused := m.splitFocus == 0
+	listColor := color
+	if !listFocused {
+		listColor = softWhite
+	}
+	listPanel := m.renderSplitList(status, listWidth, availHeight, listFocused, listColor)
+
+	// Right panel: ticket detail
+	detailFocused := m.splitFocus == 1
+	detailColor := color
+	if !detailFocused {
+		detailColor = softWhite
+	}
+	detailPanel := m.renderSplitDetail(detailWidth, availHeight, detailFocused, detailColor)
+
+	body := lipgloss.JoinHorizontal(lipgloss.Top, listPanel, detailPanel)
+	help := helpStyle.Render(m.helpText())
+
+	return lipgloss.JoinVertical(lipgloss.Left, body, help)
+}
+
+func (m *Model) renderSplitList(status model.Status, width, height int, focused bool, borderColor lipgloss.Color) string {
+	tickets := m.board.ByStatus(status)
+	title := fmt.Sprintf("[%d] %s (%d)", m.focusedCol, statusDisplay[status], len(tickets))
+
+	innerWidth := width - 2
+	if innerWidth < 3 {
+		innerWidth = 3
+	}
+
+	visibleCount := height - 2
+	cursor := m.cursors[m.focusedCol]
+
+	// Scroll window: ensure cursor is always visible
+	startIdx := 0
+	if cursor >= visibleCount {
+		startIdx = cursor - visibleCount + 1
+	}
+
+	var lines []string
+	for i := startIdx; i < len(tickets) && len(lines) < visibleCount; i++ {
+		line := m.renderTicketLine(tickets[i], i == cursor, innerWidth, borderColor)
+		lines = append(lines, line)
+	}
+
+	content := strings.Join(lines, "\n")
+	return renderPanel(title, content, width, height, borderColor, focused)
+}
+
+func (m *Model) renderSplitDetail(width, height int, focused bool, borderColor lipgloss.Color) string {
+	t := m.selectedTicket()
+	if t == nil {
+		return renderPanel("Detail", "No ticket selected", width, height, borderColor, focused)
+	}
+
+	innerWidth := width - 4 // account for panel borders
+	if innerWidth < 1 {
+		innerWidth = 1
+	}
+
+	// Metadata panel — height 3
+	metaColor := softWhite
+	if focused && m.editField == 0 {
+		metaColor = borderColor
+	}
+	metaContent := m.renderCompactMeta(t, innerWidth, focused && m.editField == 0)
+	metaPanel := renderPanel("Info", metaContent, width, 3, metaColor, focused && m.editField == 0)
+
+	// Title panel — height 3
+	titleColor := softWhite
+	if focused && m.editField == 1 {
+		titleColor = borderColor
+	}
+	var titleContent string
+	if focused && m.editField == 1 && m.editTitle.Focused() {
+		m.editTitle.Width = innerWidth
+		titleContent = m.editTitle.View()
+	} else {
+		titleContent = lipgloss.NewStyle().Bold(true).Foreground(white).Render(t.Title)
+	}
+	titlePanel := renderPanel("Title", titleContent, width, 3, titleColor, focused && m.editField == 1)
+
+	// Description panel — fills remaining space
+	descPanelHeight := height - 6
+	if descPanelHeight < 4 {
+		descPanelHeight = 4
+	}
+	descColor := softWhite
+	if focused && m.editField == 2 {
+		descColor = borderColor
+	}
+	var descContent string
+	if focused && m.editField == 2 && m.editDesc.Focused() {
+		m.editDesc.SetWidth(innerWidth)
+		m.editDesc.SetHeight(descPanelHeight - 2)
+		descContent = m.editDesc.View()
+	} else {
+		desc := t.Description
+		if desc == "" {
+			desc = lipgloss.NewStyle().Foreground(subtle).Render("(empty)")
+		} else {
+			desc = lipgloss.NewStyle().Foreground(softWhite).Render(desc)
+		}
+		descContent = desc
+	}
+	descPanel := renderPanel("Description", descContent, width, descPanelHeight, descColor, focused && m.editField == 2)
+
+	return lipgloss.JoinVertical(lipgloss.Left, metaPanel, titlePanel, descPanel)
+}
+
 // viewColumn renders the expanded single-column view.
 func (m *Model) viewColumn() string {
 	status := model.ColumnOrder[m.focusedCol]
 	tickets := m.board.ByStatus(status)
-	availHeight := m.height - 2
+	availHeight := m.height - 1
+	color := columnColor(status)
 
 	title := fmt.Sprintf("[%d] %s (%d)", m.focusedCol, statusDisplay[status], len(tickets))
 
@@ -913,15 +1293,15 @@ func (m *Model) viewColumn() string {
 
 		titleText := t.Title
 		marker := "   "
-		titleStyle := lipgloss.NewStyle()
+		tStyle := lipgloss.NewStyle()
 		if i == cursor {
-			marker = selectedMarker.Render(" * ")
-			titleStyle = titleStyle.Bold(true).Foreground(white)
+			marker = lipgloss.NewStyle().Foreground(color).Bold(true).Render(" * ")
+			tStyle = tStyle.Bold(true).Foreground(white)
 		} else {
-			titleStyle = titleStyle.Foreground(lipgloss.Color("#CCCCCC"))
+			tStyle = tStyle.Foreground(lipgloss.Color("#CCCCCC"))
 		}
 
-		// Build suffix (tags + assignee) first so we can truncate title to fit
+		// Build suffix first so we can truncate title to fit
 		suffix := ""
 		if len(t.Tags) > 0 {
 			suffix += " #" + strings.Join(t.Tags, " #")
@@ -930,7 +1310,6 @@ func (m *Model) viewColumn() string {
 			suffix += " " + "● " + t.AssignedTo
 		}
 
-		// Available width for title: innerWidth - marker(3) - suffix length
 		maxTitle := innerWidth - 3 - len([]rune(suffix))
 		if maxTitle < 3 {
 			maxTitle = 3
@@ -939,7 +1318,7 @@ func (m *Model) viewColumn() string {
 			titleText = string([]rune(titleText)[:maxTitle-1]) + "…"
 		}
 
-		line := marker + titleStyle.Render(titleText)
+		line := marker + tStyle.Render(titleText)
 		if len(t.Tags) > 0 {
 			line += tagStyle.Render(" #" + strings.Join(t.Tags, " #"))
 		}
@@ -949,7 +1328,6 @@ func (m *Model) viewColumn() string {
 
 		lines = append(lines, line)
 
-		// Show description on next line for selected item
 		if i == cursor && t.Description != "" {
 			desc := t.Description
 			if len(desc) > innerWidth-6 {
@@ -963,15 +1341,13 @@ func (m *Model) viewColumn() string {
 	}
 
 	content := strings.Join(lines, "\n")
-	panel := renderPanel(title, content, m.width, availHeight, green, true)
-
-	header := titleBar.Render("kanban")
+	panel := renderPanel(title, content, m.width, availHeight, color, true)
 	help := helpStyle.Render(m.helpText())
 
-	return lipgloss.JoinVertical(lipgloss.Left, header, panel, help)
+	return lipgloss.JoinVertical(lipgloss.Left, panel, help)
 }
 
-// viewDetail renders the ticket detail view.
+// viewDetail renders the ticket detail view (full screen).
 func (m *Model) viewDetail() string {
 	t := m.selectedTicket()
 	if t == nil {
@@ -979,30 +1355,32 @@ func (m *Model) viewDetail() string {
 		return m.viewBoard()
 	}
 
+	status := model.ColumnOrder[m.focusedCol]
+	color := columnColor(status)
+
 	innerWidth := m.width - 4
 
-	// Metadata bar — navigable fields
+	// Metadata bar
 	metaBorderColor := softWhite
 	if m.editField == 0 {
-		metaBorderColor = green
+		metaBorderColor = color
 	}
 	metaContent := m.renderMetaBar(t)
 	metaPanel := renderPanel("Info", metaContent, innerWidth+2, 3, metaBorderColor, m.editField == 0)
 
-	// Title field — 1 line tall
+	// Title field
 	titleBorderColor := softWhite
 	if m.editField == 1 {
-		titleBorderColor = green
+		titleBorderColor = color
 	}
 	m.editTitle.Width = innerWidth - 2
 	titlePanel := renderPanel("Title", m.editTitle.View(), innerWidth+2, 3, titleBorderColor, m.editField == 1)
 
-	// Description field — fills remaining space
+	// Description field
 	descBorderColor := softWhite
 	if m.editField == 2 {
-		descBorderColor = green
+		descBorderColor = color
 	}
-	// Height: total - meta(3) - title(3) - help(1)
 	descPanelHeight := m.height - 7
 	if descPanelHeight < 4 {
 		descPanelHeight = 4
@@ -1021,9 +1399,56 @@ func (m *Model) viewDetail() string {
 	)
 }
 
+// renderCompactMeta renders a compact metadata bar that fits within a given width.
+func (m *Model) renderCompactMeta(t *model.Ticket, maxWidth int, navigable bool) string {
+	status := model.ColumnOrder[m.focusedCol]
+	color := columnColor(status)
+
+	statusText := statusDisplay[t.Status]
+	tagsText := ""
+	if len(t.Tags) > 0 {
+		tagsText = "#" + strings.Join(t.Tags, " #")
+	}
+	assignText := ""
+	if t.AssignedTo != "" {
+		assignText = "● " + t.AssignedTo
+	}
+
+	fields := []struct {
+		value string
+		style lipgloss.Style
+	}{
+		{statusText, lipgloss.NewStyle().Foreground(color).Bold(true)},
+		{tagsText, tagStyle},
+		{assignText, assigneeStyle},
+	}
+
+	var parts []string
+	for i, f := range fields {
+		if f.value == "" {
+			continue
+		}
+		rendered := f.style.Render(f.value)
+		if navigable && i == m.metaIdx {
+			rendered = lipgloss.NewStyle().
+				Background(lipgloss.Color("#313244")).
+				Bold(true).
+				Foreground(white).
+				Padding(0, 1).
+				Render(f.value)
+		}
+		parts = append(parts, rendered)
+	}
+
+	return strings.Join(parts, "  ")
+}
+
 // renderMetaBar renders the metadata fields with the selected one highlighted.
 func (m *Model) renderMetaBar(t *model.Ticket) string {
 	isMeta := m.editField == 0
+
+	status := model.ColumnOrder[m.focusedCol]
+	color := columnColor(status)
 
 	statusText := statusDisplay[t.Status]
 	tagsText := "no tags"
@@ -1040,7 +1465,7 @@ func (m *Model) renderMetaBar(t *model.Ticket) string {
 		value string
 		style lipgloss.Style
 	}{
-		{"status", statusText, lipgloss.NewStyle().Foreground(green).Bold(true)},
+		{"status", statusText, lipgloss.NewStyle().Foreground(color).Bold(true)},
 		{"tags", tagsText, tagStyle},
 		{"assigned", assignText, assigneeStyle},
 	}
@@ -1049,7 +1474,6 @@ func (m *Model) renderMetaBar(t *model.Ticket) string {
 	for i, f := range fields {
 		rendered := f.style.Render(f.value)
 		if isMeta && i == m.metaIdx {
-			// Highlight selected field
 			rendered = lipgloss.NewStyle().
 				Background(lipgloss.Color("#313244")).
 				Bold(true).
@@ -1060,7 +1484,6 @@ func (m *Model) renderMetaBar(t *model.Ticket) string {
 		parts = append(parts, rendered)
 	}
 
-	// Add read-only info at the end
 	parts = append(parts, lipgloss.NewStyle().Foreground(midGray).Render(t.ShortID))
 	parts = append(parts, lipgloss.NewStyle().Foreground(midGray).Render(t.CreatedAt.Format("2006-01-02 15:04")))
 

@@ -42,7 +42,9 @@ kanban archive --before 2026-04-07
 
 ## Statuses
 
-BACKLOG → TODO → DOING → DONE (or HOLD)
+TODO → DOING → DONE (or HOLD)
+
+Note: BACKLOG status exists in data but is hidden from TUI.
 
 ## Architecture
 

@@ -1,10 +1,16 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
+	"github.com/leon/kanban/internal/model"
+)
 
 var (
 	// Colors
 	green     = lipgloss.Color("#A6E3A1")
+	blue      = lipgloss.Color("#89B4FA")
+	peach     = lipgloss.Color("#FAB387")
+	mauve     = lipgloss.Color("#CBA6F7")
 	dimGray   = lipgloss.Color("#383838")
 	midGray   = lipgloss.Color("#777777")
 	softWhite = lipgloss.Color("#CDD6F4")
@@ -15,6 +21,14 @@ var (
 	cyan      = lipgloss.Color("#00CCCC")
 	subtle    = lipgloss.Color("#555555")
 	highlight = lipgloss.Color("#7D56F4")
+
+	// Per-column accent colors
+	columnColors = map[model.Status]lipgloss.Color{
+		model.StatusTodo:  blue,
+		model.StatusDoing: peach,
+		model.StatusDone:  green,
+		model.StatusHold:  mauve,
+	}
 
 	// Focused panel border
 	focusedBorder = lipgloss.NewStyle().
@@ -79,3 +93,10 @@ var (
 			Foreground(dimGray)
 )
 
+// columnColor returns the accent color for a given status column.
+func columnColor(status model.Status) lipgloss.Color {
+	if c, ok := columnColors[status]; ok {
+		return c
+	}
+	return softWhite
+}

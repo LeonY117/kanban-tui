@@ -8,9 +8,21 @@ import (
 )
 
 var archiveCmd = &cobra.Command{
-	Use:   "archive",
-	Short: "Move done tickets to archive",
+	Use:   "archive [id]",
+	Short: "Move tickets to archive",
+	Long:  "Archive a single ticket by ID (any status), or archive all done tickets when no ID is given.",
+	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Single ticket archive
+		if len(args) == 1 {
+			if err := st.ArchiveByID(args[0]); err != nil {
+				return err
+			}
+			fmt.Printf("Archived ticket %s.\n", args[0])
+			return nil
+		}
+
+		// Bulk archive all DONE tickets
 		var before *time.Time
 
 		if cmd.Flags().Changed("before") {

@@ -20,31 +20,40 @@ const lockFile = ".board.lock"
 
 // Store manages reading and writing the board JSON file with file locking.
 type Store struct {
-	dir string
+	dir       string
+	boardName string // filename within dir (usually "board.json")
 }
 
-// New creates a store. If dir is empty, uses ~/.kanban.
+// defaultRoot returns the directory that holds the main board, archive, lock,
+// and any sprints/ subdirectory. Honors KANBAN_FILE (using its parent dir).
+func defaultRoot() string {
+	if env := os.Getenv("KANBAN_FILE"); env != "" {
+		return filepath.Dir(env)
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, defaultDir)
+}
+
+// New creates a store. If dir is empty, uses the default root (or KANBAN_FILE).
+// Once constructed, the store's paths are fixed — later env-var changes don't affect it.
 func New(dir string) *Store {
 	if dir == "" {
 		if env := os.Getenv("KANBAN_FILE"); env != "" {
-			return &Store{dir: filepath.Dir(env)}
+			return &Store{dir: filepath.Dir(env), boardName: filepath.Base(env)}
 		}
 		home, _ := os.UserHomeDir()
 		dir = filepath.Join(home, defaultDir)
 	}
-	return &Store{dir: dir}
+	return &Store{dir: dir, boardName: boardFile}
 }
 
 // BoardPath returns the path to the board JSON file.
 func (s *Store) BoardPath() string {
-	return s.boardPath()
+	return filepath.Join(s.dir, s.boardName)
 }
 
 func (s *Store) boardPath() string {
-	if env := os.Getenv("KANBAN_FILE"); env != "" {
-		return env
-	}
-	return filepath.Join(s.dir, boardFile)
+	return filepath.Join(s.dir, s.boardName)
 }
 
 func (s *Store) archivePath() string {
@@ -165,6 +174,33 @@ func (s *Store) Update(id string, apply func(*model.Ticket)) error {
 		apply(t)
 		t.UpdatedAt = time.Now()
 		return s.Save(board)
+	})
+}
+
+// ArchiveByID moves a single ticket to archive.json regardless of status.
+func (s *Store) ArchiveByID(id string) error {
+	return s.WithLock(func() error {
+		board, err := s.Load()
+		if err != nil {
+			return err
+		}
+		t, idx := board.FindByID(id)
+		if t == nil {
+			return fmt.Errorf("ticket not found: %s", id)
+		}
+
+		archive, err := s.loadArchive()
+		if err != nil {
+			return err
+		}
+
+		archive.Tickets = append(archive.Tickets, *t)
+		board.Tickets = append(board.Tickets[:idx], board.Tickets[idx+1:]...)
+
+		if err := s.Save(board); err != nil {
+			return err
+		}
+		return s.saveArchive(archive)
 	})
 }
 

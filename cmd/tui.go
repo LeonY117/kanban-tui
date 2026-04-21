@@ -7,8 +7,8 @@ import (
 	"github.com/leon/kanban/internal/tui"
 )
 
-func runTUI() error {
-	m, err := tui.NewModel(st)
+func runTUI(sprintName string) error {
+	m, err := tui.NewModel(st, sprintName)
 	if err != nil {
 		return err
 	}

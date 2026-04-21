@@ -46,6 +46,7 @@ var statusDisplay = map[model.Status]string{
 type Model struct {
 	store      *store.Store
 	board      *model.Board
+	sprintName string // empty for main board
 	width      int
 	height     int
 	ready      bool
@@ -84,7 +85,7 @@ func tickCmd() tea.Cmd {
 	})
 }
 
-func NewModel(s *store.Store) (*Model, error) {
+func NewModel(s *store.Store, sprintName string) (*Model, error) {
 	board, err := s.Load()
 	if err != nil {
 		return nil, err
@@ -101,10 +102,20 @@ func NewModel(s *store.Store) (*Model, error) {
 	return &Model{
 		store:       s,
 		board:       board,
+		sprintName:  sprintName,
 		input:       ti,
 		focusedCol:  1, // default to Todo
 		lastModTime: modTime,
 	}, nil
+}
+
+func (m *Model) footerLine() string {
+	help := helpStyle.Render(m.helpText())
+	if m.sprintName == "" {
+		return help
+	}
+	badge := sprintBadgeStyle.Render(m.sprintName)
+	return lipgloss.JoinHorizontal(lipgloss.Center, badge, help)
 }
 
 func (m *Model) Init() tea.Cmd {
@@ -301,6 +312,8 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveTicket(-1)
 	case key.Matches(msg, keys.MoveRight):
 		m.moveTicket(1)
+	case key.Matches(msg, keys.Archive):
+		m.archiveTicket()
 	}
 	return m, nil
 }
@@ -388,6 +401,9 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.MoveRight):
 		m.moveTicket(1)
 		m.refreshDetailEditors()
+	case key.Matches(msg, keys.Archive):
+		m.archiveTicket()
+		m.refreshDetailEditors()
 	}
 	return m, nil
 }
@@ -434,6 +450,10 @@ func (m *Model) updateSplitDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.editMetaField()
 	case key.Matches(msg, keys.Delete):
 		m.deleteTicket()
+		m.splitFocus = 0
+		m.refreshDetailEditors()
+	case key.Matches(msg, keys.Archive):
+		m.archiveTicket()
 		m.splitFocus = 0
 		m.refreshDetailEditors()
 	case key.Matches(msg, keys.MoveLeft):
@@ -579,6 +599,8 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveTicket(-1)
 	case key.Matches(msg, keys.MoveRight):
 		m.moveTicket(1)
+	case key.Matches(msg, keys.Archive):
+		m.archiveTicket()
 	}
 	return m, nil
 }
@@ -656,6 +678,9 @@ func (m *Model) updateDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.editMetaField()
 	case key.Matches(msg, keys.Delete):
 		m.deleteTicket()
+		m.view = boardView
+	case key.Matches(msg, keys.Archive):
+		m.archiveTicket()
 		m.view = boardView
 	case key.Matches(msg, keys.MoveLeft):
 		m.moveTicket(-1)
@@ -919,6 +944,16 @@ func (m *Model) moveTicket(dir int) {
 	m.clampCursors()
 }
 
+func (m *Model) archiveTicket() {
+	t := m.selectedTicket()
+	if t == nil {
+		return
+	}
+	m.store.ArchiveByID(t.ID)
+	m.reload()
+	m.clampCursors()
+}
+
 func (m *Model) deleteTicket() {
 	t := m.selectedTicket()
 	if t == nil {
@@ -952,26 +987,26 @@ func (m *Model) helpText() string {
 		if m.focusMode {
 			focusLabel = "f all"
 		}
-		return fmt.Sprintf("h/l nav | j/k select | + zoom | H/L move | a add | %s | q quit", focusLabel)
+		return fmt.Sprintf("h/l nav | j/k select | + zoom | H/L move | a add | x archive | %s | q quit", focusLabel)
 	case splitView:
 		if m.splitFocus == 0 {
-			return "j/k select | ] edit | + zoom | H/L move | - back | a add | q quit"
+			return "j/k select | ] edit | + zoom | H/L move | x archive | - back | a add | q quit"
 		}
 		if m.editTitle.Focused() || m.editDesc.Focused() {
 			return "esc done editing"
 		}
 		switch m.editField {
 		case 0:
-			return "j/k nav | tab/S-tab meta | enter edit | H/L move | h list | q quit"
+			return "j/k nav | tab/S-tab meta | enter edit | H/L move | x archive | h list | q quit"
 		case 1, 2:
 			return "j/k nav | enter/e edit | H/L move | h list | q quit"
 		}
 	case columnView:
-		return "j/k select | tab next col | H/L move | enter detail | - back | a add | q quit"
+		return "j/k select | tab next col | H/L move | x archive | enter detail | - back | a add | q quit"
 	case detailView:
 		switch m.editField {
 		case 0:
-			return "tab title | h/l meta | enter edit | H/L move | d delete | - back | q quit"
+			return "tab title | h/l meta | enter edit | H/L move | d delete | x archive | - back | q quit"
 		case 1:
 			return "tab desc | enter done | esc back"
 		case 2:
@@ -1078,9 +1113,8 @@ func (m *Model) viewBoard() string {
 	}
 
 	board := lipgloss.JoinHorizontal(lipgloss.Top, columns...)
-	help := helpStyle.Render(m.helpText())
 
-	return lipgloss.JoinVertical(lipgloss.Left, board, help)
+	return lipgloss.JoinVertical(lipgloss.Left, board, m.footerLine())
 }
 
 // renderColumn renders a single column panel.
@@ -1179,9 +1213,8 @@ func (m *Model) viewSplit() string {
 	detailPanel := m.renderSplitDetail(detailWidth, availHeight, detailFocused, detailColor)
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, listPanel, detailPanel)
-	help := helpStyle.Render(m.helpText())
 
-	return lipgloss.JoinVertical(lipgloss.Left, body, help)
+	return lipgloss.JoinVertical(lipgloss.Left, body, m.footerLine())
 }
 
 func (m *Model) renderSplitList(status model.Status, width, height int, focused bool, borderColor lipgloss.Color) string {
@@ -1343,9 +1376,8 @@ func (m *Model) viewColumn() string {
 
 	content := strings.Join(lines, "\n")
 	panel := renderPanel(title, content, m.width, availHeight, color, true)
-	help := helpStyle.Render(m.helpText())
 
-	return lipgloss.JoinVertical(lipgloss.Left, panel, help)
+	return lipgloss.JoinVertical(lipgloss.Left, panel, m.footerLine())
 }
 
 // viewDetail renders the ticket detail view (full screen).
@@ -1390,13 +1422,11 @@ func (m *Model) viewDetail() string {
 	m.editDesc.SetHeight(descPanelHeight - 2)
 	descPanel := renderPanel("Description", m.editDesc.View(), innerWidth+2, descPanelHeight, descBorderColor, m.editField == 2)
 
-	help := helpStyle.Render(m.helpText())
-
 	return lipgloss.JoinVertical(lipgloss.Left,
 		metaPanel,
 		titlePanel,
 		descPanel,
-		help,
+		m.footerLine(),
 	)
 }
 

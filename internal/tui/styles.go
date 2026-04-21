@@ -67,6 +67,12 @@ var (
 			Foreground(midGray).
 			Padding(0, 1)
 
+	// Sprint indicator (bottom-left of screen when a sprint is active)
+	sprintBadgeStyle = lipgloss.NewStyle().
+				Foreground(cyan).
+				Bold(true).
+				Padding(0, 1)
+
 	// Title bar
 	titleBar = lipgloss.NewStyle().
 			Bold(true).

@@ -28,6 +28,7 @@ type keyMap struct {
 	Unzoom    key.Binding
 	PanelNext key.Binding
 	PanelPrev key.Binding
+	Archive   key.Binding
 }
 
 var keys = keyMap{
@@ -56,4 +57,5 @@ var keys = keyMap{
 	Unzoom:    key.NewBinding(key.WithKeys("-"), key.WithHelp("-", "zoom out")),
 	PanelNext: key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "next panel")),
 	PanelPrev: key.NewBinding(key.WithKeys("["), key.WithHelp("[", "prev panel")),
+	Archive:   key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "archive")),
 }

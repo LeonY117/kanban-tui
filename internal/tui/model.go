@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/leon/kanban/internal/model"
 	"github.com/leon/kanban/internal/store"
 )
@@ -24,6 +25,7 @@ const (
 	columnView           // full-width single column
 	detailView           // full-screen detail editor
 	archiveView          // archive browser (split: list + read-only detail)
+	addView              // floating popup for new ticket
 )
 
 // inputMode tracks what the user is typing into.
@@ -81,6 +83,14 @@ type Model struct {
 	// Archive view state
 	archiveEntries []archiveEntry
 	archiveCursor  int
+
+	// Add popup state
+	addTitle       textinput.Model
+	addDesc        textarea.Model
+	addTags        textinput.Model
+	addAssign      textinput.Model
+	addFocusIdx    int
+	addDescEditing bool
 
 	lastModTime time.Time // last known mod time of board.json
 }
@@ -177,6 +187,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateDetail(msg)
 		case archiveView:
 			return m.updateArchive(msg)
+		case addView:
+			return m.updateAdd(msg)
 		}
 	}
 	return m, nil
@@ -203,6 +215,8 @@ func (m *Model) View() string {
 		content = m.viewDetail()
 	case archiveView:
 		content = m.viewArchive()
+	case addView:
+		content = m.viewAdd()
 	}
 
 	// Add input bar or picker if active
@@ -331,8 +345,7 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.enterSplit()
 		return m, nil
 	case key.Matches(msg, keys.Add):
-		m.startInput(inputAdd, "New ticket: ")
-		return m, textinput.Blink
+		return m.enterAddPopup()
 	case key.Matches(msg, keys.Zero):
 		m.focusedCol = 0
 	case key.Matches(msg, keys.One):
@@ -424,8 +437,7 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.refreshDetailEditors()
 		}
 	case key.Matches(msg, keys.Add):
-		m.startInput(inputAdd, "New ticket: ")
-		return m, textinput.Blink
+		return m.enterAddPopup()
 	case key.Matches(msg, keys.Zero):
 		m.focusedCol = 0
 		m.refreshDetailEditors()
@@ -663,8 +675,7 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.enterDetail()
 		}
 	case key.Matches(msg, keys.Add):
-		m.startInput(inputAdd, "New ticket: ")
-		return m, textinput.Blink
+		return m.enterAddPopup()
 	case key.Matches(msg, keys.Zero):
 		m.focusedCol = 0
 	case key.Matches(msg, keys.One):
@@ -1291,6 +1302,335 @@ func (m *Model) renderArchiveMeta(t *model.Ticket, maxWidth int) string {
 	}
 	parts = append(parts, lipgloss.NewStyle().Foreground(midGray).Render(t.ShortID))
 	return strings.Join(parts, "  ")
+}
+
+// ─── Add popup ──────────────────────────────────────────────────────
+
+// addFocusIdx values. The numeric order is also the tab cycle order:
+// assign → tags → title → description → (wrap).
+const (
+	addFocusAssign = iota
+	addFocusTags
+	addFocusTitle
+	addFocusDesc
+)
+
+func (m *Model) enterAddPopup() (tea.Model, tea.Cmd) {
+	ti := textinput.New()
+	ti.Prompt = ""
+	ti.CharLimit = 200
+	ti.Focus()
+	m.addTitle = ti
+
+	ta := textarea.New()
+	ta.Prompt = ""
+	ta.ShowLineNumbers = false
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	ta.FocusedStyle.Base = lipgloss.NewStyle()
+	ta.Blur()
+	m.addDesc = ta
+
+	tagsIn := textinput.New()
+	tagsIn.Prompt = ""
+	tagsIn.Placeholder = "+tag"
+	tagsIn.CharLimit = 100
+	tagsIn.Blur()
+	m.addTags = tagsIn
+
+	assignIn := textinput.New()
+	assignIn.Prompt = ""
+	assignIn.Placeholder = "+assign"
+	assignIn.CharLimit = 50
+	assignIn.Blur()
+	m.addAssign = assignIn
+
+	m.addFocusIdx = addFocusTitle
+	m.addDescEditing = false
+	m.view = addView
+	return m, textinput.Blink
+}
+
+func (m *Model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.addFocusIdx == addFocusDesc && m.addDescEditing {
+		if msg.String() == "esc" {
+			m.addDesc.Blur()
+			m.addDescEditing = false
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.addDesc, cmd = m.addDesc.Update(msg)
+		return m, cmd
+	}
+
+	switch msg.String() {
+	case "esc":
+		m.view = boardView
+		return m, nil
+	case "tab":
+		m.cycleAddField(1)
+		return m, nil
+	case "shift+tab":
+		m.cycleAddField(-1)
+		return m, nil
+	}
+
+	if m.addFocusIdx == addFocusDesc {
+		switch msg.String() {
+		case "enter":
+			m.addDesc.Focus()
+			m.addDescEditing = true
+			return m, textarea.Blink
+		case "h", "k":
+			m.cycleAddField(-1)
+			return m, nil
+		case "l", "j":
+			m.cycleAddField(1)
+			return m, nil
+		}
+		return m, nil
+	}
+
+	if m.addFocusIdx == addFocusTitle {
+		if msg.String() == "enter" {
+			m.submitAdd()
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.addTitle, cmd = m.addTitle.Update(msg)
+		return m, cmd
+	}
+
+	// Tags / assign share behaviour: enter is a no-op (so it doesn't submit
+	// from a half-filled input), any other keystroke types into the widget.
+	if msg.String() == "enter" {
+		return m, nil
+	}
+	var cmd tea.Cmd
+	switch m.addFocusIdx {
+	case addFocusTags:
+		m.addTags, cmd = m.addTags.Update(msg)
+	case addFocusAssign:
+		m.addAssign, cmd = m.addAssign.Update(msg)
+	}
+	return m, cmd
+}
+
+func (m *Model) cycleAddField(dir int) {
+	switch m.addFocusIdx {
+	case addFocusAssign:
+		m.addAssign.Blur()
+	case addFocusTags:
+		m.addTags.Blur()
+	case addFocusTitle:
+		m.addTitle.Blur()
+	case addFocusDesc:
+		m.addDesc.Blur()
+		m.addDescEditing = false
+	}
+	m.addFocusIdx = (m.addFocusIdx + dir + 4) % 4
+	switch m.addFocusIdx {
+	case addFocusAssign:
+		m.addAssign.Focus()
+	case addFocusTags:
+		m.addTags.Focus()
+	case addFocusTitle:
+		m.addTitle.Focus()
+		// addFocusDesc arrives in nav mode — not focused.
+	}
+}
+
+func (m *Model) submitAdd() {
+	title := strings.TrimSpace(m.addTitle.Value())
+	if title == "" {
+		return // silent no-op: title is the only required field.
+	}
+	desc := m.addDesc.Value()
+	var tags []string
+	for _, t := range strings.Split(m.addTags.Value(), ",") {
+		t = strings.TrimSpace(t)
+		if t != "" {
+			tags = append(tags, t)
+		}
+	}
+	assign := strings.TrimSpace(m.addAssign.Value())
+	status := model.ColumnOrder[m.focusedCol]
+
+	if _, err := m.store.Add(title, desc, status, tags, assign, "tui"); err != nil {
+		m.err = err
+		return
+	}
+	m.reload()
+	// Store.Add appends, so the new ticket is last within its status column.
+	m.cursors[m.focusedCol] = len(m.board.ByStatus(status)) - 1
+	m.clampCursors()
+	m.view = boardView
+}
+
+func (m *Model) viewAdd() string {
+	popupWidth := 66
+	if popupWidth > m.width-4 {
+		popupWidth = m.width - 4
+	}
+	if popupWidth < 30 {
+		popupWidth = 30
+	}
+	popupHeight := 28
+	if popupHeight > m.height-4 {
+		popupHeight = m.height - 4
+	}
+	if popupHeight < 12 {
+		popupHeight = 12
+	}
+
+	popup := m.renderAddPopup(popupWidth, popupHeight)
+
+	// Vertical center uses height-1 so the popup sits centered on the
+	// board, not pushed down by the footer line.
+	bg := m.viewBoard()
+	x := (m.width - popupWidth) / 2
+	y := ((m.height - 1) - popupHeight) / 2
+	if y < 0 {
+		y = 0
+	}
+	return overlayAt(bg, popup, x, y)
+}
+
+// overlayAt composites fg on top of bg at position (x, y), measured in visual
+// columns/rows. ANSI escape sequences in bg are preserved for unaffected
+// regions; the fg block completely replaces the bg columns it covers.
+func overlayAt(bg, fg string, x, y int) string {
+	bgLines := strings.Split(bg, "\n")
+	fgLines := strings.Split(fg, "\n")
+
+	for i, fgLine := range fgLines {
+		row := y + i
+		if row < 0 || row >= len(bgLines) {
+			continue
+		}
+		fgWidth := lipgloss.Width(fgLine)
+		bgLine := bgLines[row]
+
+		left := ansi.Truncate(bgLine, x, "")
+		if w := lipgloss.Width(left); w < x {
+			left += strings.Repeat(" ", x-w)
+		}
+		right := ansi.TruncateLeft(bgLine, x+fgWidth, "")
+
+		bgLines[row] = left + fgLine + right
+	}
+	return strings.Join(bgLines, "\n")
+}
+
+func (m *Model) renderAddPopup(width, height int) string {
+	// width is the outer popup width. The outer border eats 2 cols; we also
+	// reserve 1 col of left pad + 1 col of right pad so inner panels sit
+	// symmetrically inside the popup.
+	innerWidth := width - 4
+	if innerWidth < 10 {
+		innerWidth = 10
+	}
+
+	status := model.ColumnOrder[m.focusedCol]
+	accent := columnColor(status)
+
+	meta := m.renderAddMeta()
+
+	titleColor := softWhite
+	if m.addFocusIdx == addFocusTitle {
+		titleColor = accent
+	}
+	m.addTitle.Width = innerWidth - 2
+	titlePanel := renderPanel("Title", m.addTitle.View(), innerWidth, 3, titleColor, m.addFocusIdx == addFocusTitle)
+
+	descColor := softWhite
+	if m.addFocusIdx == addFocusDesc {
+		descColor = accent
+	}
+	// popup inner rows = height - 2 (popup borders). Fixed rows used:
+	// 1 meta + 3 titlePanel + 1 help = 5. Description takes the remainder.
+	descHeight := height - 7
+	if descHeight < 5 {
+		descHeight = 5
+	}
+	m.addDesc.SetWidth(innerWidth - 2)
+	m.addDesc.SetHeight(descHeight - 2)
+	descPanel := renderPanel("Description", m.addDesc.View(), innerWidth, descHeight, descColor, m.addFocusIdx == addFocusDesc)
+
+	// lipgloss PaddingLeft on a multi-line block pads every line, so
+	// sub-panel borders don't collide with the outer popup's left border.
+	pad := lipgloss.NewStyle().PaddingLeft(1)
+	lines := []string{
+		pad.Render(meta),
+		pad.Render(titlePanel),
+		pad.Render(descPanel),
+		pad.Render(m.addHelpLine()),
+	}
+	content := strings.Join(lines, "\n")
+
+	return renderPanel("New ticket", content, width, height, accent, true)
+}
+
+// renderAddMeta mirrors the detail view's meta bar: focused fields get the
+// reverse-highlight treatment via selectedFieldStyle. Unfocused empty slots
+// show a dim placeholder so the user knows they can tab into them. We render
+// static text even when a widget is focused (widget still captures keys
+// invisibly) because stacking styles on top of textinput.View() mangles its
+// internal cursor rendering.
+func (m *Model) renderAddMeta() string {
+	status := model.ColumnOrder[m.focusedCol]
+	statusColor := columnColor(status)
+	statusText := statusDisplay[status]
+
+	dim := lipgloss.NewStyle().Foreground(midGray)
+
+	assignVal := m.addAssign.Value()
+	var assignRender string
+	switch {
+	case m.addFocusIdx == addFocusAssign:
+		display := "+assign"
+		if assignVal != "" {
+			display = "● " + assignVal
+		}
+		assignRender = selectedFieldStyle.Render(display)
+	case assignVal == "":
+		assignRender = dim.Render("+assign")
+	default:
+		assignRender = assigneeStyle.Render("● " + assignVal)
+	}
+
+	tagsVal := m.addTags.Value()
+	var tagsRender string
+	switch {
+	case m.addFocusIdx == addFocusTags:
+		display := "+tag"
+		if tagsVal != "" {
+			display = "#" + tagsVal
+		}
+		tagsRender = selectedFieldStyle.Render(display)
+	case tagsVal == "":
+		tagsRender = dim.Render("+tag")
+	default:
+		tagsRender = tagStyle.Render("#" + tagsVal)
+	}
+
+	statusRender := lipgloss.NewStyle().Foreground(statusColor).Bold(true).Render(statusText)
+
+	return strings.Join([]string{statusRender, assignRender, tagsRender}, "  ")
+}
+
+func (m *Model) addHelpLine() string {
+	parts := []string{
+		"tab/shift-tab: field",
+		"enter (title): save",
+	}
+	if m.addFocusIdx == addFocusDesc && !m.addDescEditing {
+		parts = append(parts, "enter: edit", "h/l: field")
+	}
+	if m.addFocusIdx == addFocusDesc && m.addDescEditing {
+		parts = []string{"esc: exit edit"}
+	}
+	parts = append(parts, "esc: cancel")
+	return helpStyle.Render(strings.Join(parts, "  •  "))
 }
 
 // ─── Help text ──────────────────────────────────────────────────────

@@ -15,6 +15,7 @@ type keyMap struct {
 	Status    key.Binding
 	Assign    key.Binding
 	Help      key.Binding
+	Zero      key.Binding
 	One       key.Binding
 	Two       key.Binding
 	Three     key.Binding
@@ -22,7 +23,6 @@ type keyMap struct {
 	Delete    key.Binding
 	MoveLeft  key.Binding
 	MoveRight key.Binding
-	Focus     key.Binding
 	Edit      key.Binding
 	Zoom      key.Binding
 	Unzoom    key.Binding
@@ -44,6 +44,7 @@ var keys = keyMap{
 	Status:    key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "status")),
 	Assign:    key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "assign")),
 	Help:      key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
+	Zero:      key.NewBinding(key.WithKeys("0"), key.WithHelp("0", "Backlog")),
 	One:       key.NewBinding(key.WithKeys("1"), key.WithHelp("1", "Todo")),
 	Two:       key.NewBinding(key.WithKeys("2"), key.WithHelp("2", "Doing")),
 	Three:     key.NewBinding(key.WithKeys("3"), key.WithHelp("3", "Done")),
@@ -51,7 +52,6 @@ var keys = keyMap{
 	Delete:    key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
 	MoveLeft:  key.NewBinding(key.WithKeys("H"), key.WithHelp("H", "move left")),
 	MoveRight: key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "move right")),
-	Focus:     key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "focus")),
 	Edit:      key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
 	Zoom:      key.NewBinding(key.WithKeys("+"), key.WithHelp("+", "zoom in")),
 	Unzoom:    key.NewBinding(key.WithKeys("-"), key.WithHelp("-", "zoom out")),

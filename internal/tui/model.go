@@ -56,7 +56,6 @@ type Model struct {
 	input      textinput.Model
 	inputMode  inputMode
 	err        error
-	focusMode  bool // when true, only show Todo/Doing
 
 	// Selection picker state (for status)
 	selectOptions []string
@@ -169,6 +168,10 @@ func (m *Model) View() string {
 		return "Loading..."
 	}
 
+	if m.width < minTerminalWidth || m.height < minTerminalHeight {
+		return m.viewTooSmall()
+	}
+
 	var content string
 	switch m.view {
 	case boardView:
@@ -210,53 +213,43 @@ func (m *Model) selectedTicket() *model.Ticket {
 	return &tickets[idx]
 }
 
-// visibleColumns returns the column indices currently shown (into model.ColumnOrder).
+// wideLayoutMinWidth is the terminal width above which all 5 columns render
+// side-by-side. Below it, a 3-column sliding window centered on focus is used.
+const wideLayoutMinWidth = 150
+
+// Minimum terminal dimensions for a usable TUI render. Below this, we show a
+// placeholder instead of a mangled layout.
+const (
+	minTerminalWidth  = 50
+	minTerminalHeight = 10
+)
+
+// visibleColumns returns the column indices currently rendered.
+// Wide terminals show all 5 columns. Narrower ones show a 3-column window
+// that sits at [1,2,3] by default; only the edge columns (0 and 4) drag the
+// window sideways, giving a "peek" into Backlog or Hold.
 func (m *Model) visibleColumns() []int {
-	if m.focusMode {
-		return []int{1, 2} // Todo, Doing
+	if m.width >= wideLayoutMinWidth {
+		return []int{0, 1, 2, 3, 4}
 	}
-	return []int{1, 2, 3, 4} // Todo, Doing, Done, Hold (no Backlog)
+	switch m.focusedCol {
+	case 0:
+		return []int{0, 1, 2}
+	case 4:
+		return []int{2, 3, 4}
+	default:
+		return []int{1, 2, 3}
+	}
 }
 
-// isColVisible returns whether a column index is currently visible.
-func (m *Model) isColVisible(col int) bool {
-	for _, c := range m.visibleColumns() {
-		if c == col {
-			return true
-		}
-	}
-	return false
-}
-
-// clampFocusedCol ensures focusedCol is within visible columns.
-func (m *Model) clampFocusedCol() {
-	vis := m.visibleColumns()
-	for _, c := range vis {
-		if c == m.focusedCol {
-			return
-		}
-	}
-	m.focusedCol = vis[0]
-}
-
-// moveFocus moves focus left/right within visible columns.
+// moveFocus moves focus left/right through all columns (0..4).
+// The visible window re-centers on the next render.
 func (m *Model) moveFocus(dir int) {
-	vis := m.visibleColumns()
-	curIdx := -1
-	for i, c := range vis {
-		if c == m.focusedCol {
-			curIdx = i
-			break
-		}
-	}
-	if curIdx < 0 {
-		m.focusedCol = vis[0]
+	next := m.focusedCol + dir
+	if next < 0 || next > 4 {
 		return
 	}
-	newIdx := curIdx + dir
-	if newIdx >= 0 && newIdx < len(vis) {
-		m.focusedCol = vis[newIdx]
-	}
+	m.focusedCol = next
 }
 
 func (m *Model) clampCursors() {
@@ -297,17 +290,16 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Add):
 		m.startInput(inputAdd, "New ticket: ")
 		return m, textinput.Blink
-	case key.Matches(msg, keys.Focus):
-		m.focusMode = !m.focusMode
-		m.clampFocusedCol()
+	case key.Matches(msg, keys.Zero):
+		m.focusedCol = 0
 	case key.Matches(msg, keys.One):
-		if m.isColVisible(1) { m.focusedCol = 1 }
+		m.focusedCol = 1
 	case key.Matches(msg, keys.Two):
-		if m.isColVisible(2) { m.focusedCol = 2 }
+		m.focusedCol = 2
 	case key.Matches(msg, keys.Three):
-		if m.isColVisible(3) { m.focusedCol = 3 }
+		m.focusedCol = 3
 	case key.Matches(msg, keys.Four):
-		if m.isColVisible(4) { m.focusedCol = 4 }
+		m.focusedCol = 4
 	case key.Matches(msg, keys.MoveLeft):
 		m.moveTicket(-1)
 	case key.Matches(msg, keys.MoveRight):
@@ -387,14 +379,21 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Add):
 		m.startInput(inputAdd, "New ticket: ")
 		return m, textinput.Blink
+	case key.Matches(msg, keys.Zero):
+		m.focusedCol = 0
+		m.refreshDetailEditors()
 	case key.Matches(msg, keys.One):
-		if m.isColVisible(1) { m.focusedCol = 1; m.refreshDetailEditors() }
+		m.focusedCol = 1
+		m.refreshDetailEditors()
 	case key.Matches(msg, keys.Two):
-		if m.isColVisible(2) { m.focusedCol = 2; m.refreshDetailEditors() }
+		m.focusedCol = 2
+		m.refreshDetailEditors()
 	case key.Matches(msg, keys.Three):
-		if m.isColVisible(3) { m.focusedCol = 3; m.refreshDetailEditors() }
+		m.focusedCol = 3
+		m.refreshDetailEditors()
 	case key.Matches(msg, keys.Four):
-		if m.isColVisible(4) { m.focusedCol = 4; m.refreshDetailEditors() }
+		m.focusedCol = 4
+		m.refreshDetailEditors()
 	case key.Matches(msg, keys.MoveLeft):
 		m.moveTicket(-1)
 		m.refreshDetailEditors()
@@ -418,6 +417,13 @@ func (m *Model) updateSplitDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateSplitDetailDesc(msg)
 	}
 	return m, nil
+}
+
+// jumpDetailCol changes focus to another column from within a detail view
+// and re-seeds the edit widgets with the new ticket's data.
+func (m *Model) jumpDetailCol(col int) {
+	m.focusedCol = col
+	m.refreshDetailEditors()
 }
 
 func (m *Model) updateSplitDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -462,6 +468,16 @@ func (m *Model) updateSplitDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.MoveRight):
 		m.moveTicket(1)
 		m.refreshDetailEditors()
+	case key.Matches(msg, keys.Zero):
+		m.jumpDetailCol(0)
+	case key.Matches(msg, keys.One):
+		m.jumpDetailCol(1)
+	case key.Matches(msg, keys.Two):
+		m.jumpDetailCol(2)
+	case key.Matches(msg, keys.Three):
+		m.jumpDetailCol(3)
+	case key.Matches(msg, keys.Four):
+		m.jumpDetailCol(4)
 	}
 	return m, nil
 }
@@ -510,6 +526,16 @@ func (m *Model) updateSplitDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.MoveRight):
 		m.moveTicket(1)
 		m.refreshDetailEditors()
+	case key.Matches(msg, keys.Zero):
+		m.jumpDetailCol(0)
+	case key.Matches(msg, keys.One):
+		m.jumpDetailCol(1)
+	case key.Matches(msg, keys.Two):
+		m.jumpDetailCol(2)
+	case key.Matches(msg, keys.Three):
+		m.jumpDetailCol(3)
+	case key.Matches(msg, keys.Four):
+		m.jumpDetailCol(4)
 	}
 	return m, nil
 }
@@ -552,6 +578,16 @@ func (m *Model) updateSplitDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.MoveRight):
 		m.moveTicket(1)
 		m.refreshDetailEditors()
+	case key.Matches(msg, keys.Zero):
+		m.jumpDetailCol(0)
+	case key.Matches(msg, keys.One):
+		m.jumpDetailCol(1)
+	case key.Matches(msg, keys.Two):
+		m.jumpDetailCol(2)
+	case key.Matches(msg, keys.Three):
+		m.jumpDetailCol(3)
+	case key.Matches(msg, keys.Four):
+		m.jumpDetailCol(4)
 	}
 	return m, nil
 }
@@ -584,17 +620,16 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Add):
 		m.startInput(inputAdd, "New ticket: ")
 		return m, textinput.Blink
-	case key.Matches(msg, keys.Focus):
-		m.focusMode = !m.focusMode
-		m.clampFocusedCol()
+	case key.Matches(msg, keys.Zero):
+		m.focusedCol = 0
 	case key.Matches(msg, keys.One):
-		if m.isColVisible(1) { m.focusedCol = 1 }
+		m.focusedCol = 1
 	case key.Matches(msg, keys.Two):
-		if m.isColVisible(2) { m.focusedCol = 2 }
+		m.focusedCol = 2
 	case key.Matches(msg, keys.Three):
-		if m.isColVisible(3) { m.focusedCol = 3 }
+		m.focusedCol = 3
 	case key.Matches(msg, keys.Four):
-		if m.isColVisible(4) { m.focusedCol = 4 }
+		m.focusedCol = 4
 	case key.Matches(msg, keys.MoveLeft):
 		m.moveTicket(-1)
 	case key.Matches(msg, keys.MoveRight):
@@ -686,6 +721,16 @@ func (m *Model) updateDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveTicket(-1)
 	case key.Matches(msg, keys.MoveRight):
 		m.moveTicket(1)
+	case key.Matches(msg, keys.Zero):
+		m.jumpDetailCol(0)
+	case key.Matches(msg, keys.One):
+		m.jumpDetailCol(1)
+	case key.Matches(msg, keys.Two):
+		m.jumpDetailCol(2)
+	case key.Matches(msg, keys.Three):
+		m.jumpDetailCol(3)
+	case key.Matches(msg, keys.Four):
+		m.jumpDetailCol(4)
 	}
 	return m, nil
 }
@@ -983,11 +1028,7 @@ func (m *Model) viewInput() string {
 func (m *Model) helpText() string {
 	switch m.view {
 	case boardView:
-		focusLabel := "f focus"
-		if m.focusMode {
-			focusLabel = "f all"
-		}
-		return fmt.Sprintf("h/l nav | j/k select | + zoom | H/L move | a add | x archive | %s | q quit", focusLabel)
+		return "h/l nav | j/k select | + zoom | H/L move | a add | x archive | q quit"
 	case splitView:
 		if m.splitFocus == 0 {
 			return "j/k select | ] edit | + zoom | H/L move | x archive | - back | a add | q quit"
@@ -1014,6 +1055,23 @@ func (m *Model) helpText() string {
 		}
 	}
 	return ""
+}
+
+// viewTooSmall renders a placeholder when the terminal is below the usable
+// minimum size. Shows current vs required dimensions so the user can resize.
+func (m *Model) viewTooSmall() string {
+	lines := []string{
+		"Terminal too small",
+		"",
+		fmt.Sprintf("current:  %dx%d", m.width, m.height),
+		fmt.Sprintf("required: %dx%d", minTerminalWidth, minTerminalHeight),
+		"",
+		"resize or press q to quit",
+	}
+	msg := strings.Join(lines, "\n")
+	return lipgloss.Place(m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		lipgloss.NewStyle().Foreground(softWhite).Render(msg))
 }
 
 // ─── Rendering ──────────────────────────────────────────────────────
@@ -1465,6 +1523,7 @@ func (m *Model) renderCompactMeta(t *model.Ticket, maxWidth int, navigable bool)
 		}
 		parts = append(parts, rendered)
 	}
+	parts = append(parts, lipgloss.NewStyle().Foreground(midGray).Render(t.ShortID))
 
 	return strings.Join(parts, "  ")
 }

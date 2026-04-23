@@ -28,10 +28,11 @@ var (
 
 	// Per-column accent colors
 	columnColors = map[model.Status]lipgloss.Color{
-		model.StatusTodo:  blue,
-		model.StatusDoing: peach,
-		model.StatusDone:  green,
-		model.StatusHold:  mauve,
+		model.StatusBacklog: cyan,
+		model.StatusTodo:    blue,
+		model.StatusDoing:   peach,
+		model.StatusDone:    green,
+		model.StatusHold:    mauve,
 	}
 
 	// Focused panel border

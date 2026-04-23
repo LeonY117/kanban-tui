@@ -5,22 +5,26 @@ import (
 	"github.com/leon/kanban/internal/model"
 )
 
+// Colors are ANSI 16 palette entries — the terminal resolves them from its
+// own theme, so kanban tracks dark/light toggles live without restarting.
+// Empty-string colors fall through to the terminal's default foreground.
 var (
-	// Colors
-	green     = lipgloss.Color("#A6E3A1")
-	blue      = lipgloss.Color("#89B4FA")
-	peach     = lipgloss.Color("#FAB387")
-	mauve     = lipgloss.Color("#CBA6F7")
-	dimGray   = lipgloss.Color("#383838")
-	midGray   = lipgloss.Color("#777777")
-	softWhite = lipgloss.Color("#CDD6F4")
-	white     = lipgloss.Color("#FAFAFA")
-	red       = lipgloss.Color("#FF4444")
-	orange    = lipgloss.Color("#FF8800")
-	yellow    = lipgloss.Color("#FFCC00")
-	cyan      = lipgloss.Color("#00CCCC")
-	subtle    = lipgloss.Color("#555555")
-	highlight = lipgloss.Color("#7D56F4")
+	green = lipgloss.Color("2")
+	blue  = lipgloss.Color("4")
+	peach = lipgloss.Color("3") // yellow slot — stands in for "in progress"
+	mauve = lipgloss.Color("5")
+	cyan  = lipgloss.Color("6")
+
+	// Shades of gray all map to bright-black — visible on both light and
+	// dark backgrounds in every sensible terminal theme.
+	dimGray = lipgloss.Color("8")
+	midGray = lipgloss.Color("8")
+	subtle  = lipgloss.Color("8")
+
+	// Content text: use the terminal's default foreground so it always
+	// contrasts with the terminal's own background.
+	softWhite = lipgloss.Color("")
+	white     = lipgloss.Color("")
 
 	// Per-column accent colors
 	columnColors = map[model.Status]lipgloss.Color{
@@ -73,10 +77,9 @@ var (
 				Bold(true).
 				Padding(0, 1)
 
-	// Title bar
+	// Title bar — bold, default fg.
 	titleBar = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(white).
 			Padding(0, 1)
 
 	// Detail label
@@ -84,19 +87,24 @@ var (
 			Foreground(midGray).
 			Width(12)
 
-	// Detail value
-	detailValue = lipgloss.NewStyle().
-			Foreground(white)
+	// Detail value — default fg.
+	detailValue = lipgloss.NewStyle()
 
-	// Detail title
+	// Detail title — bold, default fg.
 	detailTitle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(white).
 			Padding(0, 0, 1, 0)
 
 	// Detail separator
 	detailSep = lipgloss.NewStyle().
 			Foreground(dimGray)
+
+	// Highlight for the currently selected meta field. Reverse(true) swaps
+	// the terminal's fg/bg so it adapts to any theme without picking colors.
+	selectedFieldStyle = lipgloss.NewStyle().
+				Reverse(true).
+				Bold(true).
+				Padding(0, 1)
 )
 
 // columnColor returns the accent color for a given status column.

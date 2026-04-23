@@ -1332,7 +1332,7 @@ func (m *Model) viewColumn() string {
 			marker = lipgloss.NewStyle().Foreground(color).Bold(true).Render(" * ")
 			tStyle = tStyle.Bold(true).Foreground(white)
 		} else {
-			tStyle = tStyle.Foreground(lipgloss.Color("#CCCCCC"))
+			tStyle = tStyle.Faint(true)
 		}
 
 		// Build suffix first so we can truncate title to fit
@@ -1461,12 +1461,7 @@ func (m *Model) renderCompactMeta(t *model.Ticket, maxWidth int, navigable bool)
 		}
 		rendered := f.style.Render(f.value)
 		if navigable && i == m.metaIdx {
-			rendered = lipgloss.NewStyle().
-				Background(lipgloss.Color("#313244")).
-				Bold(true).
-				Foreground(white).
-				Padding(0, 1).
-				Render(f.value)
+			rendered = selectedFieldStyle.Render(f.value)
 		}
 		parts = append(parts, rendered)
 	}
@@ -1505,12 +1500,7 @@ func (m *Model) renderMetaBar(t *model.Ticket) string {
 	for i, f := range fields {
 		rendered := f.style.Render(f.value)
 		if isMeta && i == m.metaIdx {
-			rendered = lipgloss.NewStyle().
-				Background(lipgloss.Color("#313244")).
-				Bold(true).
-				Foreground(white).
-				Padding(0, 1).
-				Render(f.value)
+			rendered = selectedFieldStyle.Render(f.value)
 		}
 		parts = append(parts, rendered)
 	}

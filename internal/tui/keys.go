@@ -10,7 +10,6 @@ type keyMap struct {
 	Down      key.Binding
 	Enter     key.Binding
 	Esc       key.Binding
-	Tab       key.Binding
 	Add       key.Binding
 	Status    key.Binding
 	Assign    key.Binding
@@ -42,7 +41,6 @@ var keys = keyMap{
 	Down:      key.NewBinding(key.WithKeys("j", "down"), key.WithHelp("j", "down")),
 	Enter:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
 	Esc:       key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
-	Tab:       key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next field")),
 	Add:       key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add")),
 	Status:    key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "status")),
 	Assign:    key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "assign")),

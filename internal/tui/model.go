@@ -476,17 +476,19 @@ func (m *Model) jumpDetailCol(col int) {
 }
 
 func (m *Model) updateSplitDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == "shift+tab" {
-		if m.metaIdx > 0 {
-			m.metaIdx--
-		}
-		return m, nil
-	}
 	switch {
 	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
 	case key.Matches(msg, keys.Left):
-		m.splitFocus = 0
+		if m.metaIdx > 0 {
+			m.metaIdx--
+		} else {
+			m.splitFocus = 0
+		}
+	case key.Matches(msg, keys.Right):
+		if m.metaIdx < 2 {
+			m.metaIdx++
+		}
 	case key.Matches(msg, keys.PanelPrev), key.Matches(msg, keys.Esc):
 		m.splitFocus = 0
 	case key.Matches(msg, keys.Unzoom):
@@ -497,10 +499,6 @@ func (m *Model) updateSplitDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case key.Matches(msg, keys.Down):
 		m.editField = 1
-	case key.Matches(msg, keys.Tab):
-		if m.metaIdx < 2 {
-			m.metaIdx++
-		}
 	case key.Matches(msg, keys.Enter):
 		return m.editMetaField()
 	case key.Matches(msg, keys.Delete):
@@ -650,8 +648,6 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Unzoom), key.Matches(msg, keys.Esc):
 		m.enterSplit()
 		return m, nil
-	case key.Matches(msg, keys.Tab):
-		m.moveFocus(1)
 	case key.Matches(msg, keys.Up):
 		if m.cursors[m.focusedCol] > 0 {
 			m.cursors[m.focusedCol]--
@@ -734,11 +730,6 @@ func (m *Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) updateDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == "shift+tab" {
-		m.editField = 2
-		m.editDesc.Focus()
-		return m, nil
-	}
 	switch {
 	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
@@ -746,10 +737,6 @@ func (m *Model) updateDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.saveEdit()
 		m.enterSplit()
 		return m, nil
-	case key.Matches(msg, keys.Tab):
-		m.editField = 1
-		m.editTitle.Focus()
-		return m, textinput.Blink
 	case key.Matches(msg, keys.Left):
 		if m.metaIdx > 0 {
 			m.metaIdx--
@@ -798,7 +785,14 @@ func (m *Model) editMetaField() (tea.Model, tea.Cmd) {
 			m.reload()
 			m.clampCursors()
 		})
-	case 1: // tags
+	case 1: // assigned
+		m.startInput(inputAssign, "Assign to: ")
+		t := m.selectedTicket()
+		if t != nil {
+			m.input.SetValue(t.AssignedTo)
+		}
+		return m, textinput.Blink
+	case 2: // tags
 		t := m.selectedTicket()
 		current := ""
 		if t != nil && len(t.Tags) > 0 {
@@ -809,13 +803,6 @@ func (m *Model) editMetaField() (tea.Model, tea.Cmd) {
 		m.inputMode = inputAdd
 		m.input.Prompt = "Tags: "
 		return m, textinput.Blink
-	case 2: // assigned
-		m.startInput(inputAssign, "Assign to: ")
-		t := m.selectedTicket()
-		if t != nil {
-			m.input.SetValue(t.AssignedTo)
-		}
-		return m, textinput.Blink
 	}
 	return m, nil
 }
@@ -823,16 +810,6 @@ func (m *Model) editMetaField() (tea.Model, tea.Cmd) {
 func (m *Model) updateDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
-		m.editTitle.Blur()
-		m.editField = 0
-		m.saveEdit()
-		return m, nil
-	case "tab":
-		m.editField = 2
-		m.editTitle.Blur()
-		m.editDesc.Focus()
-		return m, nil
-	case "shift+tab":
 		m.editTitle.Blur()
 		m.editField = 0
 		m.saveEdit()
@@ -855,16 +832,6 @@ func (m *Model) updateDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.editField = 0
 		m.saveEdit()
 		return m, nil
-	case "tab":
-		m.editField = 0
-		m.editDesc.Blur()
-		m.saveEdit()
-		return m, nil
-	case "shift+tab":
-		m.editField = 1
-		m.editDesc.Blur()
-		m.editTitle.Focus()
-		return m, textinput.Blink
 	}
 	var cmd tea.Cmd
 	m.editDesc, cmd = m.editDesc.Update(msg)
@@ -1343,20 +1310,20 @@ func (m *Model) helpText() string {
 		}
 		switch m.editField {
 		case 0:
-			return "j/k nav | tab/S-tab meta | enter edit | H/L move | x archive | h list | q quit"
+			return "h/l meta | j/k fields | enter edit | H/L move | x archive | q quit"
 		case 1, 2:
-			return "j/k nav | enter/e edit | H/L move | h list | q quit"
+			return "j/k fields | enter/e edit | H/L move | h list | q quit"
 		}
 	case columnView:
-		return "j/k select | tab next col | H/L move | x archive | enter detail | - back | a add | q quit"
+		return "j/k select | H/L move | x archive | enter detail | - back | a add | q quit"
 	case detailView:
 		switch m.editField {
 		case 0:
-			return "tab title | h/l meta | enter edit | H/L move | d delete | x archive | - back | q quit"
+			return "h/l meta | j/k fields | enter edit | H/L move | d delete | x archive | - back | q quit"
 		case 1:
-			return "tab desc | enter done | esc back"
+			return "enter done | esc back"
 		case 2:
-			return "tab meta | esc back"
+			return "esc back"
 		}
 	}
 	return ""
@@ -1888,41 +1855,53 @@ func (m *Model) viewDetail() string {
 }
 
 // renderCompactMeta renders a compact metadata bar that fits within a given width.
+// When the Info panel is focused (navigable), empty assign/tag fields render as
+// dim "+assign" / "+tag" prompts so the user can tab to them and create a value.
+// When not focused, empty fields are hidden entirely to keep the bar uncluttered.
 func (m *Model) renderCompactMeta(t *model.Ticket, maxWidth int, navigable bool) string {
 	status := model.ColumnOrder[m.focusedCol]
 	color := columnColor(status)
 
 	statusText := statusDisplay[t.Status]
-	tagsText := ""
-	if len(t.Tags) > 0 {
-		tagsText = "#" + strings.Join(t.Tags, " #")
-	}
-	assignText := ""
+
+	assignText, assignEmpty := "+assign", true
 	if t.AssignedTo != "" {
-		assignText = "● " + t.AssignedTo
+		assignText, assignEmpty = "● "+t.AssignedTo, false
 	}
+	tagsText, tagsEmpty := "+tag", true
+	if len(t.Tags) > 0 {
+		tagsText, tagsEmpty = "#"+strings.Join(t.Tags, " #"), false
+	}
+
+	dim := lipgloss.NewStyle().Foreground(midGray)
 
 	fields := []struct {
 		value string
 		style lipgloss.Style
+		empty bool
 	}{
-		{statusText, lipgloss.NewStyle().Foreground(color).Bold(true)},
-		{tagsText, tagStyle},
-		{assignText, assigneeStyle},
+		{statusText, lipgloss.NewStyle().Foreground(color).Bold(true), false},
+		{assignText, assigneeStyle, assignEmpty},
+		{tagsText, tagStyle, tagsEmpty},
 	}
 
 	var parts []string
 	for i, f := range fields {
-		if f.value == "" {
+		if f.empty && !navigable {
 			continue
 		}
-		rendered := f.style.Render(f.value)
-		if navigable && i == m.metaIdx {
+		var rendered string
+		switch {
+		case navigable && i == m.metaIdx:
 			rendered = selectedFieldStyle.Render(f.value)
+		case f.empty:
+			rendered = dim.Render(f.value)
+		default:
+			rendered = f.style.Render(f.value)
 		}
 		parts = append(parts, rendered)
 	}
-	parts = append(parts, lipgloss.NewStyle().Foreground(midGray).Render(t.ShortID))
+	parts = append(parts, dim.Render(t.ShortID))
 
 	return strings.Join(parts, "  ")
 }
@@ -1935,30 +1914,41 @@ func (m *Model) renderMetaBar(t *model.Ticket) string {
 	color := columnColor(status)
 
 	statusText := statusDisplay[t.Status]
-	tagsText := "no tags"
-	if len(t.Tags) > 0 {
-		tagsText = "#" + strings.Join(t.Tags, " #")
-	}
-	assignText := "unassigned"
+
+	assignText, assignEmpty := "+assign", true
 	if t.AssignedTo != "" {
-		assignText = "● " + t.AssignedTo
+		assignText, assignEmpty = "● "+t.AssignedTo, false
+	}
+	tagsText, tagsEmpty := "+tag", true
+	if len(t.Tags) > 0 {
+		tagsText, tagsEmpty = "#"+strings.Join(t.Tags, " #"), false
 	}
 
+	dim := lipgloss.NewStyle().Foreground(midGray)
+
 	fields := []struct {
-		label string
 		value string
 		style lipgloss.Style
+		empty bool
 	}{
-		{"status", statusText, lipgloss.NewStyle().Foreground(color).Bold(true)},
-		{"tags", tagsText, tagStyle},
-		{"assigned", assignText, assigneeStyle},
+		{statusText, lipgloss.NewStyle().Foreground(color).Bold(true), false},
+		{assignText, assigneeStyle, assignEmpty},
+		{tagsText, tagStyle, tagsEmpty},
 	}
 
 	var parts []string
 	for i, f := range fields {
-		rendered := f.style.Render(f.value)
-		if isMeta && i == m.metaIdx {
+		if f.empty && !isMeta {
+			continue
+		}
+		var rendered string
+		switch {
+		case isMeta && i == m.metaIdx:
 			rendered = selectedFieldStyle.Render(f.value)
+		case f.empty:
+			rendered = dim.Render(f.value)
+		default:
+			rendered = f.style.Render(f.value)
 		}
 		parts = append(parts, rendered)
 	}

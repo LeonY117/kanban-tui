@@ -29,6 +29,7 @@ type keyMap struct {
 	PanelNext key.Binding
 	PanelPrev key.Binding
 	Archive   key.Binding
+	Layout    key.Binding
 }
 
 var keys = keyMap{
@@ -58,4 +59,5 @@ var keys = keyMap{
 	PanelNext: key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "next panel")),
 	PanelPrev: key.NewBinding(key.WithKeys("["), key.WithHelp("[", "prev panel")),
 	Archive:   key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "archive")),
+	Layout:    key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "toggle layout")),
 }

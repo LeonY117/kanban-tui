@@ -73,6 +73,9 @@ type Model struct {
 	// Split view state
 	splitFocus int // 0 = list panel, 1 = detail panel
 
+	// Board layout toggle. false = columns (default), true = rows.
+	rowLayout bool
+
 	lastModTime time.Time // last known mod time of board.json
 }
 
@@ -217,6 +220,9 @@ func (m *Model) selectedTicket() *model.Ticket {
 // side-by-side. Below it, a 3-column sliding window centered on focus is used.
 const wideLayoutMinWidth = 150
 
+// tallLayoutMinHeight is the same idea for row layout, against height.
+const tallLayoutMinHeight = 30
+
 // Minimum terminal dimensions for a usable TUI render. Below this, we show a
 // placeholder instead of a mangled layout.
 const (
@@ -229,10 +235,20 @@ const (
 // that sits at [1,2,3] by default; only the edge columns (0 and 4) drag the
 // window sideways, giving a "peek" into Backlog or Hold.
 func (m *Model) visibleColumns() []int {
-	if m.width >= wideLayoutMinWidth {
+	return slidingWindow(m.width >= wideLayoutMinWidth, m.focusedCol)
+}
+
+// visibleRows is the row-layout analogue of visibleColumns: tall terminals
+// show all 5 rows, shorter ones slide a 3-row window.
+func (m *Model) visibleRows() []int {
+	return slidingWindow(m.height >= tallLayoutMinHeight, m.focusedCol)
+}
+
+func slidingWindow(showAll bool, focused int) []int {
+	if showAll {
 		return []int{0, 1, 2, 3, 4}
 	}
-	switch m.focusedCol {
+	switch focused {
 	case 0:
 		return []int{0, 1, 2}
 	case 4:
@@ -250,6 +266,21 @@ func (m *Model) moveFocus(dir int) {
 		return
 	}
 	m.focusedCol = next
+}
+
+// moveCursor moves the selection cursor within the focused column's ticket list.
+func (m *Model) moveCursor(dir int) {
+	if dir < 0 {
+		if m.cursors[m.focusedCol] > 0 {
+			m.cursors[m.focusedCol]--
+		}
+		return
+	}
+	status := model.ColumnOrder[m.focusedCol]
+	count := len(m.board.ByStatus(status))
+	if m.cursors[m.focusedCol] < count-1 {
+		m.cursors[m.focusedCol]++
+	}
 }
 
 func (m *Model) clampCursors() {
@@ -275,15 +306,9 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Right):
 		m.moveFocus(1)
 	case key.Matches(msg, keys.Up):
-		if m.cursors[m.focusedCol] > 0 {
-			m.cursors[m.focusedCol]--
-		}
+		m.moveCursor(-1)
 	case key.Matches(msg, keys.Down):
-		status := model.ColumnOrder[m.focusedCol]
-		count := len(m.board.ByStatus(status))
-		if m.cursors[m.focusedCol] < count-1 {
-			m.cursors[m.focusedCol]++
-		}
+		m.moveCursor(1)
 	case key.Matches(msg, keys.Enter), key.Matches(msg, keys.Zoom):
 		m.enterSplit()
 		return m, nil
@@ -306,6 +331,8 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveTicket(1)
 	case key.Matches(msg, keys.Archive):
 		m.archiveTicket()
+	case key.Matches(msg, keys.Layout):
+		m.rowLayout = !m.rowLayout
 	}
 	return m, nil
 }
@@ -1028,7 +1055,7 @@ func (m *Model) viewInput() string {
 func (m *Model) helpText() string {
 	switch m.view {
 	case boardView:
-		return "h/l nav | j/k select | + zoom | H/L move | a add | x archive | q quit"
+		return "h/l nav | j/k select | v layout | + zoom | H/L move | a add | x archive | q quit"
 	case splitView:
 		if m.splitFocus == 0 {
 			return "j/k select | ] edit | + zoom | H/L move | x archive | - back | a add | q quit"
@@ -1125,8 +1152,11 @@ func renderPanel(title string, content string, width, height int, borderColor li
 	return result
 }
 
-// viewBoard renders the board view with all columns.
+// viewBoard renders the board view (column layout by default, row layout on toggle).
 func (m *Model) viewBoard() string {
+	if m.rowLayout {
+		return m.viewBoardRows()
+	}
 	availHeight := m.height - 1 // just help bar
 	availWidth := m.width
 
@@ -1142,7 +1172,7 @@ func (m *Model) viewBoard() string {
 				break
 			}
 		}
-		focusedWidth := availWidth * 40 / 100
+		focusedWidth := availWidth * 50 / 100
 		remaining := availWidth - focusedWidth
 		unfocusedWidth := remaining / (numCols - 1)
 		for i := range colWidths {
@@ -1193,9 +1223,11 @@ func (m *Model) renderColumn(colIdx int, status model.Status, width, height int,
 	visibleCount := height - 2
 	cursor := m.cursors[colIdx]
 
-	// Scroll window: ensure cursor is always visible
+	// Only scroll to keep the cursor visible when the column is focused;
+	// unfocused columns should always render from the top so switching away
+	// doesn't leave a column scrolled mid-list.
 	startIdx := 0
-	if cursor >= visibleCount {
+	if focused && cursor >= visibleCount {
 		startIdx = cursor - visibleCount + 1
 	}
 
@@ -1237,6 +1269,95 @@ func (m *Model) renderTicketLine(t model.Ticket, selected bool, width int, accen
 	}
 
 	return lipgloss.NewStyle().Foreground(softWhite).PaddingLeft(1).Render(title)
+}
+
+// viewBoardRows renders the board as stacked full-width rows — one per status.
+// Tall terminals show all 5 rows; shorter ones show a 3-row sliding window
+// centered on the focused row (same logic as the horizontal layout, applied to height).
+func (m *Model) viewBoardRows() string {
+	availHeight := m.height - 1
+	availWidth := m.width
+
+	visRows := m.visibleRows()
+	numRows := len(visRows)
+
+	rowHeights := make([]int, numRows)
+	if availHeight < 24 && numRows > 2 {
+		focusedIdx := -1
+		for i, c := range visRows {
+			if c == m.focusedCol {
+				focusedIdx = i
+				break
+			}
+		}
+		focusedHeight := availHeight * 50 / 100
+		remaining := availHeight - focusedHeight
+		unfocusedHeight := remaining / (numRows - 1)
+		for i := range rowHeights {
+			if i == focusedIdx {
+				rowHeights[i] = focusedHeight
+			} else {
+				rowHeights[i] = unfocusedHeight
+			}
+		}
+	} else {
+		baseHeight := availHeight / numRows
+		for i := range rowHeights {
+			rowHeights[i] = baseHeight
+		}
+	}
+	total := 0
+	for _, h := range rowHeights {
+		total += h
+	}
+	rowHeights[numRows-1] += availHeight - total
+
+	rows := make([]string, numRows)
+	for i, colIdx := range visRows {
+		status := model.ColumnOrder[colIdx]
+		rows[i] = m.renderRow(colIdx, status, availWidth, rowHeights[i], colIdx == m.focusedCol)
+	}
+	board := lipgloss.JoinVertical(lipgloss.Left, rows...)
+	return lipgloss.JoinVertical(lipgloss.Left, board, m.footerLine())
+}
+
+// renderRow draws one status as a full-width panel with its tickets as a
+// vertical list (one ticket per line, same shape as renderColumn content).
+func (m *Model) renderRow(colIdx int, status model.Status, width, height int, focused bool) string {
+	tickets := m.board.ByStatus(status)
+	title := fmt.Sprintf("[%d] %s (%d)", colIdx, statusDisplay[status], len(tickets))
+
+	color := softWhite
+	if focused {
+		color = columnColor(status)
+	}
+
+	innerWidth := width - 2
+	if innerWidth < 3 {
+		innerWidth = 3
+	}
+	visibleCount := height - 2
+	if visibleCount < 1 {
+		visibleCount = 1
+	}
+
+	cursor := m.cursors[colIdx]
+	startIdx := 0
+	if focused && cursor >= visibleCount {
+		startIdx = cursor - visibleCount + 1
+	}
+
+	var lines []string
+	for i := startIdx; i < len(tickets) && len(lines) < visibleCount; i++ {
+		line := m.renderTicketLine(tickets[i], i == cursor && focused, innerWidth, color)
+		lines = append(lines, line)
+	}
+
+	content := strings.Join(lines, "\n")
+	if content == "" {
+		content = lipgloss.NewStyle().Foreground(subtle).Render("(empty)")
+	}
+	return renderPanel(title, content, width, height, color, focused)
 }
 
 // viewSplit renders the split view: list on left, detail on right.

@@ -1089,7 +1089,7 @@ func (m *Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
-	case key.Matches(msg, keys.Esc), key.Matches(msg, keys.Unzoom):
+	case key.Matches(msg, keys.Esc), key.Matches(msg, keys.Unzoom), key.Matches(msg, keys.ArchiveView):
 		m.view = boardView
 	case key.Matches(msg, keys.Up):
 		m.moveArchiveCursor(-1)
@@ -1333,7 +1333,7 @@ func (m *Model) helpText() string {
 	case boardView:
 		return "h/l nav | j/k select | v layout | H/L move | a add | x archive | X browser | q quit"
 	case archiveView:
-		return "j/k nav | u unarchive | esc back | q quit"
+		return "j/k nav | u unarchive | X/esc back | q quit"
 	case splitView:
 		if m.splitFocus == 0 {
 			return "j/k select | ] edit | + zoom | H/L move | x archive | X browser | - back | q quit"

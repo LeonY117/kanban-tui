@@ -194,9 +194,45 @@ func (s *Store) ArchiveByID(id string) error {
 			return err
 		}
 
-		archive.Tickets = append(archive.Tickets, *t)
+		now := time.Now()
+		archived := *t
+		archived.ArchivedAt = &now
+		archive.Tickets = append(archive.Tickets, archived)
 		board.Tickets = append(board.Tickets[:idx], board.Tickets[idx+1:]...)
 
+		if err := s.Save(board); err != nil {
+			return err
+		}
+		return s.saveArchive(archive)
+	})
+}
+
+// LoadArchive returns the archived tickets.
+func (s *Store) LoadArchive() (*model.Board, error) {
+	return s.loadArchive()
+}
+
+// Unarchive moves a ticket out of archive.json back to the board with its
+// original status. Clears ArchivedAt and bumps UpdatedAt.
+func (s *Store) Unarchive(id string) error {
+	return s.WithLock(func() error {
+		archive, err := s.loadArchive()
+		if err != nil {
+			return err
+		}
+		t, idx := archive.FindByID(id)
+		if t == nil {
+			return fmt.Errorf("archived ticket not found: %s", id)
+		}
+		board, err := s.Load()
+		if err != nil {
+			return err
+		}
+		restored := *t
+		restored.ArchivedAt = nil
+		restored.UpdatedAt = time.Now()
+		board.Tickets = append(board.Tickets, restored)
+		archive.Tickets = append(archive.Tickets[:idx], archive.Tickets[idx+1:]...)
 		if err := s.Save(board); err != nil {
 			return err
 		}
@@ -222,9 +258,11 @@ func (s *Store) Archive(before *time.Time) (int, error) {
 
 		// Split tickets into keep and archive
 		var keep []model.Ticket
+		now := time.Now()
 		for _, t := range board.Tickets {
 			if t.Status == model.StatusDone {
 				if before == nil || t.UpdatedAt.Before(*before) {
+					t.ArchivedAt = &now
 					archive.Tickets = append(archive.Tickets, t)
 					count++
 					continue

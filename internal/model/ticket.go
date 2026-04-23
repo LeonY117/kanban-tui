@@ -73,6 +73,7 @@ type Ticket struct {
 	AssignedTo  string            `json:"assigned_to,omitempty"`
 	CreatedAt   time.Time         `json:"created_at"`
 	UpdatedAt   time.Time         `json:"updated_at"`
+	ArchivedAt  *time.Time        `json:"archived_at,omitempty"`
 	CreatedBy   string            `json:"created_by,omitempty"`
 	Meta        map[string]string `json:"meta,omitempty"`
 }

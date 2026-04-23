@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,10 +19,11 @@ import (
 type viewMode int
 
 const (
-	boardView viewMode = iota
-	splitView  // list + detail side by side
-	columnView // full-width single column
-	detailView // full-screen detail editor
+	boardView   viewMode = iota
+	splitView            // list + detail side by side
+	columnView           // full-width single column
+	detailView           // full-screen detail editor
+	archiveView          // archive browser (split: list + read-only detail)
 )
 
 // inputMode tracks what the user is typing into.
@@ -76,7 +78,19 @@ type Model struct {
 	// Board layout toggle. false = columns (default), true = rows.
 	rowLayout bool
 
+	// Archive view state
+	archiveEntries []archiveEntry
+	archiveCursor  int
+
 	lastModTime time.Time // last known mod time of board.json
+}
+
+// archiveEntry is a single row in the archive browser — either a date header
+// or a ticket.
+type archiveEntry struct {
+	isHeader bool
+	date     string // YYYY-MM-DD, set when isHeader
+	ticket   model.Ticket
 }
 
 type tickMsg time.Time
@@ -161,6 +175,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateColumn(msg)
 		case detailView:
 			return m.updateDetail(msg)
+		case archiveView:
+			return m.updateArchive(msg)
 		}
 	}
 	return m, nil
@@ -185,6 +201,8 @@ func (m *Model) View() string {
 		content = m.viewColumn()
 	case detailView:
 		content = m.viewDetail()
+	case archiveView:
+		content = m.viewArchive()
 	}
 
 	// Add input bar or picker if active
@@ -333,6 +351,8 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.archiveTicket()
 	case key.Matches(msg, keys.Layout):
 		m.rowLayout = !m.rowLayout
+	case key.Matches(msg, keys.ArchiveView):
+		m.enterArchive()
 	}
 	return m, nil
 }
@@ -430,6 +450,8 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Archive):
 		m.archiveTicket()
 		m.refreshDetailEditors()
+	case key.Matches(msg, keys.ArchiveView):
+		m.enterArchive()
 	}
 	return m, nil
 }
@@ -1050,15 +1072,271 @@ func (m *Model) viewInput() string {
 	return m.input.View()
 }
 
+// ─── Archive view ───────────────────────────────────────────────────
+
+func (m *Model) enterArchive() {
+	arch, err := m.store.LoadArchive()
+	if err != nil {
+		m.err = err
+		return
+	}
+	m.archiveEntries = buildArchiveEntries(arch.Tickets)
+	m.archiveCursor = firstTicketIdx(m.archiveEntries)
+	m.view = archiveView
+}
+
+func (m *Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, keys.Quit):
+		return m, tea.Quit
+	case key.Matches(msg, keys.Esc), key.Matches(msg, keys.Unzoom):
+		m.view = boardView
+	case key.Matches(msg, keys.Up):
+		m.moveArchiveCursor(-1)
+	case key.Matches(msg, keys.Down):
+		m.moveArchiveCursor(1)
+	case key.Matches(msg, keys.Unarchive):
+		m.unarchiveSelected()
+	}
+	return m, nil
+}
+
+func (m *Model) moveArchiveCursor(dir int) {
+	n := len(m.archiveEntries)
+	if n == 0 {
+		return
+	}
+	i := m.archiveCursor + dir
+	for i >= 0 && i < n && m.archiveEntries[i].isHeader {
+		i += dir
+	}
+	if i < 0 || i >= n {
+		return
+	}
+	m.archiveCursor = i
+}
+
+func (m *Model) archiveSelected() *model.Ticket {
+	if m.archiveCursor < 0 || m.archiveCursor >= len(m.archiveEntries) {
+		return nil
+	}
+	e := &m.archiveEntries[m.archiveCursor]
+	if e.isHeader {
+		return nil
+	}
+	return &e.ticket
+}
+
+func (m *Model) unarchiveSelected() {
+	t := m.archiveSelected()
+	if t == nil {
+		return
+	}
+	if err := m.store.Unarchive(t.ID); err != nil {
+		m.err = err
+		return
+	}
+	m.reload()
+	m.clampCursors()
+	arch, err := m.store.LoadArchive()
+	if err != nil {
+		m.err = err
+		return
+	}
+	m.archiveEntries = buildArchiveEntries(arch.Tickets)
+	if m.archiveCursor >= len(m.archiveEntries) {
+		m.archiveCursor = len(m.archiveEntries) - 1
+	}
+	if m.archiveCursor < 0 {
+		m.archiveCursor = 0
+	}
+	for m.archiveCursor < len(m.archiveEntries) && m.archiveEntries[m.archiveCursor].isHeader {
+		m.archiveCursor++
+	}
+}
+
+// buildArchiveEntries sorts tickets newest-archived-first and inserts date
+// header rows between groups.
+func buildArchiveEntries(tickets []model.Ticket) []archiveEntry {
+	if len(tickets) == 0 {
+		return nil
+	}
+	sorted := make([]model.Ticket, len(tickets))
+	copy(sorted, tickets)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return archiveDate(sorted[i]).After(archiveDate(sorted[j]))
+	})
+	var entries []archiveEntry
+	var lastDate string
+	for _, t := range sorted {
+		d := archiveDate(t).Format("2006-01-02")
+		if d != lastDate {
+			entries = append(entries, archiveEntry{isHeader: true, date: d})
+			lastDate = d
+		}
+		entries = append(entries, archiveEntry{ticket: t})
+	}
+	return entries
+}
+
+// archiveDate returns the best-known archive timestamp. Falls back to
+// UpdatedAt for archive entries written before ArchivedAt was added.
+func archiveDate(t model.Ticket) time.Time {
+	if t.ArchivedAt != nil {
+		return *t.ArchivedAt
+	}
+	return t.UpdatedAt
+}
+
+func firstTicketIdx(entries []archiveEntry) int {
+	for i, e := range entries {
+		if !e.isHeader {
+			return i
+		}
+	}
+	return 0
+}
+
+func countArchiveTickets(entries []archiveEntry) int {
+	n := 0
+	for _, e := range entries {
+		if !e.isHeader {
+			n++
+		}
+	}
+	return n
+}
+
+func (m *Model) viewArchive() string {
+	availHeight := m.height - 1
+	availWidth := m.width
+
+	listWidth := availWidth * 35 / 100
+	if listWidth < 20 {
+		listWidth = 20
+	}
+	detailWidth := availWidth - listWidth
+
+	listPanel := m.renderArchiveList(listWidth, availHeight)
+	detailPanel := m.renderArchiveDetail(detailWidth, availHeight)
+	body := lipgloss.JoinHorizontal(lipgloss.Top, listPanel, detailPanel)
+	return lipgloss.JoinVertical(lipgloss.Left, body, m.footerLine())
+}
+
+func (m *Model) renderArchiveList(width, height int) string {
+	title := fmt.Sprintf("Archive (%d)", countArchiveTickets(m.archiveEntries))
+	innerWidth := width - 2
+	if innerWidth < 3 {
+		innerWidth = 3
+	}
+
+	visibleCount := height - 2
+	if visibleCount < 1 {
+		visibleCount = 1
+	}
+
+	startIdx := 0
+	if m.archiveCursor >= visibleCount {
+		startIdx = m.archiveCursor - visibleCount + 1
+	}
+
+	var lines []string
+	for i := startIdx; i < len(m.archiveEntries) && len(lines) < visibleCount; i++ {
+		e := m.archiveEntries[i]
+		if e.isHeader {
+			header := "── " + e.date + " "
+			pad := innerWidth - len([]rune(header))
+			if pad < 0 {
+				pad = 0
+			}
+			header += strings.Repeat("─", pad)
+			lines = append(lines, lipgloss.NewStyle().Foreground(midGray).Render(header))
+			continue
+		}
+		selected := i == m.archiveCursor
+		lines = append(lines, m.renderTicketLine(e.ticket, selected, innerWidth, green))
+	}
+
+	content := strings.Join(lines, "\n")
+	if content == "" {
+		content = lipgloss.NewStyle().Foreground(subtle).Render("(empty)")
+	}
+	return renderPanel(title, content, width, height, green, true)
+}
+
+func (m *Model) renderArchiveDetail(width, height int) string {
+	t := m.archiveSelected()
+	if t == nil {
+		return renderPanel("Ticket", "", width, height, softWhite, false)
+	}
+
+	innerWidth := width - 4
+	if innerWidth < 1 {
+		innerWidth = 1
+	}
+
+	metaContent := m.renderArchiveMeta(t, innerWidth)
+	metaPanel := renderPanel("Info", metaContent, width, 3, softWhite, false)
+
+	titleContent := lipgloss.NewStyle().Bold(true).Foreground(white).Render(t.Title)
+	titlePanel := renderPanel("Title", titleContent, width, 3, softWhite, false)
+
+	descPanelHeight := height - 6
+	if descPanelHeight < 4 {
+		descPanelHeight = 4
+	}
+	var descContent string
+	if t.Description == "" {
+		descContent = lipgloss.NewStyle().Foreground(subtle).Render("(empty)")
+	} else {
+		wrapped := lipgloss.NewStyle().Width(innerWidth).Render(t.Description)
+		descContent = lipgloss.NewStyle().Foreground(softWhite).Render(wrapped)
+	}
+	descPanel := renderPanel("Description", descContent, width, descPanelHeight, softWhite, false)
+
+	return lipgloss.JoinVertical(lipgloss.Left, metaPanel, titlePanel, descPanel)
+}
+
+func (m *Model) renderArchiveMeta(t *model.Ticket, maxWidth int) string {
+	statusText := statusDisplay[t.Status]
+	statusColor := columnColor(t.Status)
+
+	archivedText := archiveDate(*t).Format("2006-01-02")
+
+	tagsText := ""
+	if len(t.Tags) > 0 {
+		tagsText = "#" + strings.Join(t.Tags, " #")
+	}
+	assignText := ""
+	if t.AssignedTo != "" {
+		assignText = "● " + t.AssignedTo
+	}
+
+	parts := []string{
+		lipgloss.NewStyle().Foreground(statusColor).Bold(true).Render(statusText),
+		lipgloss.NewStyle().Foreground(midGray).Render("archived " + archivedText),
+	}
+	if tagsText != "" {
+		parts = append(parts, tagStyle.Render(tagsText))
+	}
+	if assignText != "" {
+		parts = append(parts, assigneeStyle.Render(assignText))
+	}
+	parts = append(parts, lipgloss.NewStyle().Foreground(midGray).Render(t.ShortID))
+	return strings.Join(parts, "  ")
+}
+
 // ─── Help text ──────────────────────────────────────────────────────
 
 func (m *Model) helpText() string {
 	switch m.view {
 	case boardView:
-		return "h/l nav | j/k select | v layout | + zoom | H/L move | a add | x archive | q quit"
+		return "h/l nav | j/k select | v layout | H/L move | a add | x archive | X browser | q quit"
+	case archiveView:
+		return "j/k nav | u unarchive | esc back | q quit"
 	case splitView:
 		if m.splitFocus == 0 {
-			return "j/k select | ] edit | + zoom | H/L move | x archive | - back | a add | q quit"
+			return "j/k select | ] edit | + zoom | H/L move | x archive | X browser | - back | q quit"
 		}
 		if m.editTitle.Focused() || m.editDesc.Focused() {
 			return "esc done editing"

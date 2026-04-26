@@ -15,8 +15,9 @@ const sprintsSubdir = "sprints"
 var sprintNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 type SprintInfo struct {
-	Name        string
-	TicketCount int
+	Name         string
+	TicketCount  int
+	StatusCounts map[model.Status]int
 }
 
 func ValidateSprintName(name string) error {
@@ -94,11 +95,20 @@ func ListSprints() ([]SprintInfo, error) {
 			continue
 		}
 		sprints = append(sprints, SprintInfo{
-			Name:        name,
-			TicketCount: len(board.Tickets),
+			Name:         name,
+			TicketCount:  len(board.Tickets),
+			StatusCounts: CountByStatus(board),
 		})
 	}
 
 	sort.Slice(sprints, func(i, j int) bool { return sprints[i].Name < sprints[j].Name })
 	return sprints, nil
+}
+
+func CountByStatus(board *model.Board) map[model.Status]int {
+	counts := make(map[model.Status]int, len(model.AllStatuses))
+	for _, t := range board.Tickets {
+		counts[t.Status]++
+	}
+	return counts
 }

@@ -26,6 +26,7 @@ const (
 	detailView           // full-screen detail editor
 	archiveView          // archive browser (split: list + read-only detail)
 	addView              // floating popup for new ticket
+	pickerView           // floating board picker (main + sprints)
 )
 
 // inputMode tracks what the user is typing into.
@@ -45,6 +46,28 @@ var statusDisplay = map[model.Status]string{
 	model.StatusDoing:   "Doing",
 	model.StatusDone:    "Done",
 	model.StatusHold:    "Hold",
+}
+
+// statusShort is the compact label used in the board picker count strip.
+var statusShort = map[model.Status]string{
+	model.StatusBacklog: "B",
+	model.StatusTodo:    "T",
+	model.StatusDoing:   "Do",
+	model.StatusDone:    "Dn",
+	model.StatusHold:    "H",
+}
+
+var (
+	dimStyle          = lipgloss.NewStyle().Foreground(dimGray)
+	statusCountStyles = buildStatusCountStyles()
+)
+
+func buildStatusCountStyles() map[model.Status]lipgloss.Style {
+	out := make(map[model.Status]lipgloss.Style, len(model.AllStatuses))
+	for _, s := range model.AllStatuses {
+		out[s] = lipgloss.NewStyle().Foreground(columnColor(s))
+	}
+	return out
 }
 
 type Model struct {
@@ -92,6 +115,11 @@ type Model struct {
 	addFocusIdx    int
 	addDescEditing bool
 
+	// Board picker state
+	pickerBoards []pickerEntry
+	pickerIdx    int
+	pickerWidth  int
+
 	lastModTime time.Time // last known mod time of board.json
 }
 
@@ -101,6 +129,20 @@ type archiveEntry struct {
 	isHeader bool
 	date     string // YYYY-MM-DD, set when isHeader
 	ticket   model.Ticket
+}
+
+// pickerEntry is one row in the board picker — the main board or a sprint.
+type pickerEntry struct {
+	name   string // "" for main
+	counts map[model.Status]int
+}
+
+// boardDisplayName resolves "" to "main"; sprint names pass through.
+func boardDisplayName(sprintName string) string {
+	if sprintName == "" {
+		return "main"
+	}
+	return sprintName
 }
 
 type tickMsg time.Time
@@ -137,10 +179,7 @@ func NewModel(s *store.Store, sprintName string) (*Model, error) {
 
 func (m *Model) footerLine() string {
 	help := helpStyle.Render(m.helpText())
-	if m.sprintName == "" {
-		return help
-	}
-	badge := sprintBadgeStyle.Render(m.sprintName)
+	badge := sprintBadgeStyle.Render(boardDisplayName(m.sprintName))
 	return lipgloss.JoinHorizontal(lipgloss.Center, badge, help)
 }
 
@@ -189,6 +228,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateArchive(msg)
 		case addView:
 			return m.updateAdd(msg)
+		case pickerView:
+			return m.updatePicker(msg)
 		}
 	}
 	return m, nil
@@ -217,6 +258,8 @@ func (m *Model) View() string {
 		content = m.viewArchive()
 	case addView:
 		content = m.viewAdd()
+	case pickerView:
+		content = m.viewPicker()
 	}
 
 	// Add input bar or picker if active
@@ -366,6 +409,8 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.rowLayout = !m.rowLayout
 	case key.Matches(msg, keys.ArchiveView):
 		m.enterArchive()
+	case key.Matches(msg, keys.BoardPicker):
+		return m.enterPicker()
 	}
 	return m, nil
 }
@@ -1483,12 +1528,16 @@ func (m *Model) viewAdd() string {
 	}
 
 	popup := m.renderAddPopup(popupWidth, popupHeight)
+	return m.centerOverPopup(popup, popupWidth, popupHeight)
+}
 
-	// Vertical center uses height-1 so the popup sits centered on the
-	// board, not pushed down by the footer line.
+// centerOverPopup overlays a popup on top of the board, centered. Vertical
+// center uses height-1 so the popup sits centered on the board, not pushed
+// down by the footer line.
+func (m *Model) centerOverPopup(popup string, w, h int) string {
 	bg := m.viewBoard()
-	x := (m.width - popupWidth) / 2
-	y := ((m.height - 1) - popupHeight) / 2
+	x := (m.width - w) / 2
+	y := ((m.height - 1) - h) / 2
 	if y < 0 {
 		y = 0
 	}
@@ -1633,12 +1682,231 @@ func (m *Model) addHelpLine() string {
 	return helpStyle.Render(strings.Join(parts, "  •  "))
 }
 
+// ─── Board picker ───────────────────────────────────────────────────
+
+func (m *Model) enterPicker() (tea.Model, tea.Cmd) {
+	entries, err := loadPickerEntries()
+	if err != nil {
+		m.err = err
+		return m, nil
+	}
+	m.pickerBoards = entries
+	m.pickerWidth = pickerPopupWidth(entries)
+	m.pickerIdx = 0
+	for i, e := range entries {
+		if e.name == m.sprintName {
+			m.pickerIdx = i
+			break
+		}
+	}
+	m.view = pickerView
+	return m, nil
+}
+
+// loadPickerEntries returns main first, then sprints alphabetically.
+func loadPickerEntries() ([]pickerEntry, error) {
+	mainStore := store.New("")
+	mainBoard, err := mainStore.Load()
+	if err != nil {
+		return nil, err
+	}
+	entries := []pickerEntry{{name: "", counts: store.CountByStatus(mainBoard)}}
+
+	sprints, err := store.ListSprints()
+	if err != nil {
+		return nil, err
+	}
+	for _, s := range sprints {
+		entries = append(entries, pickerEntry{name: s.Name, counts: s.StatusCounts})
+	}
+	return entries, nil
+}
+
+func (m *Model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, keys.Quit):
+		return m, tea.Quit
+	case key.Matches(msg, keys.Esc), key.Matches(msg, keys.BoardPicker):
+		m.view = boardView
+	case key.Matches(msg, keys.Up):
+		if m.pickerIdx > 0 {
+			m.pickerIdx--
+		}
+	case key.Matches(msg, keys.Down):
+		if m.pickerIdx < len(m.pickerBoards)-1 {
+			m.pickerIdx++
+		}
+	case key.Matches(msg, keys.Enter):
+		if m.pickerIdx < len(m.pickerBoards) {
+			entry := m.pickerBoards[m.pickerIdx]
+			if err := m.switchBoard(entry.name); err != nil {
+				m.err = err
+				return m, nil
+			}
+		}
+		m.view = boardView
+	}
+	return m, nil
+}
+
+func (m *Model) switchBoard(sprintName string) error {
+	var newStore *store.Store
+	if sprintName == "" {
+		newStore = store.New("")
+	} else {
+		s, err := store.NewSprint(sprintName)
+		if err != nil {
+			return err
+		}
+		newStore = s
+	}
+
+	board, err := newStore.Load()
+	if err != nil {
+		return err
+	}
+
+	m.store = newStore
+	m.sprintName = sprintName
+	m.board = board
+	m.focusedCol = 1
+	m.cursors = [5]int{}
+	m.clampCursors()
+
+	if info, err := os.Stat(newStore.BoardPath()); err == nil {
+		m.lastModTime = info.ModTime()
+	} else {
+		m.lastModTime = time.Time{}
+	}
+	return nil
+}
+
+func (m *Model) viewPicker() string {
+	rowCount := len(m.pickerBoards)
+	if rowCount < 1 {
+		rowCount = 1
+	}
+	popupHeight := rowCount + 2
+	if popupHeight > m.height-4 {
+		popupHeight = m.height - 4
+	}
+	if popupHeight < 6 {
+		popupHeight = 6
+	}
+
+	popupWidth := m.pickerWidth
+	if popupWidth > m.width-4 {
+		popupWidth = m.width - 4
+	}
+	if popupWidth < 30 {
+		popupWidth = 30
+	}
+
+	popup := m.renderPickerPopup(popupWidth, popupHeight)
+	return m.centerOverPopup(popup, popupWidth, popupHeight)
+}
+
+// pickerPopupWidth sizes the popup to fit the widest row (name + counts).
+func pickerPopupWidth(entries []pickerEntry) int {
+	const (
+		minWidth = 40
+		maxWidth = 72
+	)
+	widest := 0
+	for _, e := range entries {
+		w := lipgloss.Width(boardDisplayName(e.name)) + 2 + lipgloss.Width(formatCounts(e.counts))
+		if w > widest {
+			widest = w
+		}
+	}
+	// +6: marker (2) + outer border (2) + inner padding (2)
+	width := widest + 6
+	if width < minWidth {
+		width = minWidth
+	}
+	if width > maxWidth {
+		width = maxWidth
+	}
+	return width
+}
+
+func (m *Model) renderPickerPopup(width, height int) string {
+	innerWidth := width - 4
+	if innerWidth < 10 {
+		innerWidth = 10
+	}
+
+	var rows []string
+	for i, e := range m.pickerBoards {
+		rows = append(rows, renderPickerRow(e, innerWidth, i == m.pickerIdx, e.name == m.sprintName))
+	}
+
+	visible := height - 2
+	if visible < 1 {
+		visible = 1
+	}
+	if len(rows) > visible {
+		start := m.pickerIdx - visible/2
+		if start < 0 {
+			start = 0
+		}
+		if start+visible > len(rows) {
+			start = len(rows) - visible
+		}
+		rows = rows[start : start+visible]
+	}
+
+	content := lipgloss.NewStyle().PaddingLeft(1).Render(strings.Join(rows, "\n"))
+	return renderPanel("Boards", content, width, height, green, true)
+}
+
+func renderPickerRow(e pickerEntry, width int, selected, current bool) string {
+	marker := "  "
+	if selected {
+		marker = selectedMarker.Render("* ")
+	}
+	name := boardDisplayName(e.name)
+	nameStyle := lipgloss.NewStyle()
+	if current {
+		nameStyle = nameStyle.Foreground(green).Bold(true)
+	}
+	counts := formatCounts(e.counts)
+
+	// Fill the space between name and counts so counts right-align.
+	left := marker + nameStyle.Render(name)
+	leftWidth := lipgloss.Width(left)
+	rightWidth := lipgloss.Width(counts)
+	gap := width - leftWidth - rightWidth
+	if gap < 1 {
+		gap = 1
+	}
+	return left + strings.Repeat(" ", gap) + counts
+}
+
+// formatCounts renders the status-count line (e.g. "1B 3T 2Do 1Dn 1H").
+// Zero-count statuses are dimmed; non-zero use the column accent color.
+func formatCounts(counts map[model.Status]int) string {
+	parts := make([]string, 0, len(model.ColumnOrder))
+	for _, s := range model.ColumnOrder {
+		n := counts[s]
+		text := fmt.Sprintf("%d%s", n, statusShort[s])
+		if n == 0 {
+			parts = append(parts, dimStyle.Render(text))
+		} else {
+			parts = append(parts, statusCountStyles[s].Render(text))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 // ─── Help text ──────────────────────────────────────────────────────
 
 func (m *Model) helpText() string {
 	switch m.view {
 	case boardView:
-		return "h/l nav | j/k select | v layout | H/L move | a add | x archive | X browser | q quit"
+		return "h/l nav | j/k select | v layout | H/L move | a add | x archive | X browser | tab board | q quit"
+	case pickerView:
+		return "j/k select | enter switch | esc/tab close"
 	case archiveView:
 		return "j/k nav | u unarchive | X/esc back | q quit"
 	case splitView:

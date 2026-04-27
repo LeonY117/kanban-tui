@@ -67,6 +67,8 @@ Notes:
 3. When done: `kanban update <id> --status DONE`
 4. If creating new work: `kanban add "Title" --tag <tag>`
 
+**When working *in this repo***: Leon's kanban-tool work lives on the `kanban` sprint, not the main board. Default to `kanban --sprint kanban list --json` when asked about "open tickets" / "what should I pick up" from inside `~/dev/projects/kanban`. The main board is for personal/Kepler/work tickets, unrelated to this codebase.
+
 ## Statuses
 
 TODO → DOING → DONE (or HOLD)

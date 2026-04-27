@@ -120,6 +120,10 @@ type Model struct {
 	pickerIdx    int
 	pickerWidth  int
 
+	// Source view for the active popup or picker — restored on close, also
+	// rendered as the backdrop behind the popup.
+	popupReturnView viewMode
+
 	lastModTime time.Time // last known mod time of board.json
 }
 
@@ -244,23 +248,7 @@ func (m *Model) View() string {
 		return m.viewTooSmall()
 	}
 
-	var content string
-	switch m.view {
-	case boardView:
-		content = m.viewBoard()
-	case splitView:
-		content = m.viewSplit()
-	case columnView:
-		content = m.viewColumn()
-	case detailView:
-		content = m.viewDetail()
-	case archiveView:
-		content = m.viewArchive()
-	case addView:
-		content = m.viewAdd()
-	case pickerView:
-		content = m.viewPicker()
-	}
+	content := m.renderView(m.view)
 
 	// Add input bar or picker if active
 	if m.inputMode == inputSelect {
@@ -483,6 +471,8 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case key.Matches(msg, keys.Add):
 		return m.enterAddPopup()
+	case key.Matches(msg, keys.BoardPicker):
+		return m.enterPicker()
 	case key.Matches(msg, keys.Zero):
 		m.focusedCol = 0
 		m.refreshDetailEditors()
@@ -536,6 +526,10 @@ func (m *Model) updateSplitDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
+	case key.Matches(msg, keys.Add):
+		return m.enterAddPopup()
+	case key.Matches(msg, keys.BoardPicker):
+		return m.enterPicker()
 	case key.Matches(msg, keys.Left):
 		if m.metaIdx > 0 {
 			m.metaIdx--
@@ -607,6 +601,10 @@ func (m *Model) updateSplitDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
+	case key.Matches(msg, keys.Add):
+		return m.enterAddPopup()
+	case key.Matches(msg, keys.BoardPicker):
+		return m.enterPicker()
 	case key.Matches(msg, keys.Up):
 		m.editField = 0
 	case key.Matches(msg, keys.Down):
@@ -661,6 +659,10 @@ func (m *Model) updateSplitDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
+	case key.Matches(msg, keys.Add):
+		return m.enterAddPopup()
+	case key.Matches(msg, keys.BoardPicker):
+		return m.enterPicker()
 	case key.Matches(msg, keys.Up):
 		m.editField = 1
 	case key.Matches(msg, keys.Left):
@@ -789,6 +791,10 @@ func (m *Model) updateDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
+	case key.Matches(msg, keys.Add):
+		return m.enterAddPopup()
+	case key.Matches(msg, keys.BoardPicker):
+		return m.enterPicker()
 	case key.Matches(msg, keys.Esc), key.Matches(msg, keys.Unzoom):
 		m.saveEdit()
 		m.enterSplit()
@@ -875,6 +881,9 @@ func (m *Model) updateDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.editField = 0
 		m.saveEdit()
 		return m, nil
+	case "tab":
+		m.saveEdit()
+		return m.enterPicker()
 	}
 	var cmd tea.Cmd
 	m.editTitle, cmd = m.editTitle.Update(msg)
@@ -888,6 +897,9 @@ func (m *Model) updateDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.editField = 0
 		m.saveEdit()
 		return m, nil
+	case "tab":
+		m.saveEdit()
+		return m.enterPicker()
 	}
 	var cmd tea.Cmd
 	m.editDesc, cmd = m.editDesc.Update(msg)
@@ -1391,8 +1403,28 @@ func (m *Model) enterAddPopup() (tea.Model, tea.Cmd) {
 
 	m.addFocusIdx = addFocusTitle
 	m.addDescEditing = false
+	m.popupReturnView = m.view
 	m.view = addView
 	return m, textinput.Blink
+}
+
+// restorePopupView returns to the view that opened the active popup. self
+// guards against falling back into the popup itself (e.g. on re-entry).
+func (m *Model) restorePopupView(self viewMode) {
+	target := m.popupReturnView
+	if target == self {
+		target = boardView
+	}
+	m.view = target
+}
+
+// closeAddPopup also refreshes the detail editors — submitAdd may have moved
+// the cursor to the newly created ticket.
+func (m *Model) closeAddPopup() {
+	m.restorePopupView(addView)
+	if m.view == splitView || m.view == detailView {
+		m.refreshDetailEditors()
+	}
 }
 
 func (m *Model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1409,7 +1441,7 @@ func (m *Model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "esc":
-		m.view = boardView
+		m.closeAddPopup()
 		return m, nil
 	case "tab":
 		m.cycleAddField(1)
@@ -1508,7 +1540,7 @@ func (m *Model) submitAdd() {
 	// Store.Add appends, so the new ticket is last within its status column.
 	m.cursors[m.focusedCol] = len(m.board.ByStatus(status)) - 1
 	m.clampCursors()
-	m.view = boardView
+	m.closeAddPopup()
 }
 
 func (m *Model) viewAdd() string {
@@ -1528,20 +1560,49 @@ func (m *Model) viewAdd() string {
 	}
 
 	popup := m.renderAddPopup(popupWidth, popupHeight)
-	return m.centerOverPopup(popup, popupWidth, popupHeight)
+	return m.centerOverPopup(popup, m.popupBackdrop(m.popupReturnView), popupWidth, popupHeight)
 }
 
-// centerOverPopup overlays a popup on top of the board, centered. Vertical
-// center uses height-1 so the popup sits centered on the board, not pushed
-// down by the footer line.
-func (m *Model) centerOverPopup(popup string, w, h int) string {
-	bg := m.viewBoard()
+// centerOverPopup overlays a popup on top of bg, centered. Vertical center
+// uses height-1 so the popup sits centered on the board, not pushed down by
+// the footer line.
+func (m *Model) centerOverPopup(popup, bg string, w, h int) string {
 	x := (m.width - w) / 2
 	y := ((m.height - 1) - h) / 2
 	if y < 0 {
 		y = 0
 	}
 	return overlayAt(bg, popup, x, y)
+}
+
+// renderView dispatches a viewMode to its render function. Falls back to the
+// board view for unset / unknown values.
+func (m *Model) renderView(v viewMode) string {
+	switch v {
+	case splitView:
+		return m.viewSplit()
+	case columnView:
+		return m.viewColumn()
+	case detailView:
+		return m.viewDetail()
+	case archiveView:
+		return m.viewArchive()
+	case addView:
+		return m.viewAdd()
+	case pickerView:
+		return m.viewPicker()
+	default:
+		return m.viewBoard()
+	}
+}
+
+// popupBackdrop renders the source view as the backdrop behind a popup, but
+// avoids recursing into popup views themselves.
+func (m *Model) popupBackdrop(source viewMode) string {
+	if source == addView || source == pickerView {
+		return m.viewBoard()
+	}
+	return m.renderView(source)
 }
 
 // overlayAt composites fg on top of bg at position (x, y), measured in visual
@@ -1699,11 +1760,13 @@ func (m *Model) enterPicker() (tea.Model, tea.Cmd) {
 			break
 		}
 	}
+	m.popupReturnView = m.view
 	m.view = pickerView
 	return m, nil
 }
 
-// loadPickerEntries returns main first, then sprints alphabetically.
+// loadPickerEntries returns main first (always sticky), then sprints by most
+// recently edited.
 func loadPickerEntries() ([]pickerEntry, error) {
 	mainStore := store.New("")
 	mainBoard, err := mainStore.Load()
@@ -1727,7 +1790,7 @@ func (m *Model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
 	case key.Matches(msg, keys.Esc), key.Matches(msg, keys.BoardPicker):
-		m.view = boardView
+		m.restorePopupView(pickerView)
 	case key.Matches(msg, keys.Up):
 		if m.pickerIdx > 0 {
 			m.pickerIdx--
@@ -1803,7 +1866,7 @@ func (m *Model) viewPicker() string {
 	}
 
 	popup := m.renderPickerPopup(popupWidth, popupHeight)
-	return m.centerOverPopup(popup, popupWidth, popupHeight)
+	return m.centerOverPopup(popup, m.popupBackdrop(m.popupReturnView), popupWidth, popupHeight)
 }
 
 // pickerPopupWidth sizes the popup to fit the widest row (name + counts).

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"time"
 
 	"github.com/leon/kanban/internal/model"
 )
@@ -18,6 +19,7 @@ type SprintInfo struct {
 	Name         string
 	TicketCount  int
 	StatusCounts map[model.Status]int
+	LastModified time.Time
 }
 
 func ValidateSprintName(name string) error {
@@ -69,8 +71,9 @@ func RemoveSprint(name string) error {
 	return os.RemoveAll(sprintDir(name))
 }
 
-// ListSprints returns sprints sorted by name. A sprint is a directory under
-// sprints/ containing a board.json — bare directories are skipped.
+// ListSprints returns sprints sorted by board mtime, most recently edited first.
+// A sprint is a directory under sprints/ containing a board.json — bare
+// directories are skipped.
 func ListSprints() ([]SprintInfo, error) {
 	root := filepath.Join(defaultRoot(), sprintsSubdir)
 	entries, err := os.ReadDir(root)
@@ -94,14 +97,24 @@ func ListSprints() ([]SprintInfo, error) {
 		if err != nil {
 			continue
 		}
+		var modTime time.Time
+		if info, err := os.Stat(filepath.Join(sprintDir(name), boardFile)); err == nil {
+			modTime = info.ModTime()
+		}
 		sprints = append(sprints, SprintInfo{
 			Name:         name,
 			TicketCount:  len(board.Tickets),
 			StatusCounts: CountByStatus(board),
+			LastModified: modTime,
 		})
 	}
 
-	sort.Slice(sprints, func(i, j int) bool { return sprints[i].Name < sprints[j].Name })
+	sort.Slice(sprints, func(i, j int) bool {
+		if !sprints[i].LastModified.Equal(sprints[j].LastModified) {
+			return sprints[i].LastModified.After(sprints[j].LastModified)
+		}
+		return sprints[i].Name < sprints[j].Name
+	})
 	return sprints, nil
 }
 

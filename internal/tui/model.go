@@ -391,6 +391,10 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveTicket(-1)
 	case key.Matches(msg, keys.MoveRight):
 		m.moveTicket(1)
+	case key.Matches(msg, keys.MoveUp):
+		m.moveTicketInColumn(-1)
+	case key.Matches(msg, keys.MoveDown):
+		m.moveTicketInColumn(1)
 	case key.Matches(msg, keys.Archive):
 		m.archiveTicket()
 	case key.Matches(msg, keys.Layout):
@@ -494,6 +498,10 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.MoveRight):
 		m.moveTicket(1)
 		m.refreshDetailEditors()
+	case key.Matches(msg, keys.MoveUp):
+		m.moveTicketInColumn(-1)
+	case key.Matches(msg, keys.MoveDown):
+		m.moveTicketInColumn(1)
 	case key.Matches(msg, keys.Archive):
 		m.archiveTicket()
 		m.refreshDetailEditors()
@@ -737,6 +745,10 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveTicket(-1)
 	case key.Matches(msg, keys.MoveRight):
 		m.moveTicket(1)
+	case key.Matches(msg, keys.MoveUp):
+		m.moveTicketInColumn(-1)
+	case key.Matches(msg, keys.MoveDown):
+		m.moveTicketInColumn(1)
 	case key.Matches(msg, keys.Archive):
 		m.archiveTicket()
 	}
@@ -1070,6 +1082,37 @@ func (m *Model) moveTicket(dir int) {
 			break
 		}
 	}
+	m.clampCursors()
+}
+
+func (m *Model) moveTicketInColumn(dir int) {
+	t := m.selectedTicket()
+	if t == nil {
+		return
+	}
+	colTickets := m.board.ByStatus(model.ColumnOrder[m.focusedCol])
+	cursor := m.cursors[m.focusedCol]
+	newCursor := cursor + dir
+	if newCursor < 0 || newCursor >= len(colTickets) {
+		return
+	}
+	neighbourID := colTickets[newCursor].ID
+
+	m.store.WithLock(func() error {
+		board, err := m.store.Load()
+		if err != nil {
+			return err
+		}
+		_, i := board.FindByID(t.ID)
+		_, j := board.FindByID(neighbourID)
+		if i < 0 || j < 0 {
+			return nil
+		}
+		board.Tickets[i], board.Tickets[j] = board.Tickets[j], board.Tickets[i]
+		return m.store.Save(board)
+	})
+	m.cursors[m.focusedCol] = newCursor
+	m.reload()
 	m.clampCursors()
 }
 

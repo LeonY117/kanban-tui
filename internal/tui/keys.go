@@ -22,6 +22,8 @@ type keyMap struct {
 	Delete      key.Binding
 	MoveLeft    key.Binding
 	MoveRight   key.Binding
+	MoveUp      key.Binding
+	MoveDown    key.Binding
 	Edit        key.Binding
 	Zoom        key.Binding
 	Unzoom      key.Binding
@@ -54,6 +56,8 @@ var keys = keyMap{
 	Delete:      key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
 	MoveLeft:    key.NewBinding(key.WithKeys("H"), key.WithHelp("H", "move left")),
 	MoveRight:   key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "move right")),
+	MoveUp:      key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "move up")),
+	MoveDown:    key.NewBinding(key.WithKeys("J"), key.WithHelp("J", "move down")),
 	Edit:        key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
 	Zoom:        key.NewBinding(key.WithKeys("+"), key.WithHelp("+", "zoom in")),
 	Unzoom:      key.NewBinding(key.WithKeys("-"), key.WithHelp("-", "zoom out")),

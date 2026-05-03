@@ -49,9 +49,13 @@ kanban --sprint Demo_Apr list --json
 kanban --sprint Demo_Apr add "Fix login bug" --tag backend
 
 # Sprint management
-kanban sprints                 # list sprints + ticket counts
-kanban sprints new Demo_Apr    # create a sprint without launching TUI
-kanban sprints rm Demo_Apr     # delete a sprint (prompts; --force skips)
+kanban sprints                       # list active sprints + ticket counts
+kanban sprints --archived            # list only archived sprints
+kanban sprints --all                 # list both, archived rows tagged
+kanban sprints new Demo_Apr          # create a sprint without launching TUI
+kanban sprints rm Demo_Apr           # delete a sprint (prompts; --force skips)
+kanban sprints archive Demo_Apr      # hide from defaults; freeze writes (reads still work)
+kanban sprints unarchive Demo_Apr    # restore
 ```
 
 Notes:

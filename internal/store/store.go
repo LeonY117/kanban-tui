@@ -22,7 +22,13 @@ const lockFile = ".board.lock"
 type Store struct {
 	dir       string
 	boardName string // filename within dir (usually "board.json")
+	archived  bool   // when true, Save returns ErrArchived; reads still work
 }
+
+// ErrArchived is returned by Save when the underlying sprint is archived.
+// Mutations should be rejected; the caller can display a hint pointing at
+// `kanban sprints unarchive`.
+var ErrArchived = fmt.Errorf("board is archived (read-only); run `kanban sprints unarchive <name>` to restore")
 
 // defaultRoot returns the directory that holds the main board, archive, lock,
 // and any sprints/ subdirectory. Honors KANBAN_FILE (using its parent dir).
@@ -109,8 +115,16 @@ func (s *Store) Save(board *model.Board) error {
 	return nil
 }
 
-// WithLock runs fn while holding an exclusive file lock.
+// WithLock runs fn while holding an exclusive file lock. Returns ErrArchived
+// before acquiring the lock if the store points at an archived sprint —
+// callers (Add, Update, Archive, Unarchive, ArchiveByID) cover all mutating
+// paths, so this is the single chokepoint that blocks writes on archived
+// sprints. ArchiveSprint/UnarchiveSprint use stores constructed via New()
+// (not NewSprint), so their internal lock-then-rename isn't blocked here.
 func (s *Store) WithLock(fn func() error) error {
+	if s.archived {
+		return ErrArchived
+	}
 	if err := s.ensureDir(); err != nil {
 		return err
 	}

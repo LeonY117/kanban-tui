@@ -116,13 +116,23 @@ type Model struct {
 	addDescEditing bool
 
 	// Board picker state
-	pickerBoards []pickerEntry
-	pickerIdx    int
-	pickerWidth  int
+	pickerBoards       []pickerEntry
+	pickerIdx          int
+	pickerWidth        int
+	pickerShowArchived bool   // when true, picker lists archived sprints below active ones
+	confirmArchive     string // non-empty = mid-confirm prompt for that sprint name
 
 	// Source view for the active popup or picker — restored on close, also
 	// rendered as the backdrop behind the popup.
 	popupReturnView viewMode
+
+	// archived is true when this Model was launched on an archived sprint —
+	// the TUI then refuses mutations and shows an archived tag in the footer.
+	archived bool
+
+	// notice is a transient one-shot message shown in the footer; cleared on
+	// the next non-confirm key press.
+	notice string
 
 	lastModTime time.Time // last known mod time of board.json
 }
@@ -137,8 +147,9 @@ type archiveEntry struct {
 
 // pickerEntry is one row in the board picker — the main board or a sprint.
 type pickerEntry struct {
-	name   string // "" for main
-	counts map[model.Status]int
+	name     string // "" for main
+	counts   map[model.Status]int
+	archived bool // sprints only; main is never archived
 }
 
 // boardDisplayName resolves "" to "main"; sprint names pass through.
@@ -171,6 +182,8 @@ func NewModel(s *store.Store, sprintName string) (*Model, error) {
 		modTime = info.ModTime()
 	}
 
+	archived := sprintName != "" && store.IsSprintArchived(sprintName)
+
 	return &Model{
 		store:       s,
 		board:       board,
@@ -178,12 +191,34 @@ func NewModel(s *store.Store, sprintName string) (*Model, error) {
 		input:       ti,
 		focusedCol:  1, // default to Todo
 		lastModTime: modTime,
+		archived:    archived,
 	}, nil
 }
 
+// guardMutate returns true if the mutation should proceed. When the current
+// sprint is archived, it sets a footer notice and returns false.
+func (m *Model) guardMutate() bool {
+	if m.archived {
+		m.notice = fmt.Sprintf("sprint %q is archived — `kanban sprints unarchive %s` to edit", m.sprintName, m.sprintName)
+		return false
+	}
+	return true
+}
+
 func (m *Model) footerLine() string {
-	help := helpStyle.Render(m.helpText())
 	badge := sprintBadgeStyle.Render(boardDisplayName(m.sprintName))
+	if m.archived {
+		archivedTag := lipgloss.NewStyle().Foreground(dimGray).Render("[archived]")
+		badge = lipgloss.JoinHorizontal(lipgloss.Top, badge, archivedTag)
+	}
+
+	var rightText string
+	if m.notice != "" {
+		rightText = m.notice
+	} else {
+		rightText = m.helpText()
+	}
+	help := helpStyle.Render(rightText)
 	return lipgloss.JoinHorizontal(lipgloss.Center, badge, help)
 }
 
@@ -210,6 +245,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Transient notices clear on the next keypress so they show for
+		// exactly one beat. The picker's confirm prompt sets its own notice
+		// each render, so it's unaffected.
+		m.notice = ""
+
 		// If in select mode, handle picker
 		if m.inputMode == inputSelect {
 			return m.updateSelect(msg)
@@ -620,6 +660,9 @@ func (m *Model) updateSplitDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Left):
 		m.splitFocus = 0
 	case key.Matches(msg, keys.Enter), key.Matches(msg, keys.Edit):
+		if !m.guardMutate() {
+			return m, nil
+		}
 		m.editTitle.Focus()
 		return m, textinput.Blink
 	case key.Matches(msg, keys.PanelPrev), key.Matches(msg, keys.Esc):
@@ -676,6 +719,9 @@ func (m *Model) updateSplitDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Left):
 		m.splitFocus = 0
 	case key.Matches(msg, keys.Enter), key.Matches(msg, keys.Edit):
+		if !m.guardMutate() {
+			return m, nil
+		}
 		m.editDesc.Focus()
 		return m, nil
 	case key.Matches(msg, keys.PanelPrev), key.Matches(msg, keys.Esc):
@@ -846,6 +892,9 @@ func (m *Model) updateDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) editMetaField() (tea.Model, tea.Cmd) {
+	if !m.guardMutate() {
+		return m, nil
+	}
 	switch m.metaIdx {
 	case 0: // status
 		m.startSelect("Status", []string{"Todo", "Doing", "Done", "Hold"}, func(val string) {
@@ -953,6 +1002,9 @@ func (m *Model) submitInput() {
 	if value == "" {
 		return
 	}
+	if !m.guardMutate() {
+		return
+	}
 
 	switch {
 	case strings.HasPrefix(prompt, "New ticket"):
@@ -1045,6 +1097,9 @@ func (m *Model) viewSelect() string {
 // ─── Persistence helpers ────────────────────────────────────────────
 
 func (m *Model) saveEdit() {
+	if !m.guardMutate() {
+		return
+	}
 	title := strings.TrimSpace(m.editTitle.Value())
 	desc := m.editDesc.Value()
 
@@ -1060,6 +1115,9 @@ func (m *Model) saveEdit() {
 }
 
 func (m *Model) moveTicket(dir int) {
+	if !m.guardMutate() {
+		return
+	}
 	t := m.selectedTicket()
 	if t == nil {
 		return
@@ -1086,6 +1144,9 @@ func (m *Model) moveTicket(dir int) {
 }
 
 func (m *Model) moveTicketInColumn(dir int) {
+	if !m.guardMutate() {
+		return
+	}
 	t := m.selectedTicket()
 	if t == nil {
 		return
@@ -1117,6 +1178,9 @@ func (m *Model) moveTicketInColumn(dir int) {
 }
 
 func (m *Model) archiveTicket() {
+	if !m.guardMutate() {
+		return
+	}
 	t := m.selectedTicket()
 	if t == nil {
 		return
@@ -1127,6 +1191,9 @@ func (m *Model) archiveTicket() {
 }
 
 func (m *Model) deleteTicket() {
+	if !m.guardMutate() {
+		return
+	}
 	t := m.selectedTicket()
 	if t == nil {
 		return
@@ -1206,6 +1273,9 @@ func (m *Model) archiveSelected() *model.Ticket {
 }
 
 func (m *Model) unarchiveSelected() {
+	if !m.guardMutate() {
+		return
+	}
 	t := m.archiveSelected()
 	if t == nil {
 		return
@@ -1416,6 +1486,9 @@ const (
 )
 
 func (m *Model) enterAddPopup() (tea.Model, tea.Cmd) {
+	if !m.guardMutate() {
+		return m, nil
+	}
 	ti := textinput.New()
 	ti.Prompt = ""
 	ti.CharLimit = 200
@@ -1789,15 +1862,15 @@ func (m *Model) addHelpLine() string {
 // ─── Board picker ───────────────────────────────────────────────────
 
 func (m *Model) enterPicker() (tea.Model, tea.Cmd) {
-	entries, err := loadPickerEntries()
-	if err != nil {
-		m.err = err
+	// Each open is a clean default view — show-archived and confirm state
+	// are session-scoped to one popup, not persistent.
+	m.pickerShowArchived = false
+	m.confirmArchive = ""
+	if !m.loadPickerData() {
 		return m, nil
 	}
-	m.pickerBoards = entries
-	m.pickerWidth = pickerPopupWidth(entries)
 	m.pickerIdx = 0
-	for i, e := range entries {
+	for i, e := range m.pickerBoards {
 		if e.name == m.sprintName {
 			m.pickerIdx = i
 			break
@@ -1808,9 +1881,37 @@ func (m *Model) enterPicker() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// loadPickerEntries returns main first (always sticky), then sprints by most
-// recently edited.
-func loadPickerEntries() ([]pickerEntry, error) {
+// loadPickerData (re)populates the picker board list and width from disk.
+// Returns false on error (m.err is set). Callers handle cursor placement.
+func (m *Model) loadPickerData() bool {
+	entries, err := loadPickerEntries(m.pickerShowArchived)
+	if err != nil {
+		m.err = err
+		return false
+	}
+	m.pickerBoards = entries
+	m.pickerWidth = pickerPopupWidth(entries)
+	return true
+}
+
+// reloadPickerEntries refreshes after archive/unarchive and clamps the cursor
+// (the active row count may shrink).
+func (m *Model) reloadPickerEntries() {
+	if !m.loadPickerData() {
+		return
+	}
+	if m.pickerIdx >= len(m.pickerBoards) {
+		m.pickerIdx = len(m.pickerBoards) - 1
+	}
+	if m.pickerIdx < 0 {
+		m.pickerIdx = 0
+	}
+}
+
+// loadPickerEntries returns main first (always sticky), then active sprints by
+// most recently edited; if includeArchived, archived sprints follow at the
+// bottom in the same order.
+func loadPickerEntries(includeArchived bool) ([]pickerEntry, error) {
 	mainStore := store.New("")
 	mainBoard, err := mainStore.Load()
 	if err != nil {
@@ -1823,12 +1924,18 @@ func loadPickerEntries() ([]pickerEntry, error) {
 		return nil, err
 	}
 	for _, s := range sprints {
-		entries = append(entries, pickerEntry{name: s.Name, counts: s.StatusCounts})
+		if s.Archived && !includeArchived {
+			continue
+		}
+		entries = append(entries, pickerEntry{name: s.Name, counts: s.StatusCounts, archived: s.Archived})
 	}
 	return entries, nil
 }
 
 func (m *Model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.confirmArchive != "" {
+		return m.updatePickerConfirm(msg)
+	}
 	switch {
 	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
@@ -1851,7 +1958,85 @@ func (m *Model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.view = boardView
+	case key.Matches(msg, keys.Archive):
+		return m.startPickerArchive()
+	case key.Matches(msg, keys.ArchiveView):
+		m.pickerShowArchived = !m.pickerShowArchived
+		m.reloadPickerEntries()
+	case key.Matches(msg, keys.Unarchive):
+		return m.pickerUnarchive()
 	}
+	return m, nil
+}
+
+// startPickerArchive enters the confirm-archive prompt for the highlighted
+// sprint. Refuses on the main board (always shown but never archivable) and
+// on already-archived sprints.
+func (m *Model) startPickerArchive() (tea.Model, tea.Cmd) {
+	if m.pickerIdx < 0 || m.pickerIdx >= len(m.pickerBoards) {
+		return m, nil
+	}
+	e := m.pickerBoards[m.pickerIdx]
+	if e.name == "" {
+		m.notice = "main board can't be archived"
+		return m, nil
+	}
+	if e.archived {
+		m.notice = "already archived — press u to unarchive"
+		return m, nil
+	}
+	m.confirmArchive = e.name
+	return m, nil
+}
+
+func (m *Model) updatePickerConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y":
+		name := m.confirmArchive
+		m.confirmArchive = ""
+		if err := store.ArchiveSprint(name); err != nil {
+			m.err = err
+			m.notice = err.Error()
+			return m, nil
+		}
+		// Archiving the currently-viewed sprint switches to main so the
+		// model isn't pinned to an archived (read-only) board.
+		if name == m.sprintName {
+			if err := m.switchBoard(""); err != nil {
+				m.err = err
+				return m, nil
+			}
+		}
+		m.reloadPickerEntries()
+		m.notice = fmt.Sprintf("archived %q", name)
+		return m, nil
+	case "n", "N", "esc":
+		m.confirmArchive = ""
+		return m, nil
+	}
+	return m, nil
+}
+
+// pickerUnarchive unarchives the highlighted sprint, no confirm needed.
+func (m *Model) pickerUnarchive() (tea.Model, tea.Cmd) {
+	if m.pickerIdx < 0 || m.pickerIdx >= len(m.pickerBoards) {
+		return m, nil
+	}
+	e := m.pickerBoards[m.pickerIdx]
+	if e.name == "" {
+		return m, nil
+	}
+	if !e.archived {
+		m.notice = "sprint isn't archived"
+		return m, nil
+	}
+	if err := store.UnarchiveSprint(e.name); err != nil {
+		m.err = err
+		m.notice = err.Error()
+		return m, nil
+	}
+	m.reloadPickerEntries()
+	m.notice = fmt.Sprintf("unarchived %q", e.name)
 	return m, nil
 }
 
@@ -1874,6 +2059,7 @@ func (m *Model) switchBoard(sprintName string) error {
 
 	m.store = newStore
 	m.sprintName = sprintName
+	m.archived = sprintName != "" && store.IsSprintArchived(sprintName)
 	m.board = board
 	m.focusedCol = 1
 	m.cursors = [5]int{}
@@ -1891,6 +2077,9 @@ func (m *Model) viewPicker() string {
 	rowCount := len(m.pickerBoards)
 	if rowCount < 1 {
 		rowCount = 1
+	}
+	if m.confirmArchive != "" {
+		rowCount += 2 // blank + confirm prompt
 	}
 	popupHeight := rowCount + 2
 	if popupHeight > m.height-4 {
@@ -1946,6 +2135,10 @@ func (m *Model) renderPickerPopup(width, height int) string {
 	for i, e := range m.pickerBoards {
 		rows = append(rows, renderPickerRow(e, innerWidth, i == m.pickerIdx, e.name == m.sprintName))
 	}
+	if m.confirmArchive != "" {
+		prompt := fmt.Sprintf("archive %q? [y/N]", m.confirmArchive)
+		rows = append(rows, "", lipgloss.NewStyle().Foreground(peach).Bold(true).Render(prompt))
+	}
 
 	visible := height - 2
 	if visible < 1 {
@@ -1973,10 +2166,16 @@ func renderPickerRow(e pickerEntry, width int, selected, current bool) string {
 	}
 	name := boardDisplayName(e.name)
 	nameStyle := lipgloss.NewStyle()
-	if current {
+	switch {
+	case e.archived:
+		nameStyle = nameStyle.Foreground(dimGray)
+	case current:
 		nameStyle = nameStyle.Foreground(green).Bold(true)
 	}
 	counts := formatCounts(e.counts)
+	if e.archived {
+		counts = dimStyle.Render(ansi.Strip(counts))
+	}
 
 	// Fill the space between name and counts so counts right-align.
 	left := marker + nameStyle.Render(name)
@@ -2012,7 +2211,13 @@ func (m *Model) helpText() string {
 	case boardView:
 		return "h/l nav | j/k select | v layout | H/L move | a add | x archive | X browser | tab board | q quit"
 	case pickerView:
-		return "j/k select | enter switch | esc/tab close"
+		if m.confirmArchive != "" {
+			return fmt.Sprintf("archive %q? y / n", m.confirmArchive)
+		}
+		if m.pickerShowArchived {
+			return "j/k select | enter switch | x archive | u unarchive | X hide archived | esc/tab close"
+		}
+		return "j/k select | enter switch | x archive | X show archived | esc/tab close"
 	case archiveView:
 		return "j/k nav | u unarchive | X/esc back | q quit"
 	case splitView:

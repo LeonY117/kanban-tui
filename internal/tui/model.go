@@ -13,8 +13,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/leon/kanban/internal/model"
-	"github.com/leon/kanban/internal/store"
+	"github.com/LeonY117/kanban-tui/internal/model"
+	"github.com/LeonY117/kanban-tui/internal/store"
 )
 
 type viewMode int

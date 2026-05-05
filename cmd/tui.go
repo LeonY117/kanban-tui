@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/leon/kanban/internal/tui"
+	"github.com/LeonY117/kanban-tui/internal/tui"
 )
 
 func runTUI(sprintName string) error {

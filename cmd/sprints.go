@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/leon/kanban/internal/store"
+	"github.com/LeonY117/kanban-tui/internal/store"
 	"github.com/spf13/cobra"
 )
 

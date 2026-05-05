@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/leon/kanban/internal/model"
+	"github.com/LeonY117/kanban-tui/internal/model"
 )
 
 const sprintsSubdir = "sprints"

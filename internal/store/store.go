@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/leon/kanban/internal/model"
+	"github.com/LeonY117/kanban-tui/internal/model"
 )
 
 const defaultDir = ".kanban"

@@ -1,4 +1,4 @@
-module github.com/leon/kanban
+module github.com/LeonY117/kanban-tui
 
 go 1.26.2
 

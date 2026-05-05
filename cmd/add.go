@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/leon/kanban/internal/model"
+	"github.com/LeonY117/kanban-tui/internal/model"
 	"github.com/spf13/cobra"
 )
 

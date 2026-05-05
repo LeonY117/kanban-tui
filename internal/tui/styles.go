@@ -2,7 +2,7 @@ package tui
 
 import (
 	"github.com/charmbracelet/lipgloss"
-	"github.com/leon/kanban/internal/model"
+	"github.com/LeonY117/kanban-tui/internal/model"
 )
 
 // Colors are ANSI 16 palette entries — the terminal resolves them from its

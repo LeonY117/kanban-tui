@@ -14,6 +14,8 @@ var (
 	peach = lipgloss.Color("3") // yellow slot — stands in for "in progress"
 	mauve = lipgloss.Color("5")
 	cyan  = lipgloss.Color("6")
+	red   = lipgloss.Color("1") // blocked on someone else
+
 
 	// Shades of gray all map to bright-black — visible on both light and
 	// dark backgrounds in every sensible terminal theme.
@@ -31,6 +33,7 @@ var (
 		model.StatusBacklog: cyan,
 		model.StatusTodo:    blue,
 		model.StatusDoing:   peach,
+		model.StatusWaiting: red,
 		model.StatusDone:    green,
 		model.StatusHold:    mauve,
 	}

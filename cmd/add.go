@@ -38,7 +38,7 @@ var addCmd = &cobra.Command{
 
 func init() {
 	addCmd.Flags().String("desc", "", "Description")
-	addCmd.Flags().String("status", "TODO", "Status (BACKLOG, TODO, DOING, DONE, HOLD)")
+	addCmd.Flags().String("status", "TODO", "Status (BACKLOG, TODO, DOING, WAITING, DONE, HOLD)")
 	addCmd.Flags().StringSlice("tag", nil, "Tags (repeatable)")
 	addCmd.Flags().String("assigned-to", "", "Assigned agent or person")
 	addCmd.Flags().String("created-by", "", "Creator name")

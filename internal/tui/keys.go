@@ -19,6 +19,7 @@ type keyMap struct {
 	Two         key.Binding
 	Three       key.Binding
 	Four        key.Binding
+	Five        key.Binding
 	Delete      key.Binding
 	MoveLeft    key.Binding
 	MoveRight   key.Binding
@@ -55,8 +56,9 @@ var keys = keyMap{
 	Zero:      key.NewBinding(key.WithKeys("0"), key.WithHelp("0", "Backlog")),
 	One:       key.NewBinding(key.WithKeys("1"), key.WithHelp("1", "Todo")),
 	Two:       key.NewBinding(key.WithKeys("2"), key.WithHelp("2", "Doing")),
-	Three:     key.NewBinding(key.WithKeys("3"), key.WithHelp("3", "Done")),
-	Four:      key.NewBinding(key.WithKeys("4"), key.WithHelp("4", "Hold")),
+	Three:     key.NewBinding(key.WithKeys("3"), key.WithHelp("3", "Waiting")),
+	Four:      key.NewBinding(key.WithKeys("4"), key.WithHelp("4", "Done")),
+	Five:      key.NewBinding(key.WithKeys("5"), key.WithHelp("5", "Hold")),
 	Delete:    key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
 	MoveLeft:  key.NewBinding(key.WithKeys("H"), key.WithHelp("H", "move left")),
 	MoveRight: key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "move right")),

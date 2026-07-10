@@ -12,14 +12,15 @@ const (
 	StatusBacklog Status = "BACKLOG"
 	StatusTodo    Status = "TODO"
 	StatusDoing   Status = "DOING"
+	StatusWaiting Status = "WAITING"
 	StatusDone    Status = "DONE"
 	StatusHold    Status = "HOLD"
 )
 
-var AllStatuses = []Status{StatusBacklog, StatusTodo, StatusDoing, StatusDone, StatusHold}
+var AllStatuses = []Status{StatusBacklog, StatusTodo, StatusDoing, StatusWaiting, StatusDone, StatusHold}
 
 // ColumnOrder defines display order for TUI columns.
-var ColumnOrder = []Status{StatusBacklog, StatusTodo, StatusDoing, StatusDone, StatusHold}
+var ColumnOrder = []Status{StatusBacklog, StatusTodo, StatusDoing, StatusWaiting, StatusDone, StatusHold}
 
 func ParseStatus(s string) (Status, error) {
 	switch strings.ToUpper(strings.TrimSpace(s)) {
@@ -29,12 +30,14 @@ func ParseStatus(s string) (Status, error) {
 		return StatusTodo, nil
 	case "DOING":
 		return StatusDoing, nil
+	case "WAITING", "WAITING ON", "WAITING-ON", "WAITING_ON":
+		return StatusWaiting, nil
 	case "DONE":
 		return StatusDone, nil
 	case "HOLD":
 		return StatusHold, nil
 	default:
-		return "", fmt.Errorf("invalid status %q, valid: BACKLOG, TODO, DOING, DONE, HOLD", s)
+		return "", fmt.Errorf("invalid status %q, valid: BACKLOG, TODO, DOING, WAITING, DONE, HOLD", s)
 	}
 }
 

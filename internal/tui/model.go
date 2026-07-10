@@ -48,6 +48,7 @@ var statusDisplay = map[model.Status]string{
 	model.StatusBacklog: "Backlog",
 	model.StatusTodo:    "Todo",
 	model.StatusDoing:   "Doing",
+	model.StatusWaiting: "Waiting",
 	model.StatusDone:    "Done",
 	model.StatusHold:    "Hold",
 }
@@ -57,6 +58,7 @@ var statusShort = map[model.Status]string{
 	model.StatusBacklog: "B",
 	model.StatusTodo:    "T",
 	model.StatusDoing:   "Do",
+	model.StatusWaiting: "W",
 	model.StatusDone:    "Dn",
 	model.StatusHold:    "H",
 }
@@ -478,6 +480,8 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.focusedCol = 3
 	case key.Matches(msg, keys.Four):
 		m.focusedCol = 4
+	case key.Matches(msg, keys.Five):
+		m.focusedCol = 5
 	case key.Matches(msg, keys.MoveLeft):
 		m.moveTicket(-1)
 	case key.Matches(msg, keys.MoveRight):
@@ -705,6 +709,9 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Four):
 		m.focusedCol = 4
 		m.refreshDetailEditors()
+	case key.Matches(msg, keys.Five):
+		m.focusedCol = 5
+		m.refreshDetailEditors()
 	case key.Matches(msg, keys.MoveLeft):
 		m.moveTicket(-1)
 		m.refreshDetailEditors()
@@ -807,6 +814,8 @@ func (m *Model) updateSplitDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.jumpDetailCol(3)
 	case key.Matches(msg, keys.Four):
 		m.jumpDetailCol(4)
+	case key.Matches(msg, keys.Five):
+		m.jumpDetailCol(5)
 	}
 	return m, nil
 }
@@ -874,6 +883,8 @@ func (m *Model) updateSplitDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.jumpDetailCol(3)
 	case key.Matches(msg, keys.Four):
 		m.jumpDetailCol(4)
+	case key.Matches(msg, keys.Five):
+		m.jumpDetailCol(5)
 	}
 	return m, nil
 }
@@ -935,6 +946,8 @@ func (m *Model) updateSplitDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.jumpDetailCol(3)
 	case key.Matches(msg, keys.Four):
 		m.jumpDetailCol(4)
+	case key.Matches(msg, keys.Five):
+		m.jumpDetailCol(5)
 	}
 	return m, nil
 }
@@ -974,6 +987,8 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.focusedCol = 3
 	case key.Matches(msg, keys.Four):
 		m.focusedCol = 4
+	case key.Matches(msg, keys.Five):
+		m.focusedCol = 5
 	case key.Matches(msg, keys.MoveLeft):
 		m.moveTicket(-1)
 	case key.Matches(msg, keys.MoveRight):
@@ -1072,6 +1087,8 @@ func (m *Model) updateDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.jumpDetailCol(3)
 	case key.Matches(msg, keys.Four):
 		m.jumpDetailCol(4)
+	case key.Matches(msg, keys.Five):
+		m.jumpDetailCol(5)
 	}
 	return m, nil
 }
@@ -1082,7 +1099,7 @@ func (m *Model) editMetaField() (tea.Model, tea.Cmd) {
 	}
 	switch m.metaIdx {
 	case 0: // status
-		m.startSelect("Status", []string{"Todo", "Doing", "Done", "Hold"}, func(val string) {
+		m.startSelect("Status", []string{"Todo", "Doing", "Waiting", "Done", "Hold"}, func(val string) {
 			status, err := model.ParseStatus(val)
 			if err != nil {
 				return

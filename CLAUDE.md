@@ -77,7 +77,9 @@ Notes:
 
 ## Statuses
 
-TODO → DOING → DONE (or HOLD)
+TODO → DOING → DONE (or WAITING / HOLD)
+
+WAITING = blocked on someone else (note who in the description). HOLD = deliberately parked. Also accepted on input: "WAITING ON".
 
 Note: BACKLOG status exists in data but is hidden from TUI.
 

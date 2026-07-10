@@ -29,7 +29,7 @@ Requires Go 1.22+.
 kanban
 ```
 
-Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden by default — press `0` to jump to it.
+Columns: **Backlog**, **Todo**, **Doing**, **Waiting**, **Done**, **Hold**. Backlog is hidden by default — press `0` to jump to it.
 
 ### Keys
 
@@ -46,7 +46,7 @@ Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden
 | `enter` (while editing) | Save and stop editing — in the add popup, create the ticket |
 | `shift+enter` | New line inside a description |
 | `esc` | Stop editing / step back (the add popup asks before discarding) |
-| `0`-`4` | Jump to column (Backlog / Todo / Doing / Done / Hold) |
+| `0`-`5` | Jump to column (Backlog / Todo / Doing / Waiting / Done / Hold) |
 | `+` / `-` | Zoom in / out (board → split → column / detail) |
 | `[` / `]` | Switch panels in split view |
 | `v` | Ticket size — cards (default) → large → condensed |

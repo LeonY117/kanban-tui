@@ -122,7 +122,7 @@ func TestFrameStaysLight(t *testing.T) {
 	m := testModel(t, "first", "second", "third")
 	for _, layout := range []ticketLayout{layoutCard, layoutLarge, layoutCondensed} {
 		m.layout = layout
-		m.scrollStart = [5]int{}
+		m.scrollStart = make([]int, len(model.ColumnOrder))
 		block := m.renderTicketList(m.board.Tickets, 1, 30, 20, 1, blue, point{})
 		for _, heavy := range []string{"━", "┃", "┏", "┓", "┗", "┛", "┝", "┥", "┢", "┪", "┡", "┩"} {
 			if strings.Contains(block, heavy) {
@@ -222,7 +222,7 @@ func TestSelectionNeverShiftsTheList(t *testing.T) {
 }
 
 func TestScrollWindowIsSticky(t *testing.T) {
-	m := &Model{}
+	m := &Model{scrollStart: make([]int, len(model.ColumnOrder))}
 	costs := make([]int, 10) // ten single-line tickets
 	for i := range costs {
 		costs[i] = 1
@@ -258,7 +258,7 @@ func TestScrollWindowIsSticky(t *testing.T) {
 }
 
 func TestScrollWindowLeavesNoDeadSpace(t *testing.T) {
-	m := &Model{}
+	m := &Model{scrollStart: make([]int, len(model.ColumnOrder))}
 	m.scrollStart[1] = 4 // as if the column had been scrolled, then emptied out
 	costs := []int{1, 1, 1}
 
@@ -268,7 +268,7 @@ func TestScrollWindowLeavesNoDeadSpace(t *testing.T) {
 }
 
 func TestScrollWindowRemembersUnfocusedColumns(t *testing.T) {
-	m := &Model{}
+	m := &Model{scrollStart: make([]int, len(model.ColumnOrder))}
 	costs := make([]int, 10)
 	for i := range costs {
 		costs[i] = 1

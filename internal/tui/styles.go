@@ -16,7 +16,6 @@ var (
 	cyan  = lipgloss.Color("6")
 	red   = lipgloss.Color("1") // blocked on someone else
 
-
 	// Shades of gray all map to bright-black — visible on both light and
 	// dark backgrounds in every sensible terminal theme.
 	dimGray = lipgloss.Color("8")

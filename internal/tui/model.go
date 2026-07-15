@@ -85,7 +85,7 @@ type Model struct {
 	ready      bool
 	view       viewMode
 	focusedCol int    // index into model.ColumnOrder
-	cursors    [5]int // selected item index per column
+	cursors    []int // selected item index per column, len == len(model.ColumnOrder)
 	input      textinput.Model
 	inputMode  inputMode
 	err        error
@@ -114,7 +114,7 @@ type Model struct {
 
 	// First ticket rendered per column. Sticky: the cursor moves inside the
 	// window and only pushes it from an edge.
-	scrollStart [5]int
+	scrollStart []int // len == len(model.ColumnOrder)
 
 	// Read-only description scroll offset (in wrapped lines) and the largest
 	// offset the last render could use. Editing hands scrolling to the textarea.
@@ -233,6 +233,8 @@ func NewModel(s *store.Store, sprintName string) (*Model, error) {
 		sprintName:  sprintName,
 		input:       ti,
 		focusedCol:  1, // default to Todo
+		cursors:     make([]int, len(model.ColumnOrder)),
+		scrollStart: make([]int, len(model.ColumnOrder)),
 		lastModTime: modTime,
 		archived:    archived,
 	}, nil
@@ -2433,8 +2435,8 @@ func (m *Model) switchBoard(sprintName string) error {
 	m.archived = sprintName != "" && store.IsSprintArchived(sprintName)
 	m.board = board
 	m.focusedCol = 1
-	m.cursors = [5]int{}
-	m.scrollStart = [5]int{}
+	m.cursors = make([]int, len(model.ColumnOrder))
+	m.scrollStart = make([]int, len(model.ColumnOrder))
 	m.clampCursors()
 
 	if info, err := os.Stat(newStore.BoardPath()); err == nil {

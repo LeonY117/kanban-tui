@@ -101,8 +101,15 @@ func TestMovePopupSameBoardChangesColumn(t *testing.T) {
 	}
 	m.width, m.height, m.ready = 160, 40, true
 
+	doneIdx := 0
+	for i, s := range model.ColumnOrder {
+		if s == model.StatusDone {
+			doneIdx = i
+		}
+	}
+
 	m.enterMovePopup()
-	m.moveIdx = 3 // Done
+	m.moveIdx = doneIdx
 	m.moveActivate()
 
 	board, err := main.Load()
@@ -112,8 +119,8 @@ func TestMovePopupSameBoardChangesColumn(t *testing.T) {
 	if board.Tickets[0].Status != model.StatusDone {
 		t.Errorf("status = %s, want done", board.Tickets[0].Status)
 	}
-	if m.focusedCol != 3 {
-		t.Errorf("focus followed to column %d, want 3", m.focusedCol)
+	if m.focusedCol != doneIdx {
+		t.Errorf("focus followed to column %d, want %d", m.focusedCol, doneIdx)
 	}
 }
 

@@ -208,6 +208,11 @@ func isAllDigits(s string) bool {
 	return true
 }
 
+// HasTag reports whether the ticket carries the tag (case-insensitive).
+func (t *Ticket) HasTag(tag string) bool {
+	return containsTag(t.Tags, tag)
+}
+
 func containsTag(tags []string, tag string) bool {
 	tag = strings.ToLower(tag)
 	for _, t := range tags {

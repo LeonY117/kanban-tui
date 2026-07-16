@@ -55,6 +55,7 @@ Columns: **Backlog**, **Todo**, **Doing**, **Waiting**, **Done**, **Hold**. Back
 | `X` | Open archive browser |
 | `u` | Unarchive (in archive browser) |
 | `tab` | Open board picker (main + sprints) |
+| `t` | Open tag filter (open cards' tags; pick one to filter the board, "all tickets" to clear) |
 | `d` | Delete ticket (in detail view) |
 | `?` | Help |
 | `q` | Quit |

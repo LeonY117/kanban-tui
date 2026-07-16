@@ -23,14 +23,15 @@ import (
 type viewMode int
 
 const (
-	boardView   viewMode = iota
-	splitView            // list + detail side by side
-	columnView           // full-width single column
-	detailView           // full-screen detail editor
-	archiveView          // archive browser (split: list + read-only detail)
-	addView              // floating popup for new ticket
-	pickerView           // floating board picker (main + sprints)
-	moveView             // floating move-ticket picker (column / other board)
+	boardView     viewMode = iota
+	splitView              // list + detail side by side
+	columnView             // full-width single column
+	detailView             // full-screen detail editor
+	archiveView            // archive browser (split: list + read-only detail)
+	addView                // floating popup for new ticket
+	pickerView             // floating board picker (main + sprints)
+	moveView               // floating move-ticket picker (column / other board)
+	tagPickerView          // floating tag filter picker
 )
 
 // inputMode tracks what the user is typing into.
@@ -84,7 +85,7 @@ type Model struct {
 	height     int
 	ready      bool
 	view       viewMode
-	focusedCol int    // index into model.ColumnOrder
+	focusedCol int   // index into model.ColumnOrder
 	cursors    []int // selected item index per column, len == len(model.ColumnOrder)
 	input      textinput.Model
 	inputMode  inputMode
@@ -140,6 +141,12 @@ type Model struct {
 	addFocusIdx    int
 	addDescEditing bool
 	addConfirmQuit bool // esc pressed with content in the popup — awaiting y/N
+
+	// Tag filter state. tagFilter is session-only and never persisted:
+	// "" = no filter, untaggedFilter = untagged cards, else a tag name.
+	tagFilter  string
+	tagEntries []tagEntry
+	tagIdx     int
 
 	// Board picker state
 	pickerBoards       []pickerEntry
@@ -256,6 +263,10 @@ func (m *Model) footerLine() string {
 	// board's name, so it appears here and nowhere else.
 	badge = lipgloss.JoinHorizontal(lipgloss.Top, badge,
 		dimStyle.Render("["+prefixLabel(store.EffectivePrefix(m.board, m.sprintName))+"]"))
+	if m.tagFilter != "" {
+		filterTag := lipgloss.NewStyle().Foreground(green).Bold(true).Render(tagDisplayName(m.tagFilter))
+		badge = lipgloss.JoinHorizontal(lipgloss.Top, badge, filterTag)
+	}
 	if m.archived {
 		archivedTag := lipgloss.NewStyle().Foreground(dimGray).Render("[archived]")
 		badge = lipgloss.JoinHorizontal(lipgloss.Top, badge, archivedTag)
@@ -328,6 +339,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updatePicker(msg)
 		case moveView:
 			return m.updateMove(msg)
+		case tagPickerView:
+			return m.updateTagPicker(msg)
 		}
 	}
 	return m, nil
@@ -366,7 +379,7 @@ func (m *Model) reload() {
 
 func (m *Model) selectedTicket() *model.Ticket {
 	status := model.ColumnOrder[m.focusedCol]
-	tickets := m.board.ByStatus(status)
+	tickets := m.ticketsFor(status)
 	idx := m.cursors[m.focusedCol]
 	if idx >= len(tickets) {
 		return nil
@@ -435,7 +448,7 @@ func (m *Model) moveCursor(dir int) {
 		return
 	}
 	status := model.ColumnOrder[m.focusedCol]
-	count := len(m.board.ByStatus(status))
+	count := len(m.ticketsFor(status))
 	if m.cursors[m.focusedCol] < count-1 {
 		m.cursors[m.focusedCol]++
 	}
@@ -443,7 +456,7 @@ func (m *Model) moveCursor(dir int) {
 
 func (m *Model) clampCursors() {
 	for i, status := range model.ColumnOrder {
-		count := len(m.board.ByStatus(status))
+		count := len(m.ticketsFor(status))
 		if m.cursors[i] >= count && count > 0 {
 			m.cursors[i] = count - 1
 		}
@@ -506,6 +519,8 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.enterArchive()
 	case key.Matches(msg, keys.BoardPicker):
 		return m.enterPicker()
+	case key.Matches(msg, keys.TagPicker):
+		return m.enterTagPicker()
 	}
 	return m, nil
 }
@@ -687,7 +702,7 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case key.Matches(msg, keys.Down):
 		status := model.ColumnOrder[m.focusedCol]
-		count := len(m.board.ByStatus(status))
+		count := len(m.ticketsFor(status))
 		if m.cursors[m.focusedCol] < count-1 {
 			m.cursors[m.focusedCol]++
 			m.refreshDetailEditors()
@@ -696,6 +711,8 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.enterAddPopup()
 	case key.Matches(msg, keys.BoardPicker):
 		return m.enterPicker()
+	case key.Matches(msg, keys.TagPicker):
+		return m.enterTagPicker()
 	case key.Matches(msg, keys.Zero):
 		m.focusedCol = 0
 		m.refreshDetailEditors()
@@ -969,7 +986,7 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case key.Matches(msg, keys.Down):
 		status := model.ColumnOrder[m.focusedCol]
-		count := len(m.board.ByStatus(status))
+		count := len(m.ticketsFor(status))
 		if m.cursors[m.focusedCol] < count-1 {
 			m.cursors[m.focusedCol]++
 		}
@@ -1005,6 +1022,8 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.enterMovePopup()
 	case key.Matches(msg, keys.Copy):
 		m.copyFocused()
+	case key.Matches(msg, keys.TagPicker):
+		return m.enterTagPicker()
 	}
 	return m, nil
 }
@@ -1380,7 +1399,7 @@ func (m *Model) moveTicket(dir int) {
 	})
 	m.focusedCol = colIdx
 	m.reload()
-	newColTickets := m.board.ByStatus(newStatus)
+	newColTickets := m.ticketsFor(newStatus)
 	for i, nt := range newColTickets {
 		if nt.ID == ticketID {
 			m.cursors[colIdx] = i
@@ -1398,7 +1417,7 @@ func (m *Model) moveTicketInColumn(dir int) {
 	if t == nil {
 		return
 	}
-	colTickets := m.board.ByStatus(model.ColumnOrder[m.focusedCol])
+	colTickets := m.ticketsFor(model.ColumnOrder[m.focusedCol])
 	cursor := m.cursors[m.focusedCol]
 	newCursor := cursor + dir
 	if newCursor < 0 || newCursor >= len(colTickets) {
@@ -1995,8 +2014,11 @@ func (m *Model) submitAdd() {
 	}
 	m.reload()
 	// Store.Add appends, so the new ticket is last within its status column.
-	m.cursors[m.focusedCol] = len(m.board.ByStatus(status)) - 1
+	m.cursors[m.focusedCol] = len(m.ticketsFor(status)) - 1
 	m.clampCursors()
+	if m.tagFilter != "" && !m.matchesTagFilter(&model.Ticket{Tags: tags}) {
+		m.notice = fmt.Sprintf("added — hidden by %s filter", tagDisplayName(m.tagFilter))
+	}
 	m.closeAddPopup()
 }
 
@@ -2062,6 +2084,8 @@ func (m *Model) renderView(v viewMode) string {
 		return m.viewPicker()
 	case moveView:
 		return m.viewMove()
+	case tagPickerView:
+		return m.viewTagPicker()
 	default:
 		return m.viewBoard()
 	}
@@ -2070,7 +2094,7 @@ func (m *Model) renderView(v viewMode) string {
 // popupBackdrop renders the source view as the backdrop behind a popup, but
 // avoids recursing into popup views themselves.
 func (m *Model) popupBackdrop(source viewMode) string {
-	if source == addView || source == pickerView || source == moveView {
+	if source == addView || source == pickerView || source == moveView || source == tagPickerView {
 		return m.viewBoard()
 	}
 	return m.renderView(source)
@@ -2598,7 +2622,7 @@ func formatCounts(counts map[model.Status]int) string {
 func (m *Model) helpText() string {
 	switch m.view {
 	case boardView:
-		return "h/l nav | j/k select | v size | H/L move | m move | c copy id | a add | x archive | q quit"
+		return "h/l nav | j/k select | v size | H/L move | m move | c copy id | a add | t tag | x archive | q quit"
 	case moveView:
 		switch m.moveStage {
 		case moveStageColumn:
@@ -2606,6 +2630,8 @@ func (m *Model) helpText() string {
 		default:
 			return "j/k select | enter move | esc back"
 		}
+	case tagPickerView:
+		return "j/k select | enter filter | esc/t close"
 	case pickerView:
 		if m.confirmArchive != "" {
 			return fmt.Sprintf("archive %q? y / n", m.confirmArchive)
@@ -2787,7 +2813,7 @@ func (m *Model) viewBoard() string {
 // renderColumn renders a single column panel. origin is the panel's top-left
 // cell on screen, used to register mouse zones.
 func (m *Model) renderColumn(colIdx int, status model.Status, width, height int, focused bool, origin point) string {
-	tickets := m.board.ByStatus(status)
+	tickets := m.ticketsFor(status)
 	title := fmt.Sprintf("[%d] %s (%d)", colIdx, statusDisplay[status], len(tickets))
 
 	color := softWhite
@@ -2904,7 +2930,7 @@ func (m *Model) viewBoardRows() string {
 // renderRow draws one status as a full-width panel with its tickets as a
 // vertical list (one ticket per line, same shape as renderColumn content).
 func (m *Model) renderRow(colIdx int, status model.Status, width, height int, focused bool, origin point) string {
-	tickets := m.board.ByStatus(status)
+	tickets := m.ticketsFor(status)
 	title := fmt.Sprintf("[%d] %s (%d)", colIdx, statusDisplay[status], len(tickets))
 
 	color := softWhite
@@ -2973,7 +2999,7 @@ func (m *Model) viewSplit() string {
 }
 
 func (m *Model) renderSplitList(status model.Status, width, height int, focused bool, borderColor lipgloss.Color, origin point) string {
-	tickets := m.board.ByStatus(status)
+	tickets := m.ticketsFor(status)
 	title := fmt.Sprintf("[%d] %s (%d)", m.focusedCol, statusDisplay[status], len(tickets))
 
 	innerWidth := width - 2
@@ -3084,7 +3110,7 @@ func (m *Model) renderDescBody(desc string, width, height int) string {
 // viewColumn renders the expanded single-column view.
 func (m *Model) viewColumn() string {
 	status := model.ColumnOrder[m.focusedCol]
-	tickets := m.board.ByStatus(status)
+	tickets := m.ticketsFor(status)
 	availHeight := m.height - 1
 	color := columnColor(status)
 

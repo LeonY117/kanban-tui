@@ -178,7 +178,6 @@ type archiveEntry struct {
 // pickerEntry is one row in the board picker — the main board or a sprint.
 type pickerEntry struct {
 	name     string // "" for main
-	prefix   string // ticket id prefix; empty on the main board (bare numbers)
 	counts   map[model.Status]int
 	archived bool // sprints only; main is never archived
 }
@@ -246,10 +245,11 @@ func (m *Model) guardMutate() bool {
 }
 
 func (m *Model) footerLine() string {
-	// The id new tickets here will carry: the board's prefix, or "#" on the
-	// main board, whose ids are bare numbers.
-	label := boardDisplayName(m.sprintName) + " " + prefixLabel(store.EffectivePrefix(m.board, m.sprintName))
-	badge := sprintBadgeStyle.Render(label)
+	badge := sprintBadgeStyle.Render(boardDisplayName(m.sprintName))
+	// A hint at what ids new tickets here will carry — not part of the
+	// board's name, so it appears here and nowhere else.
+	badge = lipgloss.JoinHorizontal(lipgloss.Top, badge,
+		dimStyle.Render("["+prefixLabel(store.EffectivePrefix(m.board, m.sprintName))+"]"))
 	if m.archived {
 		archivedTag := lipgloss.NewStyle().Foreground(dimGray).Render("[archived]")
 		badge = lipgloss.JoinHorizontal(lipgloss.Top, badge, archivedTag)
@@ -2106,7 +2106,7 @@ func loadPickerEntries(includeArchived bool) ([]pickerEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	entries := []pickerEntry{{name: "", prefix: store.EffectivePrefix(mainBoard, ""), counts: store.CountByStatus(mainBoard)}}
+	entries := []pickerEntry{{name: "", counts: store.CountByStatus(mainBoard)}}
 
 	sprints, err := store.ListSprints()
 	if err != nil {
@@ -2116,7 +2116,7 @@ func loadPickerEntries(includeArchived bool) ([]pickerEntry, error) {
 		if s.Archived && !includeArchived {
 			continue
 		}
-		entries = append(entries, pickerEntry{name: s.Name, prefix: s.Prefix, counts: s.StatusCounts, archived: s.Archived})
+		entries = append(entries, pickerEntry{name: s.Name, counts: s.StatusCounts, archived: s.Archived})
 	}
 	return entries, nil
 }
@@ -2312,7 +2312,7 @@ func pickerPopupWidth(entries []pickerEntry) int {
 	)
 	widest := 0
 	for _, e := range entries {
-		w := lipgloss.Width(boardDisplayName(e.name)) + lipgloss.Width(prefixLabel(e.prefix)) + 3 + lipgloss.Width(formatCounts(e.counts))
+		w := lipgloss.Width(boardDisplayName(e.name)) + 2 + lipgloss.Width(formatCounts(e.counts))
 		if w > widest {
 			widest = w
 		}
@@ -2379,7 +2379,7 @@ func renderPickerRow(e pickerEntry, width int, selected, current bool) string {
 	if selected {
 		marker = selectedMarker.Render("* ")
 	}
-	name := boardDisplayName(e.name) + " " + prefixLabel(e.prefix)
+	name := boardDisplayName(e.name)
 	nameStyle := lipgloss.NewStyle()
 	switch {
 	case e.archived:

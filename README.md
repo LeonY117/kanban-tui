@@ -162,7 +162,7 @@ kanban sprints unarchive demo-april            # restore
 kanban sprints rm demo-april                   # delete
 ```
 
-Sprint names: `[A-Za-z0-9_-]`, 1–64 chars. From the TUI, `tab` opens a board picker that switches between main and any active sprint; each row shows the board's ticket-id prefix, as does the badge in the bottom-left corner.
+Sprint names: `[A-Za-z0-9_-]`, 1–64 chars. From the TUI, `tab` opens a board picker that switches between main and any active sprint. The bottom-left badge shows the current board and, as a dim hint beside it, the prefix its next ticket will carry — `kanban [KA]`, or `main [#]` for bare numbers.
 
 ## Storage
 

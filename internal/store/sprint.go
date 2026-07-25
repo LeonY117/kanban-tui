@@ -207,7 +207,7 @@ func ListSprints() ([]SprintInfo, error) {
 		}
 		sprints = append(sprints, SprintInfo{
 			Name:         logicalName,
-			Prefix:       board.Prefix,
+			Prefix:       EffectivePrefix(board, logicalName),
 			TicketCount:  len(board.Tickets),
 			StatusCounts: CountByStatus(board),
 			LastModified: info.ModTime(),

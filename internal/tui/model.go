@@ -183,6 +183,15 @@ type pickerEntry struct {
 	archived bool // sprints only; main is never archived
 }
 
+// prefixLabel renders a board's ticket-id prefix. The main board has none —
+// its ids are bare numbers — which shows as "#".
+func prefixLabel(prefix string) string {
+	if prefix == "" {
+		return "#"
+	}
+	return prefix
+}
+
 // boardDisplayName resolves "" to "main"; sprint names pass through.
 func boardDisplayName(sprintName string) string {
 	if sprintName == "" {
@@ -237,11 +246,9 @@ func (m *Model) guardMutate() bool {
 }
 
 func (m *Model) footerLine() string {
-	label := boardDisplayName(m.sprintName)
-	if m.board != nil && m.board.Prefix != "" {
-		// The prefix new tickets here will carry, e.g. "kanban KA·1".
-		label += " " + m.board.Prefix
-	}
+	// The id new tickets here will carry: the board's prefix, or "#" on the
+	// main board, whose ids are bare numbers.
+	label := boardDisplayName(m.sprintName) + " " + prefixLabel(store.EffectivePrefix(m.board, m.sprintName))
 	badge := sprintBadgeStyle.Render(label)
 	if m.archived {
 		archivedTag := lipgloss.NewStyle().Foreground(dimGray).Render("[archived]")
@@ -2099,7 +2106,7 @@ func loadPickerEntries(includeArchived bool) ([]pickerEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	entries := []pickerEntry{{name: "", prefix: mainBoard.Prefix, counts: store.CountByStatus(mainBoard)}}
+	entries := []pickerEntry{{name: "", prefix: store.EffectivePrefix(mainBoard, ""), counts: store.CountByStatus(mainBoard)}}
 
 	sprints, err := store.ListSprints()
 	if err != nil {
@@ -2305,7 +2312,7 @@ func pickerPopupWidth(entries []pickerEntry) int {
 	)
 	widest := 0
 	for _, e := range entries {
-		w := lipgloss.Width(boardDisplayName(e.name)) + lipgloss.Width(e.prefix) + 3 + lipgloss.Width(formatCounts(e.counts))
+		w := lipgloss.Width(boardDisplayName(e.name)) + lipgloss.Width(prefixLabel(e.prefix)) + 3 + lipgloss.Width(formatCounts(e.counts))
 		if w > widest {
 			widest = w
 		}
@@ -2372,10 +2379,7 @@ func renderPickerRow(e pickerEntry, width int, selected, current bool) string {
 	if selected {
 		marker = selectedMarker.Render("* ")
 	}
-	name := boardDisplayName(e.name)
-	if e.prefix != "" {
-		name += " " + e.prefix
-	}
+	name := boardDisplayName(e.name) + " " + prefixLabel(e.prefix)
 	nameStyle := lipgloss.NewStyle()
 	switch {
 	case e.archived:

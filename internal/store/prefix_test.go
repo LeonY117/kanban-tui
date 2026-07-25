@@ -208,3 +208,34 @@ func TestLegacyAllDigitShortIDsDoNotSeedTheCounter(t *testing.T) {
 		t.Errorf("main board started at %q, want 1", ticket.ShortID)
 	}
 }
+
+// A board that predates prefixes must report the one it will use before any
+// ticket forces the assignment — otherwise the TUI has nothing to display.
+func TestEffectivePrefixBeforeFirstTicket(t *testing.T) {
+	sandboxRoot(t)
+	if err := CreateSprint("legacy", ""); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := NewSprint("legacy")
+	board, _ := s.Load()
+	board.Prefix = "" // as every board created before this scheme looks
+	if err := s.Save(board); err != nil {
+		t.Fatal(err)
+	}
+
+	board, _ = s.Load()
+	if got := EffectivePrefix(board, "legacy"); got != "LE" {
+		t.Errorf("EffectivePrefix = %q, want LE", got)
+	}
+	if got := EffectivePrefix(board, ""); got != "" {
+		t.Errorf("main board should have no prefix, got %q", got)
+	}
+
+	sprints, err := ListSprints()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sprints) != 1 || sprints[0].Prefix != "LE" {
+		t.Errorf("ListSprints reported %+v, want prefix LE", sprints)
+	}
+}

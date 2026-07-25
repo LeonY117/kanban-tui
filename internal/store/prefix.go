@@ -48,6 +48,19 @@ func DerivePrefix(name string) string {
 	return string(letters)
 }
 
+// EffectivePrefix is the prefix a board's next ticket will carry: the stored
+// one, or — for a board that predates prefixes — the one its name derives.
+// The main board has none; its ids are bare numbers.
+func EffectivePrefix(board *model.Board, boardName string) string {
+	if board != nil && board.Prefix != "" {
+		return board.Prefix
+	}
+	if boardName == "" {
+		return ""
+	}
+	return DerivePrefix(boardName)
+}
+
 // countersPath is the shared per-prefix counter file, alongside the main board.
 func countersPath() string {
 	return filepath.Join(defaultRoot(), countersFile)

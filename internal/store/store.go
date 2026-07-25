@@ -155,15 +155,9 @@ func (s *Store) BoardName() string {
 // the board name the first time a ticket is created on a sprint that predates
 // prefixes. The main board keeps the empty prefix, so its ids are bare numbers.
 func (s *Store) ensurePrefix(board *model.Board) string {
-	if board.Prefix != "" {
-		return board.Prefix
-	}
-	name := s.BoardName()
-	if name == "" {
-		return ""
-	}
-	board.Prefix = DerivePrefix(name)
-	return board.Prefix
+	prefix := EffectivePrefix(board, s.BoardName())
+	board.Prefix = prefix // persisted by the caller's Save
+	return prefix
 }
 
 // Add creates a new ticket and saves the board. Returns the created ticket.

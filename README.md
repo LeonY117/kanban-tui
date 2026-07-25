@@ -124,6 +124,28 @@ kanban archive
 kanban archive --before 2026-04-07
 ```
 
+## Ticket ids
+
+New tickets get sequential ids: bare numbers on the main board (`42`), and a
+letter prefix plus a number on a sprint (`KA7`). The prefix defaults to the
+first two letters of the board name; pass `--prefix` at creation to choose
+your own.
+
+```bash
+kanban sprints new kb-tools                  # ids KB1, KB2, …
+kanban sprints new kb-tools --prefix KT      # ids KT1, KT2, …
+```
+
+Prefixes are allowed to collide, on purpose. Numbering is tracked per prefix
+in `~/.kanban/counters.json`, not per board, so two boards sharing a prefix
+continue one another's line — archive a board at `K12`, start another on `K`,
+and its first ticket is `K13`. That keeps every id you've ever handed out
+unique, including against the archive.
+
+On a prefixed board the prefix is implied, so `kanban --sprint kanban update 7`
+resolves `KA7`. Ids match case-insensitively, and tickets created before this
+scheme keep their hex ids (`4ad9b9`), which still resolve.
+
 ## Sprint boards
 
 A sprint board is an isolated second board with its own tickets, archive, and lock — useful for time-boxed pushes or parallel tracks you want to keep off the main board.
@@ -140,7 +162,7 @@ kanban sprints unarchive demo-april            # restore
 kanban sprints rm demo-april                   # delete
 ```
 
-Sprint names: `[A-Za-z0-9_-]`, 1–64 chars. From the TUI, `tab` opens a board picker that switches between main and any active sprint.
+Sprint names: `[A-Za-z0-9_-]`, 1–64 chars. From the TUI, `tab` opens a board picker that switches between main and any active sprint; each row shows the board's ticket-id prefix, as does the badge in the bottom-left corner.
 
 ## Storage
 
@@ -150,6 +172,7 @@ Everything lives in `~/.kanban/`:
 - `archive.json` — archived tickets.
 - `.board.lock` — file lock for concurrent access (so the TUI and a CLI-driven agent don't trample each other).
 - `sprints/<name>/` — same layout, per sprint.
+- `counters.json` — the last ticket number issued per id prefix.
 
 Override the root with the `KANBAN_FILE` env var.
 

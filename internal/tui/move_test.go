@@ -17,7 +17,7 @@ func sandboxRoot(t *testing.T) {
 
 func TestMovePopupWalksToAnotherBoard(t *testing.T) {
 	sandboxRoot(t)
-	if err := store.CreateSprint("demo"); err != nil {
+	if err := store.CreateSprint("demo", ""); err != nil {
 		t.Fatalf("create sprint: %v", err)
 	}
 

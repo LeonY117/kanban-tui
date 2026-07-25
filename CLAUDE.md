@@ -17,7 +17,8 @@ go build -o ~/.local/bin/kanban .   # install to PATH
 # Create a ticket
 kanban add "Title here" --desc "Details" --tag backend --status TODO --assigned-to claude
 
-# Update a ticket (use short ID)
+# Update a ticket (use short ID: 42 on main, KA7 on a sprint; the prefix is
+# implied on its own board, so `--sprint kanban update 7` works too)
 kanban update <id> --status DOING --assigned-to claude
 
 # List tickets (use --json for structured output)
@@ -53,6 +54,7 @@ kanban sprints                       # list active sprints + ticket counts
 kanban sprints --archived            # list only archived sprints
 kanban sprints --all                 # list both, archived rows tagged
 kanban sprints new Demo_Apr          # create a sprint without launching TUI
+kanban sprints new Demo_Apr --prefix DA   # …with an explicit ticket-id prefix
 kanban sprints rm Demo_Apr           # delete a sprint (prompts; --force skips)
 kanban sprints archive Demo_Apr      # hide from defaults; freeze writes (reads still work)
 kanban sprints unarchive Demo_Apr    # restore
@@ -89,9 +91,11 @@ Note: BACKLOG status exists in data but is hidden from TUI.
 
 ## Storage
 
+- Ticket ids: sequential per prefix — bare numbers on main (`42`), `<PREFIX><n>` on sprints (`KA7`). Prefix defaults to the first two letters of the board name; boards may share one and then share its number line.
 - Board: `~/.kanban/board.json`
 - Archive: `~/.kanban/archive.json`
 - Lock: `~/.kanban/.board.lock`
+- Id counters: `~/.kanban/counters.json`
 - Sprints: `~/.kanban/sprints/<name>/{board,archive}.json` + `.board.lock`
 - Override: `KANBAN_FILE` env var redirects the main board path; sprints live under `$(dirname $KANBAN_FILE)/sprints/`
 

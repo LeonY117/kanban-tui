@@ -3,8 +3,8 @@ package cmd
 import (
 	"fmt"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/LeonY117/kanban-tui/internal/tui"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func runTUI(sprintName string) error {

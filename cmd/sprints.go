@@ -54,7 +54,7 @@ var sprintsCmd = &cobra.Command{
 			if s.Archived {
 				tag = "  (archived)"
 			}
-			fmt.Printf("  %-24s %d ticket(s)%s\n", s.Name, s.TicketCount, tag)
+			fmt.Printf("  %-24s %-4s %d ticket(s)%s\n", s.Name, s.Prefix, s.TicketCount, tag)
 		}
 		return nil
 	},
@@ -66,10 +66,19 @@ var sprintsNewCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
-		if err := store.CreateSprint(name); err != nil {
+		prefix, _ := cmd.Flags().GetString("prefix")
+		if err := store.CreateSprint(name, prefix); err != nil {
 			return err
 		}
-		fmt.Printf("Created sprint %q.\n", name)
+		s, err := store.NewSprint(name)
+		if err != nil {
+			return err
+		}
+		board, err := s.Load()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Created sprint %q — ticket ids %s1, %s2, …\n", name, board.Prefix, board.Prefix)
 		return nil
 	},
 }
@@ -146,6 +155,7 @@ func init() {
 	sprintsCmd.Flags().Bool("json", false, "Output as JSON")
 	sprintsCmd.Flags().Bool("archived", false, "Show only archived sprints")
 	sprintsCmd.Flags().Bool("all", false, "Show both active and archived sprints")
+	sprintsNewCmd.Flags().String("prefix", "", "Ticket id prefix (1-4 letters; defaults to the first two letters of the name)")
 	sprintsRmCmd.Flags().Bool("force", false, "Skip confirmation prompt")
 	sprintsCmd.AddCommand(sprintsNewCmd)
 	sprintsCmd.AddCommand(sprintsRmCmd)

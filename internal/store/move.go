@@ -46,9 +46,16 @@ func MoveTicket(src, dst *Store, id string, newStatus model.Status) error {
 		t := ticket
 		t.Status = newStatus
 		t.UpdatedAt = time.Now()
-		// The short ID is only unique within a board, so it's re-derived
-		// against the destination's tickets.
-		t.ShortID = dst.uniqueShortID(board, t.ID)
+		// The ticket keeps its id — references to it in commits and notes stay
+		// good — unless the destination already uses that id, in which case it
+		// takes a fresh one from the destination's own prefix.
+		if existing, _ := board.FindByID(t.ShortID); existing != nil {
+			newID, err := NextTicketID(dst.ensurePrefix(board))
+			if err != nil {
+				return err
+			}
+			t.ShortID = newID
+		}
 		board.Tickets = append(board.Tickets, t)
 		return dst.Save(board)
 	}); err != nil {

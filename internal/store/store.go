@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/LeonY117/kanban-tui/internal/model"
+	"github.com/google/uuid"
 )
 
 const defaultDir = ".kanban"
@@ -142,6 +142,30 @@ func (s *Store) WithLock(fn func() error) error {
 	return fn()
 }
 
+// BoardName is the board's logical name: "" for the main board, otherwise the
+// sprint name (archived or not).
+func (s *Store) BoardName() string {
+	if s.dir == defaultRoot() {
+		return ""
+	}
+	return strings.TrimSuffix(filepath.Base(s.dir), archivedSuffix)
+}
+
+// ensurePrefix returns the ticket-id prefix for this board, assigning one from
+// the board name the first time a ticket is created on a sprint that predates
+// prefixes. The main board keeps the empty prefix, so its ids are bare numbers.
+func (s *Store) ensurePrefix(board *model.Board) string {
+	if board.Prefix != "" {
+		return board.Prefix
+	}
+	name := s.BoardName()
+	if name == "" {
+		return ""
+	}
+	board.Prefix = DerivePrefix(name)
+	return board.Prefix
+}
+
 // Add creates a new ticket and saves the board. Returns the created ticket.
 func (s *Store) Add(title, description string, status model.Status, tags []string, assignedTo, createdBy string) (*model.Ticket, error) {
 	var ticket *model.Ticket
@@ -152,7 +176,10 @@ func (s *Store) Add(title, description string, status model.Status, tags []strin
 		}
 
 		id := uuid.New().String()
-		shortID := s.uniqueShortID(board, id)
+		shortID, err := NextTicketID(s.ensurePrefix(board))
+		if err != nil {
+			return err
+		}
 		now := time.Now()
 
 		t := model.Ticket{
@@ -338,22 +365,4 @@ func (s *Store) saveArchive(board *model.Board) error {
 		return fmt.Errorf("renaming archive temp: %w", err)
 	}
 	return nil
-}
-
-// uniqueShortID returns the shortest unique prefix of the UUID (min 6 chars).
-func (s *Store) uniqueShortID(board *model.Board, fullID string) string {
-	for length := 6; length <= len(fullID); length++ {
-		candidate := fullID[:length]
-		unique := true
-		for _, t := range board.Tickets {
-			if strings.HasPrefix(t.ID, candidate) {
-				unique = false
-				break
-			}
-		}
-		if unique {
-			return candidate
-		}
-	}
-	return fullID
 }

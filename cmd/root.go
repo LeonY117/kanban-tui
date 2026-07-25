@@ -73,7 +73,7 @@ func resolveStore(cmd *cobra.Command) error {
 		os.Exit(0)
 	}
 
-	if err := store.CreateSprint(sprint); err != nil {
+	if err := store.CreateSprint(sprint, ""); err != nil {
 		return err
 	}
 	fmt.Printf("Created sprint %q.\n", sprint)

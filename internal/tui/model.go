@@ -178,6 +178,7 @@ type archiveEntry struct {
 // pickerEntry is one row in the board picker — the main board or a sprint.
 type pickerEntry struct {
 	name     string // "" for main
+	prefix   string // ticket id prefix; empty on the main board (bare numbers)
 	counts   map[model.Status]int
 	archived bool // sprints only; main is never archived
 }
@@ -236,7 +237,12 @@ func (m *Model) guardMutate() bool {
 }
 
 func (m *Model) footerLine() string {
-	badge := sprintBadgeStyle.Render(boardDisplayName(m.sprintName))
+	label := boardDisplayName(m.sprintName)
+	if m.board != nil && m.board.Prefix != "" {
+		// The prefix new tickets here will carry, e.g. "kanban KA·1".
+		label += " " + m.board.Prefix
+	}
+	badge := sprintBadgeStyle.Render(label)
 	if m.archived {
 		archivedTag := lipgloss.NewStyle().Foreground(dimGray).Render("[archived]")
 		badge = lipgloss.JoinHorizontal(lipgloss.Top, badge, archivedTag)
@@ -731,6 +737,8 @@ func (m *Model) updateSplitDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.editTitle.Focus()
 		return m, textinput.Blink
+	case key.Matches(msg, keys.Copy):
+		m.copyTicketID()
 	case key.Matches(msg, keys.PanelPrev), key.Matches(msg, keys.Esc):
 		m.splitFocus = 0
 	case key.Matches(msg, keys.Unzoom):
@@ -790,6 +798,8 @@ func (m *Model) updateSplitDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.editDesc.Focus()
 		return m, nil
+	case key.Matches(msg, keys.Copy):
+		m.copyTicketID()
 	case key.Matches(msg, keys.PanelPrev), key.Matches(msg, keys.Esc):
 		m.splitFocus = 0
 	case key.Matches(msg, keys.Unzoom):
@@ -1024,6 +1034,8 @@ func (m *Model) updateDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.editTitle.Focus()
 		return m, textinput.Blink
+	case key.Matches(msg, keys.Copy):
+		m.copyTicketID()
 	case key.Matches(msg, keys.Esc), key.Matches(msg, keys.Unzoom):
 		m.editField = 0
 		m.enterSplit()
@@ -1061,6 +1073,8 @@ func (m *Model) updateDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.editDesc.Focus()
 		return m, textarea.Blink
+	case key.Matches(msg, keys.Copy):
+		m.copyTicketID()
 	case key.Matches(msg, keys.Esc), key.Matches(msg, keys.Unzoom):
 		m.editField = 0
 		m.enterSplit()
@@ -2085,7 +2099,7 @@ func loadPickerEntries(includeArchived bool) ([]pickerEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	entries := []pickerEntry{{name: "", counts: store.CountByStatus(mainBoard)}}
+	entries := []pickerEntry{{name: "", prefix: mainBoard.Prefix, counts: store.CountByStatus(mainBoard)}}
 
 	sprints, err := store.ListSprints()
 	if err != nil {
@@ -2095,7 +2109,7 @@ func loadPickerEntries(includeArchived bool) ([]pickerEntry, error) {
 		if s.Archived && !includeArchived {
 			continue
 		}
-		entries = append(entries, pickerEntry{name: s.Name, counts: s.StatusCounts, archived: s.Archived})
+		entries = append(entries, pickerEntry{name: s.Name, prefix: s.Prefix, counts: s.StatusCounts, archived: s.Archived})
 	}
 	return entries, nil
 }
@@ -2291,7 +2305,7 @@ func pickerPopupWidth(entries []pickerEntry) int {
 	)
 	widest := 0
 	for _, e := range entries {
-		w := lipgloss.Width(boardDisplayName(e.name)) + 2 + lipgloss.Width(formatCounts(e.counts))
+		w := lipgloss.Width(boardDisplayName(e.name)) + lipgloss.Width(e.prefix) + 3 + lipgloss.Width(formatCounts(e.counts))
 		if w > widest {
 			widest = w
 		}
@@ -2359,6 +2373,9 @@ func renderPickerRow(e pickerEntry, width int, selected, current bool) string {
 		marker = selectedMarker.Render("* ")
 	}
 	name := boardDisplayName(e.name)
+	if e.prefix != "" {
+		name += " " + e.prefix
+	}
 	nameStyle := lipgloss.NewStyle()
 	switch {
 	case e.archived:

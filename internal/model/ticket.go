@@ -78,9 +78,12 @@ type Ticket struct {
 	Meta        map[string]string `json:"meta,omitempty"`
 }
 
-// Board is the top-level container persisted to JSON.
+// Board is the top-level container persisted to JSON. Prefix is the letter
+// code new ticket ids on this board carry (empty on the main board, whose ids
+// are bare numbers).
 type Board struct {
 	Version int      `json:"version"`
+	Prefix  string   `json:"prefix,omitempty"`
 	Tickets []Ticket `json:"tickets"`
 }
 
@@ -117,14 +120,47 @@ func (b *Board) ByStatus(status Status) []Ticket {
 	return b.Filter(FilterOptions{Status: &s})
 }
 
+// FindByID resolves a ticket by full UUID, short id, or UUID prefix. Short ids
+// match case-insensitively, and on a prefixed board a bare number resolves too
+// — `kanban update 13` finds K13 — since the prefix is implied by the board
+// you're already talking to.
 func (b *Board) FindByID(id string) (*Ticket, int) {
-	id = strings.ToLower(id)
+	id = strings.TrimSpace(id)
+	lower := strings.ToLower(id)
+	upper := strings.ToUpper(id)
+
+	implied := ""
+	if b.Prefix != "" && isAllDigits(id) {
+		implied = strings.ToUpper(b.Prefix) + upper
+	}
+
 	for i := range b.Tickets {
-		if b.Tickets[i].ID == id || b.Tickets[i].ShortID == id || strings.HasPrefix(b.Tickets[i].ID, id) {
+		t := &b.Tickets[i]
+		short := strings.ToUpper(t.ShortID)
+		if t.ID == lower || short == upper || (implied != "" && short == implied) {
+			return t, i
+		}
+	}
+	// UUID-prefix matching is the legacy path, tried last so a short id can
+	// never be shadowed by an unrelated UUID that happens to start the same.
+	for i := range b.Tickets {
+		if strings.HasPrefix(b.Tickets[i].ID, lower) {
 			return &b.Tickets[i], i
 		}
 	}
 	return nil, -1
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func containsTag(tags []string, tag string) bool {

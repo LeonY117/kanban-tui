@@ -205,10 +205,12 @@ func TestScrollWindowRemembersUnfocusedColumns(t *testing.T) {
 	}
 }
 
-// testModel builds a Model over a throwaway board directory.
+// testModel builds a Model over a throwaway board directory. KANBAN_FILE
+// redirects the whole root — boards, archive and id counters — into it.
 func testModel(t *testing.T, titles ...string) *Model {
 	t.Helper()
-	s := store.New(t.TempDir())
+	sandboxRoot(t)
+	s := store.New("")
 	for _, title := range titles {
 		if _, err := s.Add(title, "", model.StatusTodo, nil, "", "test"); err != nil {
 			t.Fatalf("add: %v", err)

@@ -1,14 +1,29 @@
 package store
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/LeonY117/kanban-tui/internal/model"
 )
 
+// sandboxRoot points every board path — main, sprints and the shared id
+// counters — at a temp dir, so tests never touch the real ~/.kanban.
+func sandboxRoot(t *testing.T) {
+	t.Helper()
+	t.Setenv("KANBAN_FILE", filepath.Join(t.TempDir(), "board.json"))
+}
+
 func TestMoveTicketAcrossBoards(t *testing.T) {
-	src := New(t.TempDir())
-	dst := New(t.TempDir())
+	sandboxRoot(t)
+	src := New("")
+	if err := CreateSprint("demo", ""); err != nil {
+		t.Fatal(err)
+	}
+	dst, err := NewSprint("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	ticket, err := src.Add("hello", "body", model.StatusTodo, []string{"x"}, "leon", "test")
 	if err != nil {
@@ -50,7 +65,8 @@ func TestMoveTicketAcrossBoards(t *testing.T) {
 }
 
 func TestMoveTicketSameBoardIsStatusChange(t *testing.T) {
-	s := New(t.TempDir())
+	sandboxRoot(t)
+	s := New("")
 	ticket, err := s.Add("hello", "", model.StatusTodo, nil, "", "test")
 	if err != nil {
 		t.Fatalf("add: %v", err)

@@ -511,6 +511,20 @@ func (m *Model) enterSplit() {
 	m.view = splitView
 }
 
+// setDescWidth sizes a description textarea to wrap at exactly wrapWidth
+// columns — the same width renderDescBody uses when the field is read-only, so
+// entering edit mode doesn't re-flow the text under the cursor.
+//
+// The +1 is textarea's own wrapping rule: it breaks a line when the content
+// plus the *following* space exceeds the width it was given, which costs one
+// usable column.
+func setDescWidth(ta *textarea.Model, wrapWidth int) {
+	if wrapWidth < 1 {
+		wrapWidth = 1
+	}
+	ta.SetWidth(wrapWidth + 1)
+}
+
 // newTitleInput builds a blurred title input seeded with value.
 func newTitleInput(value string) textinput.Model {
 	ti := textinput.New()
@@ -1959,7 +1973,7 @@ func (m *Model) renderAddPopup(width, height int) string {
 	if descHeight < 5 {
 		descHeight = 5
 	}
-	m.addDesc.SetWidth(innerWidth - 2)
+	setDescWidth(&m.addDesc, innerWidth-2)
 	m.addDesc.SetHeight(descHeight - 2)
 	descPanel := renderPanel("Description", m.addDesc.View(), innerWidth, descHeight, descColor, m.addFocusIdx == addFocusDesc)
 
@@ -2852,7 +2866,7 @@ func (m *Model) renderSplitDetail(width, height int, focused bool, borderColor l
 	}
 	var descContent string
 	if focused && m.editField == 2 && m.editDesc.Focused() {
-		m.editDesc.SetWidth(innerWidth)
+		setDescWidth(&m.editDesc, innerWidth)
 		m.editDesc.SetHeight(descPanelHeight - 2)
 		descContent = m.editDesc.View()
 	} else {
@@ -3018,7 +3032,7 @@ func (m *Model) viewDetail() string {
 	}
 	var descContent string
 	if m.editDesc.Focused() {
-		m.editDesc.SetWidth(innerWidth - 2)
+		setDescWidth(&m.editDesc, innerWidth-2)
 		m.editDesc.SetHeight(descPanelHeight - 2)
 		descContent = m.editDesc.View()
 	} else {

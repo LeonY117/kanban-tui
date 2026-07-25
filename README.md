@@ -40,6 +40,7 @@ Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden
 | `H` `L` | Move selected ticket to adjacent column |
 | `J` `K` | Reorder selected ticket up/down within its column |
 | `m` | Move ticket — pick a column, or another board and its column |
+| `c` | Copy the selected ticket's short id to the clipboard |
 | `a` | Add a new ticket (floating popup) |
 | `e` / `enter` | Edit selected field |
 | `enter` (while editing) | Save and stop editing — in the add popup, create the ticket |
@@ -71,6 +72,11 @@ preview and the last-edited date. **Condensed** is one line per ticket.
 At card and condensed size, tickets are separated by a rule above each block
 with a closing rule under the last. Large gives each ticket its own box —
 at that size the extra air reads better.
+
+Columns scroll stickily: the cursor travels inside the visible window and only
+pushes it once it reaches an edge, so scrolling back up starts exactly where
+scrolling down did. The mouse wheel banks a few notches per ticket step, to
+match the one-line-per-notch feel of scrolling a description.
 
 The ticket under the cursor gets an accent bar down its left edge, heavy
 accented rules bracketing it, and its short id in the column colour — in the

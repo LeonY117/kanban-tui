@@ -68,10 +68,12 @@ func (m *Model) renderTicketList(tickets []model.Ticket, colIdx, width, height, 
 
 // renderTicketLines is the condensed layout: one line per ticket.
 func (m *Model) renderTicketLines(tickets []model.Ticket, colIdx, width, height, cursor int, accent lipgloss.Color, origin point) string {
-	start := 0
-	if cursor >= height {
-		start = cursor - height + 1
+	costs := make([]int, len(tickets))
+	for i := range costs {
+		costs[i] = 1
 	}
+	start := m.scrollWindow(colIdx, costs, cursor, height)
+
 	var lines []string
 	for i := start; i < len(tickets) && len(lines) < height; i++ {
 		m.addTicketZone(colIdx, i, origin.x, origin.y+len(lines), width, 1)
@@ -115,10 +117,7 @@ func (m *Model) renderCardStack(tickets []model.Ticket, colIdx, width, height, c
 	if avail < 1 {
 		avail = 1
 	}
-	start := 0
-	if cursor >= 0 && cursor < len(tickets) {
-		start = fitScrollStart(costs, cursor, avail)
-	}
+	start := m.scrollWindow(colIdx, costs, cursor, avail)
 
 	pad := func(l string) string {
 		n := inner - lipgloss.Width(l)
@@ -191,16 +190,54 @@ func renderCardLine(line string, pad func(string) string, selected bool, accent 
 	return " " + pad(line) + " "
 }
 
-// fitScrollStart returns the first index to render so that the cursor's block
-// is fully visible, packing as many earlier blocks above it as fit.
-func fitScrollStart(costs []int, cursor, avail int) int {
-	start := cursor
-	used := costs[cursor]
-	for start > 0 && used+costs[start-1] <= avail {
-		start--
-		used += costs[start]
+// scrollWindow advances a column's remembered scroll position by the least
+// amount that keeps the cursor visible, and stores it back on the model.
+//
+// The window is sticky on purpose: the cursor travels inside it and only
+// pushes it once it reaches an edge, so going back up scrolls at exactly the
+// point going down did, in reverse. cursor < 0 (an unfocused column) leaves
+// the position where the user left it.
+func (m *Model) scrollWindow(colIdx int, costs []int, cursor, avail int) int {
+	if colIdx < 0 || colIdx >= len(m.scrollStart) {
+		return 0
 	}
+	start := clampIndex(m.scrollStart[colIdx], len(costs))
+
+	if cursor >= 0 && cursor < len(costs) {
+		if cursor < start {
+			start = cursor
+		}
+		for start < cursor && sumCosts(costs, start, cursor) > avail {
+			start++
+		}
+	}
+	// Never leave dead space at the bottom while there's list above to show —
+	// otherwise archiving from a scrolled column strands a half-empty panel.
+	for start > 0 && sumCosts(costs, start-1, len(costs)-1) <= avail {
+		start--
+	}
+
+	m.scrollStart[colIdx] = start
 	return start
+}
+
+// sumCosts totals costs[from..to] inclusive.
+func sumCosts(costs []int, from, to int) int {
+	total := 0
+	for i := from; i <= to && i < len(costs); i++ {
+		total += costs[i]
+	}
+	return total
+}
+
+func clampIndex(i, n int) int {
+	if i >= n {
+		i = n - 1
+	}
+	if i < 0 {
+		i = 0
+	}
+	return i
 }
 
 // cardContent is the styled body of one card — the lines between its borders.

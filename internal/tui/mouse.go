@@ -100,8 +100,14 @@ func (m *Model) mouseScroll(msg tea.MouseMsg, dir int) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// scrollColumn advances the cursor of a column by one ticket. Columns other
-// than the focused one take focus first, so the wheel acts where the pointer is.
+// wheelNotchesPerTicket is how many wheel events one ticket step costs. A
+// ticket is several lines tall, so matching the one-line-per-notch feel of
+// description scrolling means banking a few notches first.
+const wheelNotchesPerTicket = 3
+
+// scrollColumn advances the cursor of a column by one ticket, once enough
+// wheel notches have banked. Columns other than the focused one take focus
+// first, so the wheel acts where the pointer is.
 func (m *Model) scrollColumn(col, dir int) {
 	if col < 0 || col > 4 {
 		return
@@ -112,6 +118,18 @@ func (m *Model) scrollColumn(col, dir int) {
 	if col != m.focusedCol {
 		return
 	}
+
+	// A change of direction starts the count over, so a flick back up
+	// responds immediately instead of spending banked notches.
+	if m.wheelAccum != 0 && (m.wheelAccum > 0) != (dir > 0) {
+		m.wheelAccum = 0
+	}
+	m.wheelAccum += dir
+	if m.wheelAccum > -wheelNotchesPerTicket && m.wheelAccum < wheelNotchesPerTicket {
+		return
+	}
+	m.wheelAccum = 0
+
 	m.moveCursor(dir)
 	if m.view == splitView || m.view == detailView {
 		m.refreshDetailEditors()

@@ -145,16 +145,63 @@ func TestSelectionNeverShiftsTheList(t *testing.T) {
 	}
 }
 
-func TestFitScrollStart(t *testing.T) {
-	heights := []int{4, 4, 4, 4, 4}
-	if got := fitScrollStart(heights, 0, 20); got != 0 {
-		t.Errorf("everything fits: start = %d, want 0", got)
+func TestScrollWindowIsSticky(t *testing.T) {
+	m := &Model{}
+	costs := make([]int, 10) // ten single-line tickets
+	for i := range costs {
+		costs[i] = 1
 	}
-	if got := fitScrollStart(heights, 4, 12); got != 2 {
-		t.Errorf("cursor at 4 with room for 3: start = %d, want 2", got)
+	const avail = 5
+
+	// Going down: the cursor travels inside the window, then pushes it.
+	for cursor := 0; cursor < 5; cursor++ {
+		if got := m.scrollWindow(1, costs, cursor, avail); got != 0 {
+			t.Fatalf("cursor %d scrolled to %d before reaching the bottom edge", cursor, got)
+		}
 	}
-	if got := fitScrollStart(heights, 4, 4); got != 4 {
-		t.Errorf("room for one card: start = %d, want 4", got)
+	if got := m.scrollWindow(1, costs, 5, avail); got != 1 {
+		t.Fatalf("cursor past the bottom edge: start = %d, want 1", got)
+	}
+	if got := m.scrollWindow(1, costs, 6, avail); got != 2 {
+		t.Fatalf("cursor past the bottom edge: start = %d, want 2", got)
+	}
+
+	// Coming back up: the window holds still until the cursor reaches its
+	// top edge, mirroring the way down.
+	for _, cursor := range []int{5, 4, 3, 2} {
+		if got := m.scrollWindow(1, costs, cursor, avail); got != 2 {
+			t.Fatalf("cursor %d moved the window to %d — it should hold at 2 until the top edge", cursor, got)
+		}
+	}
+	if got := m.scrollWindow(1, costs, 1, avail); got != 1 {
+		t.Fatalf("cursor above the top edge: start = %d, want 1", got)
+	}
+	if got := m.scrollWindow(1, costs, 0, avail); got != 0 {
+		t.Fatalf("cursor at the list head: start = %d, want 0", got)
+	}
+}
+
+func TestScrollWindowLeavesNoDeadSpace(t *testing.T) {
+	m := &Model{}
+	m.scrollStart[1] = 4 // as if the column had been scrolled, then emptied out
+	costs := []int{1, 1, 1}
+
+	if got := m.scrollWindow(1, costs, -1, 5); got != 0 {
+		t.Errorf("a short list should pull the window back to the top, got %d", got)
+	}
+}
+
+func TestScrollWindowRemembersUnfocusedColumns(t *testing.T) {
+	m := &Model{}
+	costs := make([]int, 10)
+	for i := range costs {
+		costs[i] = 1
+	}
+	m.scrollWindow(1, costs, 7, 5) // scrolled while focused
+	before := m.scrollStart[1]
+
+	if got := m.scrollWindow(1, costs, -1, 5); got != before {
+		t.Errorf("unfocused column moved from %d to %d", before, got)
 	}
 }
 
@@ -214,15 +261,26 @@ func TestClickSelectsTicketAndColumn(t *testing.T) {
 	}
 }
 
-func TestWheelScrollsOneTicketAtATime(t *testing.T) {
+func TestWheelNeedsSeveralNotchesPerTicket(t *testing.T) {
 	m := testModel(t, "first", "second", "third")
 	m.View()
 
+	for i := 1; i < wheelNotchesPerTicket; i++ {
+		m.mouseScroll(mouseAt(40, 2), 1)
+		if m.cursors[1] != 0 {
+			t.Fatalf("notch %d already moved the cursor to %d", i, m.cursors[1])
+		}
+	}
 	m.mouseScroll(mouseAt(40, 2), 1)
 	if m.cursors[1] != 1 {
-		t.Errorf("one wheel notch moved the cursor to %d, want 1", m.cursors[1])
+		t.Errorf("a full bank of notches left the cursor at %d, want 1", m.cursors[1])
 	}
-	m.mouseScroll(mouseAt(40, 2), -1)
+
+	// Reversing responds on the next notch rather than spending the bank.
+	m.mouseScroll(mouseAt(40, 2), 1)
+	for i := 0; i < wheelNotchesPerTicket; i++ {
+		m.mouseScroll(mouseAt(40, 2), -1)
+	}
 	if m.cursors[1] != 0 {
 		t.Errorf("wheel back up left the cursor at %d, want 0", m.cursors[1])
 	}

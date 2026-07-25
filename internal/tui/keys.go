@@ -26,6 +26,7 @@ type keyMap struct {
 	MoveDown    key.Binding
 	Edit        key.Binding
 	Move        key.Binding
+	Copy        key.Binding
 	NewLine     key.Binding
 	Zoom        key.Binding
 	Unzoom      key.Binding

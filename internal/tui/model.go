@@ -9,6 +9,7 @@ import (
 
 	"github.com/LeonY117/kanban-tui/internal/model"
 	"github.com/LeonY117/kanban-tui/internal/store"
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -104,9 +105,12 @@ type Model struct {
 	// Board layout toggle. false = columns (default), true = rows.
 	rowLayout bool
 
-	// How much of each ticket a list row shows (cards by default), and how
-	// each block is framed.
+	// How much of each ticket a list row shows (cards by default).
 	layout ticketLayout
+
+	// First ticket rendered per column. Sticky: the cursor moves inside the
+	// window and only pushes it from an edge.
+	scrollStart [5]int
 
 	// Read-only description scroll offset (in wrapped lines) and the largest
 	// offset the last render could use. Editing hands scrolling to the textarea.
@@ -115,6 +119,10 @@ type Model struct {
 
 	// Mouse hit-testing zones, rebuilt every render.
 	zones []hitZone
+
+	// Wheel notches banked toward the next ticket step — a trackpad emits
+	// far more of them than there are tickets worth moving through.
+	wheelAccum int
 
 	// Archive view state
 	archiveEntries []archiveEntry
@@ -472,6 +480,8 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.rowLayout = !m.rowLayout
 	case key.Matches(msg, keys.Move):
 		return m.enterMovePopup()
+	case key.Matches(msg, keys.Copy):
+		m.copyTicketID()
 	case key.Matches(msg, keys.ArchiveView):
 		m.enterArchive()
 	case key.Matches(msg, keys.BoardPicker):
@@ -592,6 +602,8 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.refreshDetailEditors()
 	case key.Matches(msg, keys.Move):
 		return m.enterMovePopup()
+	case key.Matches(msg, keys.Copy):
+		m.copyTicketID()
 	case key.Matches(msg, keys.Layout):
 		m.layout = m.layout.next()
 		m.notice = m.layout.label()
@@ -652,6 +664,8 @@ func (m *Model) updateSplitDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.editMetaField()
 	case key.Matches(msg, keys.Move):
 		return m.enterMovePopup()
+	case key.Matches(msg, keys.Copy):
+		m.copyTicketID()
 	case key.Matches(msg, keys.Delete):
 		m.deleteTicket()
 		m.splitFocus = 0
@@ -851,6 +865,8 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.archiveTicket()
 	case key.Matches(msg, keys.Move):
 		return m.enterMovePopup()
+	case key.Matches(msg, keys.Copy):
+		m.copyTicketID()
 	}
 	return m, nil
 }
@@ -913,6 +929,8 @@ func (m *Model) updateDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.editMetaField()
 	case key.Matches(msg, keys.Move):
 		return m.enterMovePopup()
+	case key.Matches(msg, keys.Copy):
+		m.copyTicketID()
 	case key.Matches(msg, keys.Delete):
 		m.deleteTicket()
 		m.view = boardView
@@ -1262,6 +1280,22 @@ func (m *Model) moveTicketInColumn(dir int) {
 	m.clampCursors()
 }
 
+// copyTicketID puts the selected ticket's short id on the system clipboard —
+// the id you paste into a `kanban update <id>` for an agent to pick up.
+func (m *Model) copyTicketID() {
+	if t := m.selectedTicket(); t != nil {
+		m.copyShortID(t.ShortID)
+	}
+}
+
+func (m *Model) copyShortID(id string) {
+	if err := clipboard.WriteAll(id); err != nil {
+		m.notice = "clipboard unavailable: " + err.Error()
+		return
+	}
+	m.notice = "copied " + id
+}
+
 func (m *Model) archiveTicket() {
 	if !m.guardMutate() {
 		return
@@ -1329,6 +1363,10 @@ func (m *Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.descScroll = 0
 	case key.Matches(msg, keys.Unarchive):
 		m.unarchiveSelected()
+	case key.Matches(msg, keys.Copy):
+		if t := m.archiveSelected(); t != nil {
+			m.copyShortID(t.ShortID)
+		}
 	}
 	return m, nil
 }
@@ -2203,6 +2241,7 @@ func (m *Model) switchBoard(sprintName string) error {
 	m.board = board
 	m.focusedCol = 1
 	m.cursors = [5]int{}
+	m.scrollStart = [5]int{}
 	m.clampCursors()
 
 	if info, err := os.Stat(newStore.BoardPath()); err == nil {
@@ -2364,7 +2403,7 @@ func formatCounts(counts map[model.Status]int) string {
 func (m *Model) helpText() string {
 	switch m.view {
 	case boardView:
-		return "h/l nav | j/k select | v size | V rows | H/L move | m move to | a add | x archive | q quit"
+		return "h/l nav | j/k select | v size | V rows | H/L move | m move | c copy id | a add | x archive | q quit"
 	case moveView:
 		switch m.moveStage {
 		case moveStageColumn:
@@ -2381,10 +2420,10 @@ func (m *Model) helpText() string {
 		}
 		return "j/k select | enter switch | x archive | X show archived | esc/tab close"
 	case archiveView:
-		return "j/k nav | u unarchive | X/esc back | q quit"
+		return "j/k nav | u unarchive | c copy id | X/esc back | q quit"
 	case splitView:
 		if m.splitFocus == 0 {
-			return "j/k select | ] edit | + zoom | H/L move | m move to | x archive | - back | q quit"
+			return "j/k select | ] edit | + zoom | H/L move | m move | c copy id | x archive | - back | q quit"
 		}
 		if m.editDesc.Focused() {
 			return "enter save | shift+enter new line | esc save"

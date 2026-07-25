@@ -7,14 +7,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LeonY117/kanban-tui/internal/model"
+	"github.com/LeonY117/kanban-tui/internal/store"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/LeonY117/kanban-tui/internal/model"
-	"github.com/LeonY117/kanban-tui/internal/store"
 )
 
 type viewMode int
@@ -27,6 +27,7 @@ const (
 	archiveView          // archive browser (split: list + read-only detail)
 	addView              // floating popup for new ticket
 	pickerView           // floating board picker (main + sprints)
+	moveView             // floating move-ticket picker (column / other board)
 )
 
 // inputMode tracks what the user is typing into.
@@ -103,6 +104,18 @@ type Model struct {
 	// Board layout toggle. false = columns (default), true = rows.
 	rowLayout bool
 
+	// How much of each ticket a list row shows (cards by default), and how
+	// each block is framed.
+	layout ticketLayout
+
+	// Read-only description scroll offset (in wrapped lines) and the largest
+	// offset the last render could use. Editing hands scrolling to the textarea.
+	descScroll    int
+	descScrollMax int
+
+	// Mouse hit-testing zones, rebuilt every render.
+	zones []hitZone
+
 	// Archive view state
 	archiveEntries []archiveEntry
 	archiveCursor  int
@@ -114,6 +127,7 @@ type Model struct {
 	addAssign      textinput.Model
 	addFocusIdx    int
 	addDescEditing bool
+	addConfirmQuit bool // esc pressed with content in the popup — awaiting y/N
 
 	// Board picker state
 	pickerBoards       []pickerEntry
@@ -121,6 +135,14 @@ type Model struct {
 	pickerWidth        int
 	pickerShowArchived bool   // when true, picker lists archived sprints below active ones
 	confirmArchive     string // non-empty = mid-confirm prompt for that sprint name
+
+	// Move popup state
+	moveStage        moveStage
+	moveRows         []moveRow
+	moveIdx          int
+	moveTicketID     string
+	moveTicketStatus model.Status
+	moveTargetBoard  string
 
 	// Source view for the active popup or picker — restored on close, also
 	// rendered as the backdrop behind the popup.
@@ -244,6 +266,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ready = true
 		return m, nil
 
+	case tea.MouseMsg:
+		return m.updateMouse(msg)
+
 	case tea.KeyMsg:
 		// Transient notices clear on the next keypress so they show for
 		// exactly one beat. The picker's confirm prompt sets its own notice
@@ -274,6 +299,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateAdd(msg)
 		case pickerView:
 			return m.updatePicker(msg)
+		case moveView:
+			return m.updateMove(msg)
 		}
 	}
 	return m, nil
@@ -288,6 +315,7 @@ func (m *Model) View() string {
 		return m.viewTooSmall()
 	}
 
+	m.resetZones()
 	content := m.renderView(m.view)
 
 	// Add input bar or picker if active
@@ -438,7 +466,12 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Archive):
 		m.archiveTicket()
 	case key.Matches(msg, keys.Layout):
+		m.layout = m.layout.next()
+		m.notice = m.layout.label()
+	case key.Matches(msg, keys.RowLayout):
 		m.rowLayout = !m.rowLayout
+	case key.Matches(msg, keys.Move):
+		return m.enterMovePopup()
 	case key.Matches(msg, keys.ArchiveView):
 		m.enterArchive()
 	case key.Matches(msg, keys.BoardPicker):
@@ -455,6 +488,30 @@ func (m *Model) enterSplit() {
 	m.view = splitView
 }
 
+// newTitleInput builds a blurred title input seeded with value.
+func newTitleInput(value string) textinput.Model {
+	ti := textinput.New()
+	ti.Prompt = ""
+	ti.CharLimit = 200
+	ti.SetValue(value)
+	ti.Blur()
+	return ti
+}
+
+// newDescArea builds a blurred description textarea seeded with value. Enter
+// is reserved for confirm/save, so newlines move to shift+enter (keys.NewLine).
+func newDescArea(value string) textarea.Model {
+	ta := textarea.New()
+	ta.Prompt = ""
+	ta.SetValue(value)
+	ta.ShowLineNumbers = false
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	ta.FocusedStyle.Base = lipgloss.NewStyle()
+	ta.KeyMap.InsertNewline = keys.NewLine
+	ta.Blur()
+	return ta
+}
+
 // refreshDetailEditors sets up the edit widgets for the currently selected ticket.
 func (m *Model) refreshDetailEditors() {
 	t := m.selectedTicket()
@@ -465,22 +522,10 @@ func (m *Model) refreshDetailEditors() {
 	m.editTicketID = t.ID
 	m.editField = 0
 	m.metaIdx = 0
+	m.descScroll = 0
 
-	ti := textinput.New()
-	ti.Prompt = ""
-	ti.CharLimit = 200
-	ti.SetValue(t.Title)
-	ti.Blur()
-	m.editTitle = ti
-
-	ta := textarea.New()
-	ta.Prompt = ""
-	ta.SetValue(t.Description)
-	ta.ShowLineNumbers = false
-	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
-	ta.FocusedStyle.Base = lipgloss.NewStyle()
-	ta.Blur()
-	m.editDesc = ta
+	m.editTitle = newTitleInput(t.Title)
+	m.editDesc = newDescArea(t.Description)
 }
 
 func (m *Model) updateSplit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -545,6 +590,11 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Archive):
 		m.archiveTicket()
 		m.refreshDetailEditors()
+	case key.Matches(msg, keys.Move):
+		return m.enterMovePopup()
+	case key.Matches(msg, keys.Layout):
+		m.layout = m.layout.next()
+		m.notice = m.layout.label()
 	case key.Matches(msg, keys.ArchiveView):
 		m.enterArchive()
 	}
@@ -600,6 +650,8 @@ func (m *Model) updateSplitDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.editField = 1
 	case key.Matches(msg, keys.Enter):
 		return m.editMetaField()
+	case key.Matches(msg, keys.Move):
+		return m.enterMovePopup()
 	case key.Matches(msg, keys.Delete):
 		m.deleteTicket()
 		m.splitFocus = 0
@@ -695,9 +747,9 @@ func (m *Model) updateSplitDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) updateSplitDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.editDesc.Focused() {
-		// Editing mode
-		switch msg.String() {
-		case "esc":
+		// Editing mode: enter saves and drops back out, shift+enter (see
+		// keys.NewLine) is the newline — the textarea's own binding.
+		if key.Matches(msg, keys.Enter) || key.Matches(msg, keys.Esc) {
 			m.editDesc.Blur()
 			m.saveEdit()
 			return m, nil
@@ -797,6 +849,8 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveTicketInColumn(1)
 	case key.Matches(msg, keys.Archive):
 		m.archiveTicket()
+	case key.Matches(msg, keys.Move):
+		return m.enterMovePopup()
 	}
 	return m, nil
 }
@@ -811,22 +865,10 @@ func (m *Model) enterDetail() (tea.Model, tea.Cmd) {
 	m.editTicketID = t.ID
 	m.editField = 0
 	m.metaIdx = 0
+	m.descScroll = 0
 
-	ti := textinput.New()
-	ti.Prompt = ""
-	ti.CharLimit = 200
-	ti.SetValue(t.Title)
-	ti.Blur()
-	m.editTitle = ti
-
-	ta := textarea.New()
-	ta.Prompt = ""
-	ta.SetValue(t.Description)
-	ta.ShowLineNumbers = false
-	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
-	ta.FocusedStyle.Base = lipgloss.NewStyle()
-	ta.Blur()
-	m.editDesc = ta
+	m.editTitle = newTitleInput(t.Title)
+	m.editDesc = newDescArea(t.Description)
 
 	m.view = detailView
 	return m, nil
@@ -865,8 +907,12 @@ func (m *Model) updateDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.metaIdx < 2 {
 			m.metaIdx++
 		}
+	case key.Matches(msg, keys.Down):
+		m.editField = 1
 	case key.Matches(msg, keys.Enter):
 		return m.editMetaField()
+	case key.Matches(msg, keys.Move):
+		return m.enterMovePopup()
 	case key.Matches(msg, keys.Delete):
 		m.deleteTicket()
 		m.view = boardView
@@ -931,40 +977,79 @@ func (m *Model) editMetaField() (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) updateDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
-		m.editTitle.Blur()
+	if m.editTitle.Focused() {
+		switch msg.String() {
+		case "esc", "enter":
+			m.editTitle.Blur()
+			m.saveEdit()
+			return m, nil
+		case "tab":
+			m.editTitle.Blur()
+			m.saveEdit()
+			return m.enterPicker()
+		}
+		var cmd tea.Cmd
+		m.editTitle, cmd = m.editTitle.Update(msg)
+		return m, cmd
+	}
+
+	switch {
+	case key.Matches(msg, keys.Quit):
+		return m, tea.Quit
+	case key.Matches(msg, keys.Up):
 		m.editField = 0
-		m.saveEdit()
-		return m, nil
-	case "enter":
-		m.editTitle.Blur()
+	case key.Matches(msg, keys.Down):
+		m.editField = 2
+	case key.Matches(msg, keys.Enter), key.Matches(msg, keys.Edit):
+		if !m.guardMutate() {
+			return m, nil
+		}
+		m.editTitle.Focus()
+		return m, textinput.Blink
+	case key.Matches(msg, keys.Esc), key.Matches(msg, keys.Unzoom):
 		m.editField = 0
-		m.saveEdit()
-		return m, nil
-	case "tab":
-		m.saveEdit()
+		m.enterSplit()
+	case key.Matches(msg, keys.BoardPicker):
 		return m.enterPicker()
 	}
-	var cmd tea.Cmd
-	m.editTitle, cmd = m.editTitle.Update(msg)
-	return m, cmd
+	return m, nil
 }
 
 func (m *Model) updateDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
-		m.editDesc.Blur()
+	if m.editDesc.Focused() {
+		if key.Matches(msg, keys.Enter) || key.Matches(msg, keys.Esc) {
+			m.editDesc.Blur()
+			m.saveEdit()
+			return m, nil
+		}
+		if msg.String() == "tab" {
+			m.editDesc.Blur()
+			m.saveEdit()
+			return m.enterPicker()
+		}
+		var cmd tea.Cmd
+		m.editDesc, cmd = m.editDesc.Update(msg)
+		return m, cmd
+	}
+
+	switch {
+	case key.Matches(msg, keys.Quit):
+		return m, tea.Quit
+	case key.Matches(msg, keys.Up):
+		m.editField = 1
+	case key.Matches(msg, keys.Enter), key.Matches(msg, keys.Edit):
+		if !m.guardMutate() {
+			return m, nil
+		}
+		m.editDesc.Focus()
+		return m, textarea.Blink
+	case key.Matches(msg, keys.Esc), key.Matches(msg, keys.Unzoom):
 		m.editField = 0
-		m.saveEdit()
-		return m, nil
-	case "tab":
-		m.saveEdit()
+		m.enterSplit()
+	case key.Matches(msg, keys.BoardPicker):
 		return m.enterPicker()
 	}
-	var cmd tea.Cmd
-	m.editDesc, cmd = m.editDesc.Update(msg)
-	return m, cmd
+	return m, nil
 }
 
 // ─── Input / selection helpers ──────────────────────────────────────
@@ -1238,8 +1323,10 @@ func (m *Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.view = boardView
 	case key.Matches(msg, keys.Up):
 		m.moveArchiveCursor(-1)
+		m.descScroll = 0
 	case key.Matches(msg, keys.Down):
 		m.moveArchiveCursor(1)
+		m.descScroll = 0
 	case key.Matches(msg, keys.Unarchive):
 		m.unarchiveSelected()
 	}
@@ -1366,6 +1453,7 @@ func (m *Model) viewArchive() string {
 	detailWidth := availWidth - listWidth
 
 	listPanel := m.renderArchiveList(listWidth, availHeight)
+	m.addZone(hitZone{kind: zoneArchiveDetail, x: listWidth, y: 0, w: detailWidth, h: availHeight})
 	detailPanel := m.renderArchiveDetail(detailWidth, availHeight)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, listPanel, detailPanel)
 	return lipgloss.JoinVertical(lipgloss.Left, body, m.footerLine())
@@ -1391,6 +1479,9 @@ func (m *Model) renderArchiveList(width, height int) string {
 	var lines []string
 	for i := startIdx; i < len(m.archiveEntries) && len(lines) < visibleCount; i++ {
 		e := m.archiveEntries[i]
+		if !e.isHeader {
+			m.addZone(hitZone{kind: zoneArchiveRow, x: 1, y: 1 + len(lines), w: innerWidth, h: 1, idx: i})
+		}
 		if e.isHeader {
 			header := "── " + e.date + " "
 			pad := innerWidth - len([]rune(header))
@@ -1433,13 +1524,7 @@ func (m *Model) renderArchiveDetail(width, height int) string {
 	if descPanelHeight < 4 {
 		descPanelHeight = 4
 	}
-	var descContent string
-	if t.Description == "" {
-		descContent = lipgloss.NewStyle().Foreground(subtle).Render("(empty)")
-	} else {
-		wrapped := lipgloss.NewStyle().Width(innerWidth).Render(t.Description)
-		descContent = lipgloss.NewStyle().Foreground(softWhite).Render(wrapped)
-	}
+	descContent := m.renderDescBody(t.Description, innerWidth, descPanelHeight-2)
 	descPanel := renderPanel("Description", descContent, width, descPanelHeight, softWhite, false)
 
 	return lipgloss.JoinVertical(lipgloss.Left, metaPanel, titlePanel, descPanel)
@@ -1489,19 +1574,10 @@ func (m *Model) enterAddPopup() (tea.Model, tea.Cmd) {
 	if !m.guardMutate() {
 		return m, nil
 	}
-	ti := textinput.New()
-	ti.Prompt = ""
-	ti.CharLimit = 200
+	ti := newTitleInput("")
 	ti.Focus()
 	m.addTitle = ti
-
-	ta := textarea.New()
-	ta.Prompt = ""
-	ta.ShowLineNumbers = false
-	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
-	ta.FocusedStyle.Base = lipgloss.NewStyle()
-	ta.Blur()
-	m.addDesc = ta
+	m.addDesc = newDescArea("")
 
 	tagsIn := textinput.New()
 	tagsIn.Prompt = ""
@@ -1519,6 +1595,7 @@ func (m *Model) enterAddPopup() (tea.Model, tea.Cmd) {
 
 	m.addFocusIdx = addFocusTitle
 	m.addDescEditing = false
+	m.addConfirmQuit = false
 	m.popupReturnView = m.view
 	m.view = addView
 	return m, textinput.Blink
@@ -1544,8 +1621,25 @@ func (m *Model) closeAddPopup() {
 }
 
 func (m *Model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.addConfirmQuit {
+		switch msg.String() {
+		case "y", "Y":
+			m.addConfirmQuit = false
+			m.closeAddPopup()
+		case "n", "N", "esc":
+			m.addConfirmQuit = false
+		}
+		return m, nil
+	}
+
 	if m.addFocusIdx == addFocusDesc && m.addDescEditing {
-		if msg.String() == "esc" {
+		// enter submits the whole ticket; shift+enter (keys.NewLine) is the
+		// newline, bound on the textarea itself.
+		if key.Matches(msg, keys.Enter) {
+			m.submitAdd()
+			return m, nil
+		}
+		if key.Matches(msg, keys.Esc) {
 			m.addDesc.Blur()
 			m.addDescEditing = false
 			return m, nil
@@ -1557,7 +1651,11 @@ func (m *Model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "esc":
-		m.closeAddPopup()
+		if m.addHasContent() {
+			m.addConfirmQuit = true
+		} else {
+			m.closeAddPopup()
+		}
 		return m, nil
 	case "tab":
 		m.cycleAddField(1)
@@ -1608,6 +1706,15 @@ func (m *Model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// addHasContent reports whether the new-ticket popup holds anything worth
+// confirming before it's thrown away.
+func (m *Model) addHasContent() bool {
+	return strings.TrimSpace(m.addTitle.Value()) != "" ||
+		strings.TrimSpace(m.addDesc.Value()) != "" ||
+		strings.TrimSpace(m.addTags.Value()) != "" ||
+		strings.TrimSpace(m.addAssign.Value()) != ""
+}
+
 func (m *Model) cycleAddField(dir int) {
 	switch m.addFocusIdx {
 	case addFocusAssign:
@@ -1635,7 +1742,8 @@ func (m *Model) cycleAddField(dir int) {
 func (m *Model) submitAdd() {
 	title := strings.TrimSpace(m.addTitle.Value())
 	if title == "" {
-		return // silent no-op: title is the only required field.
+		m.notice = "a title is required"
+		return
 	}
 	desc := m.addDesc.Value()
 	var tags []string
@@ -1675,20 +1783,32 @@ func (m *Model) viewAdd() string {
 		popupHeight = 12
 	}
 
+	backdrop := m.popupBackdrop(m.popupReturnView)
+	// The backdrop's zones belong to a view the user can't reach right now.
+	m.resetZones()
 	popup := m.renderAddPopup(popupWidth, popupHeight)
-	return m.centerOverPopup(popup, m.popupBackdrop(m.popupReturnView), popupWidth, popupHeight)
+	return m.centerOverPopup(popup, backdrop, popupWidth, popupHeight)
 }
 
 // centerOverPopup overlays a popup on top of bg, centered. Vertical center
 // uses height-1 so the popup sits centered on the board, not pushed down by
 // the footer line.
 func (m *Model) centerOverPopup(popup, bg string, w, h int) string {
+	o := m.popupOrigin(w, h)
+	return overlayAt(bg, popup, o.x, o.y)
+}
+
+// popupOrigin is the top-left cell a centered popup of this size occupies.
+func (m *Model) popupOrigin(w, h int) point {
 	x := (m.width - w) / 2
+	if x < 0 {
+		x = 0
+	}
 	y := ((m.height - 1) - h) / 2
 	if y < 0 {
 		y = 0
 	}
-	return overlayAt(bg, popup, x, y)
+	return point{x: x, y: y}
 }
 
 // renderView dispatches a viewMode to its render function. Falls back to the
@@ -1707,6 +1827,8 @@ func (m *Model) renderView(v viewMode) string {
 		return m.viewAdd()
 	case pickerView:
 		return m.viewPicker()
+	case moveView:
+		return m.viewMove()
 	default:
 		return m.viewBoard()
 	}
@@ -1715,7 +1837,7 @@ func (m *Model) renderView(v viewMode) string {
 // popupBackdrop renders the source view as the backdrop behind a popup, but
 // avoids recursing into popup views themselves.
 func (m *Model) popupBackdrop(source viewMode) string {
-	if source == addView || source == pickerView {
+	if source == addView || source == pickerView || source == moveView {
 		return m.viewBoard()
 	}
 	return m.renderView(source)
@@ -1845,15 +1967,23 @@ func (m *Model) renderAddMeta() string {
 }
 
 func (m *Model) addHelpLine() string {
+	if m.addConfirmQuit {
+		return lipgloss.NewStyle().Foreground(peach).Bold(true).
+			Render("discard this ticket? [y/N]")
+	}
+	if m.notice != "" {
+		return lipgloss.NewStyle().Foreground(peach).Render(m.notice)
+	}
+
 	parts := []string{
 		"tab/shift-tab: field",
-		"enter (title): save",
+		"enter: save",
 	}
 	if m.addFocusIdx == addFocusDesc && !m.addDescEditing {
 		parts = append(parts, "enter: edit", "h/l: field")
 	}
 	if m.addFocusIdx == addFocusDesc && m.addDescEditing {
-		parts = []string{"esc: exit edit"}
+		parts = []string{"enter: save", "shift+enter: new line", "esc: exit edit"}
 	}
 	parts = append(parts, "esc: cancel")
 	return helpStyle.Render(strings.Join(parts, "  •  "))
@@ -1942,22 +2072,11 @@ func (m *Model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Esc), key.Matches(msg, keys.BoardPicker):
 		m.restorePopupView(pickerView)
 	case key.Matches(msg, keys.Up):
-		if m.pickerIdx > 0 {
-			m.pickerIdx--
-		}
+		m.movePickerCursor(-1)
 	case key.Matches(msg, keys.Down):
-		if m.pickerIdx < len(m.pickerBoards)-1 {
-			m.pickerIdx++
-		}
+		m.movePickerCursor(1)
 	case key.Matches(msg, keys.Enter):
-		if m.pickerIdx < len(m.pickerBoards) {
-			entry := m.pickerBoards[m.pickerIdx]
-			if err := m.switchBoard(entry.name); err != nil {
-				m.err = err
-				return m, nil
-			}
-		}
-		m.view = boardView
+		return m.pickerActivate()
 	case key.Matches(msg, keys.Archive):
 		return m.startPickerArchive()
 	case key.Matches(msg, keys.ArchiveView):
@@ -1966,6 +2085,27 @@ func (m *Model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Unarchive):
 		return m.pickerUnarchive()
 	}
+	return m, nil
+}
+
+func (m *Model) movePickerCursor(dir int) {
+	next := m.pickerIdx + dir
+	if next < 0 || next >= len(m.pickerBoards) {
+		return
+	}
+	m.pickerIdx = next
+}
+
+// pickerActivate switches to the highlighted board and closes the picker.
+func (m *Model) pickerActivate() (tea.Model, tea.Cmd) {
+	if m.pickerIdx < len(m.pickerBoards) {
+		entry := m.pickerBoards[m.pickerIdx]
+		if err := m.switchBoard(entry.name); err != nil {
+			m.err = err
+			return m, nil
+		}
+	}
+	m.view = boardView
 	return m, nil
 }
 
@@ -2097,8 +2237,11 @@ func (m *Model) viewPicker() string {
 		popupWidth = 30
 	}
 
-	popup := m.renderPickerPopup(popupWidth, popupHeight)
-	return m.centerOverPopup(popup, m.popupBackdrop(m.popupReturnView), popupWidth, popupHeight)
+	backdrop := m.popupBackdrop(m.popupReturnView)
+	m.resetZones()
+	origin := m.popupOrigin(popupWidth, popupHeight)
+	popup := m.renderPickerPopup(popupWidth, popupHeight, origin)
+	return overlayAt(backdrop, popup, origin.x, origin.y)
 }
 
 // pickerPopupWidth sizes the popup to fit the widest row (name + counts).
@@ -2125,7 +2268,7 @@ func pickerPopupWidth(entries []pickerEntry) int {
 	return width
 }
 
-func (m *Model) renderPickerPopup(width, height int) string {
+func (m *Model) renderPickerPopup(width, height int, origin point) string {
 	innerWidth := width - 4
 	if innerWidth < 10 {
 		innerWidth = 10
@@ -2135,6 +2278,7 @@ func (m *Model) renderPickerPopup(width, height int) string {
 	for i, e := range m.pickerBoards {
 		rows = append(rows, renderPickerRow(e, innerWidth, i == m.pickerIdx, e.name == m.sprintName))
 	}
+	rowOffset := 0
 	if m.confirmArchive != "" {
 		prompt := fmt.Sprintf("archive %q? [y/N]", m.confirmArchive)
 		rows = append(rows, "", lipgloss.NewStyle().Foreground(peach).Bold(true).Render(prompt))
@@ -2153,6 +2297,17 @@ func (m *Model) renderPickerPopup(width, height int) string {
 			start = len(rows) - visible
 		}
 		rows = rows[start : start+visible]
+		rowOffset = start
+	}
+
+	// Board rows are clickable; the confirm prompt rows (appended after them)
+	// are not, and fall outside the loop below.
+	for i := range rows {
+		idx := rowOffset + i
+		if idx >= len(m.pickerBoards) {
+			break
+		}
+		m.addZone(hitZone{kind: zonePickerRow, x: origin.x + 2, y: origin.y + 1 + i, w: innerWidth, h: 1, idx: idx})
 	}
 
 	content := lipgloss.NewStyle().PaddingLeft(1).Render(strings.Join(rows, "\n"))
@@ -2209,7 +2364,14 @@ func formatCounts(counts map[model.Status]int) string {
 func (m *Model) helpText() string {
 	switch m.view {
 	case boardView:
-		return "h/l nav | j/k select | v layout | H/L move | a add | x archive | X browser | tab board | q quit"
+		return "h/l nav | j/k select | v size | V rows | H/L move | m move to | a add | x archive | q quit"
+	case moveView:
+		switch m.moveStage {
+		case moveStageColumn:
+			return "j/k select | enter move | esc cancel"
+		default:
+			return "j/k select | enter move | esc back"
+		}
 	case pickerView:
 		if m.confirmArchive != "" {
 			return fmt.Sprintf("archive %q? y / n", m.confirmArchive)
@@ -2222,27 +2384,34 @@ func (m *Model) helpText() string {
 		return "j/k nav | u unarchive | X/esc back | q quit"
 	case splitView:
 		if m.splitFocus == 0 {
-			return "j/k select | ] edit | + zoom | H/L move | x archive | X browser | - back | q quit"
+			return "j/k select | ] edit | + zoom | H/L move | m move to | x archive | - back | q quit"
 		}
-		if m.editTitle.Focused() || m.editDesc.Focused() {
-			return "esc done editing"
+		if m.editDesc.Focused() {
+			return "enter save | shift+enter new line | esc save"
+		}
+		if m.editTitle.Focused() {
+			return "enter save | esc save"
 		}
 		switch m.editField {
 		case 0:
-			return "h/l meta | j/k fields | enter edit | H/L move | x archive | q quit"
+			return "h/l meta | j/k fields | enter edit | H/L move | m move to | x archive | q quit"
 		case 1, 2:
 			return "j/k fields | enter/e edit | H/L move | h list | q quit"
 		}
 	case columnView:
-		return "j/k select | H/L move | x archive | enter detail | - back | a add | q quit"
+		return "j/k select | H/L move | m move to | x archive | enter detail | - back | a add | q quit"
 	case detailView:
+		if m.editDesc.Focused() {
+			return "enter save | shift+enter new line | esc save"
+		}
+		if m.editTitle.Focused() {
+			return "enter save | esc save"
+		}
 		switch m.editField {
 		case 0:
-			return "h/l meta | j/k fields | enter edit | H/L move | d delete | x archive | - back | q quit"
-		case 1:
-			return "enter done | esc back"
-		case 2:
-			return "esc back"
+			return "h/l meta | j/k fields | enter edit | H/L move | m move to | d delete | - back | q quit"
+		case 1, 2:
+			return "j/k fields | enter/e edit | esc back | q quit"
 		}
 	}
 	return ""
@@ -2359,9 +2528,11 @@ func (m *Model) viewBoard() string {
 	colWidths[numCols-1] += availWidth - total
 
 	columns := make([]string, numCols)
+	x := 0
 	for i, colIdx := range visCols {
 		status := model.ColumnOrder[colIdx]
-		columns[i] = m.renderColumn(colIdx, status, colWidths[i], availHeight, colIdx == m.focusedCol)
+		columns[i] = m.renderColumn(colIdx, status, colWidths[i], availHeight, colIdx == m.focusedCol, point{x: x, y: 0})
+		x += colWidths[i]
 	}
 
 	board := lipgloss.JoinHorizontal(lipgloss.Top, columns...)
@@ -2369,10 +2540,11 @@ func (m *Model) viewBoard() string {
 	return lipgloss.JoinVertical(lipgloss.Left, board, m.footerLine())
 }
 
-// renderColumn renders a single column panel.
-func (m *Model) renderColumn(colIdx int, status model.Status, width, height int, focused bool) string {
+// renderColumn renders a single column panel. origin is the panel's top-left
+// cell on screen, used to register mouse zones.
+func (m *Model) renderColumn(colIdx int, status model.Status, width, height int, focused bool, origin point) string {
 	tickets := m.board.ByStatus(status)
-	title := fmt.Sprintf("[%d] %s", colIdx, statusDisplay[status])
+	title := fmt.Sprintf("[%d] %s (%d)", colIdx, statusDisplay[status], len(tickets))
 
 	color := softWhite
 	if focused {
@@ -2385,23 +2557,21 @@ func (m *Model) renderColumn(colIdx int, status model.Status, width, height int,
 	}
 
 	visibleCount := height - 2
-	cursor := m.cursors[colIdx]
 
 	// Only scroll to keep the cursor visible when the column is focused;
-	// unfocused columns should always render from the top so switching away
-	// doesn't leave a column scrolled mid-list.
-	startIdx := 0
-	if focused && cursor >= visibleCount {
-		startIdx = cursor - visibleCount + 1
+	// unfocused columns always render from the top so switching away doesn't
+	// leave a column scrolled mid-list.
+	cursor := -1
+	if focused {
+		cursor = m.cursors[colIdx]
 	}
 
-	var lines []string
-	for i := startIdx; i < len(tickets) && len(lines) < visibleCount; i++ {
-		line := m.renderTicketLine(tickets[i], i == cursor && focused, innerWidth, color)
-		lines = append(lines, line)
-	}
+	// Registered before the ticket zones so a click on a ticket wins over the
+	// surrounding column.
+	m.addZone(hitZone{kind: zoneColumn, x: origin.x, y: origin.y, w: width, h: height, col: colIdx})
 
-	content := strings.Join(lines, "\n")
+	content := m.renderTicketList(tickets, colIdx, innerWidth, visibleCount, cursor, color,
+		point{x: origin.x + 1, y: origin.y + 1})
 	return renderPanel(title, content, width, height, color, focused)
 }
 
@@ -2477,9 +2647,11 @@ func (m *Model) viewBoardRows() string {
 	rowHeights[numRows-1] += availHeight - total
 
 	rows := make([]string, numRows)
+	y := 0
 	for i, colIdx := range visRows {
 		status := model.ColumnOrder[colIdx]
-		rows[i] = m.renderRow(colIdx, status, availWidth, rowHeights[i], colIdx == m.focusedCol)
+		rows[i] = m.renderRow(colIdx, status, availWidth, rowHeights[i], colIdx == m.focusedCol, point{x: 0, y: y})
+		y += rowHeights[i]
 	}
 	board := lipgloss.JoinVertical(lipgloss.Left, rows...)
 	return lipgloss.JoinVertical(lipgloss.Left, board, m.footerLine())
@@ -2487,7 +2659,7 @@ func (m *Model) viewBoardRows() string {
 
 // renderRow draws one status as a full-width panel with its tickets as a
 // vertical list (one ticket per line, same shape as renderColumn content).
-func (m *Model) renderRow(colIdx int, status model.Status, width, height int, focused bool) string {
+func (m *Model) renderRow(colIdx int, status model.Status, width, height int, focused bool, origin point) string {
 	tickets := m.board.ByStatus(status)
 	title := fmt.Sprintf("[%d] %s (%d)", colIdx, statusDisplay[status], len(tickets))
 
@@ -2505,19 +2677,15 @@ func (m *Model) renderRow(colIdx int, status model.Status, width, height int, fo
 		visibleCount = 1
 	}
 
-	cursor := m.cursors[colIdx]
-	startIdx := 0
-	if focused && cursor >= visibleCount {
-		startIdx = cursor - visibleCount + 1
+	cursor := -1
+	if focused {
+		cursor = m.cursors[colIdx]
 	}
 
-	var lines []string
-	for i := startIdx; i < len(tickets) && len(lines) < visibleCount; i++ {
-		line := m.renderTicketLine(tickets[i], i == cursor && focused, innerWidth, color)
-		lines = append(lines, line)
-	}
+	m.addZone(hitZone{kind: zoneColumn, x: origin.x, y: origin.y, w: width, h: height, col: colIdx})
 
-	content := strings.Join(lines, "\n")
+	content := m.renderTicketList(tickets, colIdx, innerWidth, visibleCount, cursor, color,
+		point{x: origin.x + 1, y: origin.y + 1})
 	if content == "" {
 		content = lipgloss.NewStyle().Foreground(subtle).Render("(empty)")
 	}
@@ -2545,7 +2713,7 @@ func (m *Model) viewSplit() string {
 	if !listFocused {
 		listColor = softWhite
 	}
-	listPanel := m.renderSplitList(status, listWidth, availHeight, listFocused, listColor)
+	listPanel := m.renderSplitList(status, listWidth, availHeight, listFocused, listColor, point{x: 0, y: 0})
 
 	// Right panel: ticket detail
 	detailFocused := m.splitFocus == 1
@@ -2553,14 +2721,14 @@ func (m *Model) viewSplit() string {
 	if !detailFocused {
 		detailColor = softWhite
 	}
-	detailPanel := m.renderSplitDetail(detailWidth, availHeight, detailFocused, detailColor)
+	detailPanel := m.renderSplitDetail(detailWidth, availHeight, detailFocused, detailColor, point{x: listWidth, y: 0})
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, listPanel, detailPanel)
 
 	return lipgloss.JoinVertical(lipgloss.Left, body, m.footerLine())
 }
 
-func (m *Model) renderSplitList(status model.Status, width, height int, focused bool, borderColor lipgloss.Color) string {
+func (m *Model) renderSplitList(status model.Status, width, height int, focused bool, borderColor lipgloss.Color, origin point) string {
 	tickets := m.board.ByStatus(status)
 	title := fmt.Sprintf("[%d] %s (%d)", m.focusedCol, statusDisplay[status], len(tickets))
 
@@ -2570,25 +2738,15 @@ func (m *Model) renderSplitList(status model.Status, width, height int, focused 
 	}
 
 	visibleCount := height - 2
-	cursor := m.cursors[m.focusedCol]
 
-	// Scroll window: ensure cursor is always visible
-	startIdx := 0
-	if cursor >= visibleCount {
-		startIdx = cursor - visibleCount + 1
-	}
+	m.addZone(hitZone{kind: zoneColumn, x: origin.x, y: origin.y, w: width, h: height, col: m.focusedCol})
 
-	var lines []string
-	for i := startIdx; i < len(tickets) && len(lines) < visibleCount; i++ {
-		line := m.renderTicketLine(tickets[i], i == cursor, innerWidth, borderColor)
-		lines = append(lines, line)
-	}
-
-	content := strings.Join(lines, "\n")
+	content := m.renderTicketList(tickets, m.focusedCol, innerWidth, visibleCount, m.cursors[m.focusedCol], borderColor,
+		point{x: origin.x + 1, y: origin.y + 1})
 	return renderPanel(title, content, width, height, borderColor, focused)
 }
 
-func (m *Model) renderSplitDetail(width, height int, focused bool, borderColor lipgloss.Color) string {
+func (m *Model) renderSplitDetail(width, height int, focused bool, borderColor lipgloss.Color, origin point) string {
 	t := m.selectedTicket()
 	if t == nil {
 		return renderPanel("Detail", "No ticket selected", width, height, borderColor, focused)
@@ -2606,6 +2764,7 @@ func (m *Model) renderSplitDetail(width, height int, focused bool, borderColor l
 	}
 	metaContent := m.renderCompactMeta(t, innerWidth, focused && m.editField == 0)
 	metaPanel := renderPanel("Info", metaContent, width, 3, metaColor, focused && m.editField == 0)
+	m.addZone(hitZone{kind: zoneField, x: origin.x, y: origin.y, w: width, h: 3, idx: 0})
 
 	// Title panel — height 3
 	titleColor := softWhite
@@ -2620,6 +2779,7 @@ func (m *Model) renderSplitDetail(width, height int, focused bool, borderColor l
 		titleContent = lipgloss.NewStyle().Bold(true).Foreground(white).Render(t.Title)
 	}
 	titlePanel := renderPanel("Title", titleContent, width, 3, titleColor, focused && m.editField == 1)
+	m.addZone(hitZone{kind: zoneField, x: origin.x, y: origin.y + 3, w: width, h: 3, idx: 1})
 
 	// Description panel — fills remaining space
 	descPanelHeight := height - 6
@@ -2636,18 +2796,45 @@ func (m *Model) renderSplitDetail(width, height int, focused bool, borderColor l
 		m.editDesc.SetHeight(descPanelHeight - 2)
 		descContent = m.editDesc.View()
 	} else {
-		desc := t.Description
-		if desc == "" {
-			descContent = lipgloss.NewStyle().Foreground(subtle).Render("(empty)")
-		} else {
-			// Pre-wrap to innerWidth, then style each line
-			wrapped := lipgloss.NewStyle().Width(innerWidth).Render(desc)
-			descContent = lipgloss.NewStyle().Foreground(softWhite).Render(wrapped)
-		}
+		descContent = m.renderDescBody(t.Description, innerWidth, descPanelHeight-2)
 	}
 	descPanel := renderPanel("Description", descContent, width, descPanelHeight, descColor, focused && m.editField == 2)
+	m.addZone(hitZone{kind: zoneField, x: origin.x, y: origin.y + 6, w: width, h: descPanelHeight, idx: 2})
 
 	return lipgloss.JoinVertical(lipgloss.Left, metaPanel, titlePanel, descPanel)
+}
+
+// renderDescBody renders a read-only description, wrapped to width and offset
+// by the mouse scroll position. It also records how far the body can scroll so
+// the wheel handler can clamp itself.
+func (m *Model) renderDescBody(desc string, width, height int) string {
+	if height < 1 {
+		height = 1
+	}
+	if desc == "" {
+		m.descScrollMax = 0
+		m.descScroll = 0
+		return lipgloss.NewStyle().Foreground(subtle).Render("(empty)")
+	}
+
+	wrapped := strings.Split(lipgloss.NewStyle().Width(width).Render(desc), "\n")
+	maxScroll := len(wrapped) - height
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	m.descScrollMax = maxScroll
+	if m.descScroll > maxScroll {
+		m.descScroll = maxScroll
+	}
+	if m.descScroll < 0 {
+		m.descScroll = 0
+	}
+
+	lines := wrapped[m.descScroll:]
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	return lipgloss.NewStyle().Foreground(softWhite).Render(strings.Join(lines, "\n"))
 }
 
 // viewColumn renders the expanded single-column view.
@@ -2743,14 +2930,22 @@ func (m *Model) viewDetail() string {
 	}
 	metaContent := m.renderMetaBar(t)
 	metaPanel := renderPanel("Info", metaContent, innerWidth+2, 3, metaBorderColor, m.editField == 0)
+	m.addZone(hitZone{kind: zoneField, x: 0, y: 0, w: innerWidth + 2, h: 3, idx: 0})
 
 	// Title field
 	titleBorderColor := softWhite
 	if m.editField == 1 {
 		titleBorderColor = color
 	}
-	m.editTitle.Width = innerWidth - 2
-	titlePanel := renderPanel("Title", m.editTitle.View(), innerWidth+2, 3, titleBorderColor, m.editField == 1)
+	var titleContent string
+	if m.editTitle.Focused() {
+		m.editTitle.Width = innerWidth - 2
+		titleContent = m.editTitle.View()
+	} else {
+		titleContent = lipgloss.NewStyle().Bold(true).Foreground(white).Render(t.Title)
+	}
+	titlePanel := renderPanel("Title", titleContent, innerWidth+2, 3, titleBorderColor, m.editField == 1)
+	m.addZone(hitZone{kind: zoneField, x: 0, y: 3, w: innerWidth + 2, h: 3, idx: 1})
 
 	// Description field
 	descBorderColor := softWhite
@@ -2761,9 +2956,16 @@ func (m *Model) viewDetail() string {
 	if descPanelHeight < 4 {
 		descPanelHeight = 4
 	}
-	m.editDesc.SetWidth(innerWidth - 2)
-	m.editDesc.SetHeight(descPanelHeight - 2)
-	descPanel := renderPanel("Description", m.editDesc.View(), innerWidth+2, descPanelHeight, descBorderColor, m.editField == 2)
+	var descContent string
+	if m.editDesc.Focused() {
+		m.editDesc.SetWidth(innerWidth - 2)
+		m.editDesc.SetHeight(descPanelHeight - 2)
+		descContent = m.editDesc.View()
+	} else {
+		descContent = m.renderDescBody(t.Description, innerWidth-2, descPanelHeight-2)
+	}
+	descPanel := renderPanel("Description", descContent, innerWidth+2, descPanelHeight, descBorderColor, m.editField == 2)
+	m.addZone(hitZone{kind: zoneField, x: 0, y: 6, w: innerWidth + 2, h: descPanelHeight, idx: 2})
 
 	return lipgloss.JoinVertical(lipgloss.Left,
 		metaPanel,

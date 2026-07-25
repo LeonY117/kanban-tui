@@ -12,7 +12,9 @@ func runTUI(sprintName string) error {
 	if err != nil {
 		return err
 	}
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	// Mouse cell motion gives us clicks and wheel events. Terminal text
+	// selection still works with shift held down.
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}

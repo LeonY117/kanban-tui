@@ -39,13 +39,17 @@ Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden
 | `j` `k` | Move between tickets |
 | `H` `L` | Move selected ticket to adjacent column |
 | `J` `K` | Reorder selected ticket up/down within its column |
+| `m` | Move ticket — pick a column, or another board and its column |
 | `a` | Add a new ticket (floating popup) |
 | `e` / `enter` | Edit selected field |
-| `esc` | Stop editing / step back |
+| `enter` (while editing) | Save and stop editing — in the add popup, create the ticket |
+| `shift+enter` | New line inside a description |
+| `esc` | Stop editing / step back (the add popup asks before discarding) |
 | `0`-`4` | Jump to column (Backlog / Todo / Doing / Done / Hold) |
 | `+` / `-` | Zoom in / out (board → split → column / detail) |
 | `[` / `]` | Switch panels in split view |
-| `v` | Toggle layout |
+| `v` | Ticket size — cards (default) → large → condensed |
+| `V` | Toggle columns / rows layout |
 | `x` | Archive selected ticket |
 | `X` | Open archive browser |
 | `u` | Unarchive (in archive browser) |
@@ -53,6 +57,34 @@ Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden
 | `d` | Delete ticket (in detail view) |
 | `?` | Help |
 | `q` | Quit |
+
+`shift+enter` only reaches the TUI if your terminal sends an escape for it —
+in Ghostty, `keybind = shift+enter=text:\x1b\r`. `ctrl+j` works everywhere as
+a fallback.
+
+### Ticket sizes
+
+`v` cycles three densities. **Cards** (default) show the title and a
+`shortid #tags ● assignee` line. **Large** adds a three-line description
+preview and the last-edited date. **Condensed** is one line per ticket.
+
+At card and condensed size, tickets are separated by a rule above each block
+with a closing rule under the last. Large gives each ticket its own box —
+at that size the extra air reads better.
+
+The ticket under the cursor gets an accent bar down its left edge, heavy
+accented rules bracketing it, and its short id in the column colour — in the
+large size, the box border carries the accent instead. None of that changes a
+block's height, so moving the cursor never shifts the list. The ticket that
+straddles the bottom of a column is cropped mid-block rather than dropped, so
+the column always reads as continuing past the fold.
+
+### Mouse
+
+The mouse is live: click a ticket to select it, click a column to focus it,
+click a field in the detail pane to jump to it. The wheel scrolls one line at
+a time — tickets in a list, or the description body under the pointer. Hold
+`shift` to select text as usual.
 
 ### Views
 

@@ -109,7 +109,6 @@ type Model struct {
 	// How much of each ticket a list row shows (cards by default), and how
 	// the blocks are separated.
 	layout ticketLayout
-	frame  frameStyle
 
 	// First ticket rendered per column. Sticky: the cursor moves inside the
 	// window and only pushes it from an edge.
@@ -492,9 +491,6 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Layout):
 		m.layout = m.layout.next()
 		m.notice = m.layout.label()
-	case key.Matches(msg, keys.Frame):
-		m.frame = m.frame.next()
-		m.notice = m.frame.label()
 	case key.Matches(msg, keys.RowLayout):
 		m.rowLayout = !m.rowLayout
 	case key.Matches(msg, keys.Move):
@@ -720,9 +716,6 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Layout):
 		m.layout = m.layout.next()
 		m.notice = m.layout.label()
-	case key.Matches(msg, keys.Frame):
-		m.frame = m.frame.next()
-		m.notice = m.frame.label()
 	case key.Matches(msg, keys.ArchiveView):
 		m.enterArchive()
 	}
@@ -2578,7 +2571,7 @@ func formatCounts(counts map[model.Status]int) string {
 func (m *Model) helpText() string {
 	switch m.view {
 	case boardView:
-		return "h/l nav | j/k select | v size | z frame | H/L move | m move | c copy id | a add | x archive | q quit"
+		return "h/l nav | j/k select | v size | H/L move | m move | c copy id | a add | x archive | q quit"
 	case moveView:
 		switch m.moveStage {
 		case moveStageColumn:

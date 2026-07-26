@@ -34,7 +34,6 @@ type keyMap struct {
 	PanelPrev   key.Binding
 	Archive     key.Binding
 	Layout      key.Binding
-	Frame       key.Binding
 	RowLayout   key.Binding
 	ArchiveView key.Binding
 	Unarchive   key.Binding
@@ -66,7 +65,6 @@ var keys = keyMap{
 	Edit:      key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
 	Move:      key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "move")),
 	Copy:      key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy")),
-	Frame:     key.NewBinding(key.WithKeys("z"), key.WithHelp("z", "frame style")),
 	// Terminals don't report shift+enter distinctly without the kitty
 	// keyboard protocol (bubbletea v1 doesn't speak it). Ghostty is
 	// configured to send ESC CR for shift+enter, which arrives as

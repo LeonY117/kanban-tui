@@ -42,45 +42,6 @@ func (l ticketLayout) label() string {
 	}
 }
 
-// frameStyle is how ticket blocks are separated. Rules is the current look;
-// table is the earlier shared-border one; thick is table with a heavy selection
-// that keeps the table's outer lines unbroken. `z` cycles all three so they can
-// be compared in real use.
-type frameStyle int
-
-const (
-	frameRules frameStyle = iota
-	frameTable
-	frameThick
-)
-
-func (f frameStyle) next() frameStyle {
-	switch f {
-	case frameRules:
-		return frameTable
-	case frameTable:
-		return frameThick
-	default:
-		return frameRules
-	}
-}
-
-func (f frameStyle) label() string {
-	switch f {
-	case frameTable:
-		return "table frame"
-	case frameThick:
-		return "thick frame"
-	default:
-		return "rule frame"
-	}
-}
-
-// tabular reports whether this frame draws tickets as rows of one table.
-func (f frameStyle) tabular() bool {
-	return f == frameTable || f == frameThick
-}
-
 // Title and description line caps per layout.
 const (
 	cardTitleMaxLines  = 2
@@ -135,11 +96,10 @@ func (m *Model) renderCardStack(tickets []model.Ticket, colIdx, width, height, c
 		width = 4
 	}
 	boxed := m.layout == layoutLarge
-	table := m.frame.tabular() && !boxed
 
-	inner := width - 2 // 1 col of gutter (or border) on each side
-	if table {
-		inner = width - 4 // 2 border cols + 1 col of padding each side
+	inner := width - 4 // 2 border cols + 1 col of padding each side
+	if boxed {
+		inner = width - 2 // its own box, padding included in the content
 	}
 
 	chrome := 1 // the rule above each block
@@ -171,14 +131,6 @@ func (m *Model) renderCardStack(tickets []model.Ticket, colIdx, width, height, c
 		return l + strings.Repeat(" ", n)
 	}
 
-	// A rule goes heavy and accented when it brackets the selected block.
-	rule := func(touchesSelection bool) string {
-		if touchesSelection {
-			return lipgloss.NewStyle().Foreground(accent).Bold(true).Render(strings.Repeat("━", width))
-		}
-		return lipgloss.NewStyle().Foreground(dimGray).Render(strings.Repeat("─", width))
-	}
-
 	// Blocks are emitted line by line up to the panel's height, so the ticket
 	// that straddles the bottom edge shows as much of itself as fits rather
 	// than leaving a gap. The cursor's block is always whole: fitScrollStart
@@ -191,11 +143,10 @@ func (m *Model) renderCardStack(tickets []model.Ticket, colIdx, width, height, c
 		// "the block above me is selected" and draws it heavy.
 		afterSelected := cursor >= 0 && i-1 == cursor
 		var block []string
-		switch {
-		case table:
-			block = m.renderTableBlock(contents[i], i == start, i == cursor, afterSelected, width, pad, accent)
-		default:
-			block = renderTicketBlock(contents[i], boxed, i == cursor, afterSelected, inner, pad, rule, accent)
+		if boxed {
+			block = renderBoxedBlock(contents[i], i == cursor, inner, pad, accent)
+		} else {
+			block = renderTableBlock(contents[i], i == start, i == cursor, afterSelected, width, pad, accent)
 		}
 		room := height - len(lines)
 		if len(block) > room {
@@ -207,16 +158,7 @@ func (m *Model) renderCardStack(tickets []model.Ticket, colIdx, width, height, c
 		lines = append(lines, block...)
 	}
 	if !boxed && len(lines) > 0 && len(lines) < height {
-		if table {
-			switch {
-			case m.frame == frameThick && full == cursor:
-				lines = append(lines, heavyRule("┗", "┛", width, accent))
-			default:
-				lines = append(lines, tableRule("╰", "╯", width, full == cursor, accent))
-			}
-		} else {
-			lines = append(lines, rule(full == cursor))
-		}
+		lines = append(lines, tableRule("╰", "╯", width, full == cursor, accent))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -230,11 +172,7 @@ func (m *Model) renderCardStack(tickets []model.Ticket, colIdx, width, height, c
 // ends round toward it — closing the selection into a box of its own and
 // leaving the neighbour open on that side, which is what the shared line
 // means anyway.
-func (m *Model) renderTableBlock(content []string, first, selected, afterSelected bool, width int, pad func(string) string, accent lipgloss.Color) []string {
-	if m.frame == frameThick {
-		return renderThickBlock(content, first, selected, afterSelected, width, pad, accent)
-	}
-
+func renderTableBlock(content []string, first, selected, afterSelected bool, width int, pad func(string) string, accent lipgloss.Color) []string {
 	left, right := "├", "┤"
 	switch {
 	case selected:
@@ -256,46 +194,6 @@ func (m *Model) renderTableBlock(content []string, first, selected, afterSelecte
 	return block
 }
 
-// renderThickBlock is the table frame with a heavy selection. Where the rounded
-// frame closes the selected row off — breaking the table's outer lines at its
-// four corners — this one keeps every line continuous and lets weight do the
-// work: the selected row is drawn in heavy box glyphs, and the rules it shares
-// with its neighbours end in the mixed-weight junctions (┢ ┪ ┡ ┩) that carry a
-// light stem on the neighbour's side and a heavy one on the selection's.
-func renderThickBlock(content []string, first, selected, afterSelected bool, width int, pad func(string) string, accent lipgloss.Color) []string {
-	var top string
-	switch {
-	case selected && first:
-		top = heavyRule("┏", "┓", width, accent)
-	case selected:
-		top = heavyRule("┢", "┪", width, accent)
-	case afterSelected:
-		top = heavyRule("┡", "┩", width, accent)
-	case first:
-		top = tableRule("╭", "╮", width, false, accent)
-	default:
-		top = tableRule("├", "┤", width, false, accent)
-	}
-
-	side := lipgloss.NewStyle().Foreground(dimGray).Render("│")
-	if selected {
-		side = lipgloss.NewStyle().Foreground(accent).Bold(true).Render("┃")
-	}
-
-	block := []string{top}
-	for _, l := range content {
-		block = append(block, side+" "+pad(l)+" "+side)
-	}
-	return block
-}
-
-// heavyRule is a selection edge in the thick frame. Heavy glyphs overhang their
-// cell in some fonts; here the whole row is heavy, so any overhang lines up with
-// the heavy sides instead of spilling past a light box.
-func heavyRule(left, right string, width int, accent lipgloss.Color) string {
-	return lipgloss.NewStyle().Foreground(accent).Bold(true).Render(left + strings.Repeat("━", width-2) + right)
-}
-
 // tableRule is one horizontal edge of the table, accented when it borders the
 // selected row.
 //
@@ -311,36 +209,18 @@ func tableRule(left, right string, width int, selected bool, accent lipgloss.Col
 	return lipgloss.NewStyle().Foreground(color).Render(left + strings.Repeat("─", width-2) + right)
 }
 
-// renderTicketBlock frames one ticket's content lines — a box in the large
-// size, a rule plus body otherwise.
-func renderTicketBlock(content []string, boxed, selected, afterSelected bool, inner int, pad func(string) string, rule func(bool) string, accent lipgloss.Color) []string {
-	if boxed {
-		border := lipgloss.NewStyle().Foreground(dimGray)
-		if selected {
-			border = lipgloss.NewStyle().Foreground(accent).Bold(true)
-		}
-		block := []string{border.Render("╭" + strings.Repeat("─", inner) + "╮")}
-		for _, l := range content {
-			block = append(block, border.Render("│")+pad(l)+border.Render("│"))
-		}
-		return append(block, border.Render("╰"+strings.Repeat("─", inner)+"╯"))
-	}
-
-	block := []string{rule(selected || afterSelected)}
-	for _, l := range content {
-		block = append(block, renderCardLine(l, pad, selected, accent))
-	}
-	return block
-}
-
-// renderCardLine frames one content line: a gutter column on each side, which
-// on the selected block's left edge carries the accent bar.
-func renderCardLine(line string, pad func(string) string, selected bool, accent lipgloss.Color) string {
+// renderBoxedBlock frames one ticket's content lines as its own box — the
+// large layout, where the extra air reads better than a shared rule.
+func renderBoxedBlock(content []string, selected bool, inner int, pad func(string) string, accent lipgloss.Color) []string {
+	border := lipgloss.NewStyle().Foreground(dimGray)
 	if selected {
-		bar := lipgloss.NewStyle().Foreground(accent).Bold(true).Render("▌")
-		return bar + pad(line) + " "
+		border = lipgloss.NewStyle().Foreground(accent).Bold(true)
 	}
-	return " " + pad(line) + " "
+	block := []string{border.Render("╭" + strings.Repeat("─", inner) + "╮")}
+	for _, l := range content {
+		block = append(block, border.Render("│")+pad(l)+border.Render("│"))
+	}
+	return append(block, border.Render("╰"+strings.Repeat("─", inner)+"╯"))
 }
 
 // scrollWindow advances a column's remembered scroll position by the least

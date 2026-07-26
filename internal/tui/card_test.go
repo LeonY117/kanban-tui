@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 )
 
 func TestCardContentShape(t *testing.T) {
@@ -66,32 +67,67 @@ func TestLargeLayoutShowsDescriptionPreview(t *testing.T) {
 	}
 }
 
+// The selected ticket has to be unmistakable in a column of identical boxes.
+// It is closed into its own rounded box, accented on all four sides, while its
+// neighbours share T-junction rules.
 func TestSelectionMarkers(t *testing.T) {
-	m := testModel(t, "first", "second")
+	defer withColor(t)()
+
+	m := testModel(t, "first", "second", "third", "fourth")
 	m.layout = layoutCard
-	block := m.renderTicketList(m.board.Tickets, 1, 30, 20, 0, blue, point{})
+	block := m.renderTicketList(m.board.Tickets, 1, 30, 20, 1, blue, point{})
 	lines := strings.Split(block, "\n")
 
-	// 2 tickets × (rule + title + meta) + the closing rule.
-	if len(lines) != 7 {
-		t.Fatalf("stack has %d lines, want 7:\n%s", len(lines), block)
-	}
 	for i, l := range lines {
 		if w := lipgloss.Width(l); w != 30 {
 			t.Errorf("line %d width = %d, want 30 (%q)", i, w, l)
 		}
 	}
-	if !strings.Contains(lines[1], "▌") || !strings.Contains(lines[2], "▌") {
-		t.Errorf("selected block should carry a left bar: %q / %q", lines[1], lines[2])
+	top, bottom := lines[3], lines[6]
+	if !strings.HasPrefix(ansi.Strip(top), "╭") || !strings.HasSuffix(ansi.Strip(top), "╮") {
+		t.Errorf("selection top is not rounded: %q", ansi.Strip(top))
 	}
-	if strings.Contains(lines[4], "▌") {
-		t.Errorf("unselected block should not: %q", lines[4])
+	if !strings.HasPrefix(ansi.Strip(bottom), "╰") || !strings.HasSuffix(ansi.Strip(bottom), "╯") {
+		t.Errorf("selection bottom is not rounded: %q", ansi.Strip(bottom))
 	}
-	if !strings.Contains(lines[0], "━") || !strings.Contains(lines[3], "━") {
-		t.Errorf("selected block should be bracketed by heavy rules: %q / %q", lines[0], lines[3])
+	if !strings.Contains(block, "├") {
+		t.Errorf("ordinary neighbours should share a junction rule:\n%s", ansi.Strip(block))
 	}
-	if strings.Contains(lines[6], "━") {
-		t.Errorf("the closing rule should stay light: %q", lines[6])
+
+	// Colour is what carries the selection here, and lipgloss strips it under
+	// `go test` unless a profile is forced — so assert on the rendered escapes,
+	// not just the glyphs.
+	accent, dim := colorOpener(blue), colorOpener(dimGray)
+	for _, want := range []struct {
+		name string
+		line string
+	}{{"top edge", top}, {"bottom edge", bottom}} {
+		if !strings.HasPrefix(want.line, accent) {
+			t.Errorf("selection %s is not accented: %q", want.name, want.line)
+		}
+	}
+	if !strings.HasPrefix(lines[4], accent) {
+		t.Errorf("selection side is not accented: %q", lines[4])
+	}
+	if !strings.HasPrefix(lines[1], dim) {
+		t.Errorf("an unselected row should stay dim: %q", lines[1])
+	}
+}
+
+// Heavy box-drawing glyphs overhang their cell in many terminal fonts, so a
+// heavy rule visibly spills past the sides of the box it belongs to. The frame
+// is light throughout and lets colour mark the selection.
+func TestFrameStaysLight(t *testing.T) {
+	m := testModel(t, "first", "second", "third")
+	for _, layout := range []ticketLayout{layoutCard, layoutLarge, layoutCondensed} {
+		m.layout = layout
+		m.scrollStart = [5]int{}
+		block := m.renderTicketList(m.board.Tickets, 1, 30, 20, 1, blue, point{})
+		for _, heavy := range []string{"━", "┃", "┏", "┓", "┗", "┛", "┝", "┥", "┢", "┪", "┡", "┩"} {
+			if strings.Contains(block, heavy) {
+				t.Errorf("%s layout used the heavy glyph %q:\n%s", layout.label(), heavy, ansi.Strip(block))
+			}
+		}
 	}
 }
 
@@ -115,99 +151,35 @@ func TestLargeLayoutBoxesEachTicket(t *testing.T) {
 	}
 }
 
-// An unfocused column has no selection, so none of its rules may render as
-// the heavy accented selection rule.
-// The table frame (z) has to mark its selection as clearly as the rule frame.
-func TestTableFrameMarksSelection(t *testing.T) {
-	m := testModel(t, "first", "second", "third", "fourth")
-	m.frame = frameTable
-	block := m.renderTicketList(m.board.Tickets, 1, 30, 20, 1, blue, point{})
-	lines := strings.Split(block, "\n")
-
-	for i, l := range lines {
-		if w := lipgloss.Width(l); w != 30 {
-			t.Errorf("line %d width = %d, want 30 (%q)", i, w, l)
-		}
-	}
-	if !strings.Contains(block, "├") {
-		t.Errorf("ordinary neighbours should share a junction rule:\n%s", block)
-	}
-	// The selected row is closed into its own box: rounded corners top and
-	// bottom, no T-junction hanging off it.
-	rows := strings.Split(block, "\n")
-	top, bottom := rows[3], rows[6]
-	if !strings.Contains(top, "╭") || !strings.Contains(top, "╮") {
-		t.Errorf("selection top is not rounded: %q", top)
-	}
-	if !strings.Contains(bottom, "╰") || !strings.Contains(bottom, "╯") {
-		t.Errorf("selection bottom is not rounded: %q", bottom)
-	}
-	// Heavy glyphs overhang their cell in many fonts, which makes a selected
-	// row's rules spill past the box they belong to.
-	for _, heavy := range []string{"━", "┝", "┥", "┃"} {
-		if strings.Contains(block, heavy) {
-			t.Errorf("table frame used the heavy glyph %q:\n%s", heavy, block)
-		}
-	}
+// colorOpener is the escape sequence lipgloss emits for a foreground colour,
+// so a test can ask what colour a rendered line opens in without caring how
+// many cells the span covers.
+func colorOpener(c lipgloss.Color) string {
+	rendered := lipgloss.NewStyle().Foreground(c).Render("X")
+	return strings.SplitN(rendered, "X", 2)[0]
 }
 
-// The thick frame (z again) trades the rounded selection for weight: the table's
-// outer lines run unbroken past the selected row, which is drawn heavy.
-func TestThickFrameKeepsTheTableUnbroken(t *testing.T) {
-	m := testModel(t, "first", "second", "third", "fourth")
-	m.frame = frameThick
-	block := m.renderTicketList(m.board.Tickets, 1, 30, 20, 1, blue, point{})
-	lines := strings.Split(block, "\n")
-
-	for i, l := range lines {
-		if w := lipgloss.Width(l); w != 30 {
-			t.Errorf("line %d width = %d, want 30 (%q)", i, w, l)
-		}
-	}
-	top, bottom := lines[3], lines[6]
-	// Mixed-weight junctions: light stem toward the neighbour, heavy toward the
-	// selection. A rounded corner here would mean the line had been cut.
-	if !strings.HasPrefix(ansi.Strip(top), "┢") || !strings.HasSuffix(ansi.Strip(top), "┪") {
-		t.Errorf("selection top does not join the table: %q", ansi.Strip(top))
-	}
-	if !strings.HasPrefix(ansi.Strip(bottom), "┡") || !strings.HasSuffix(ansi.Strip(bottom), "┩") {
-		t.Errorf("selection bottom does not join the table: %q", ansi.Strip(bottom))
-	}
-	if !strings.Contains(lines[4], "┃") {
-		t.Errorf("selected row is not heavy-sided: %q", lines[4])
-	}
-	if !strings.Contains(block, "├") {
-		t.Errorf("ordinary neighbours should share a junction rule:\n%s", block)
-	}
+// withColor forces a colour profile for the duration of a test: lipgloss
+// detects a non-tty under `go test` and strips every escape, which makes any
+// assertion about colour pass vacuously.
+func withColor(t *testing.T) func() {
+	t.Helper()
+	prev := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	return func() { lipgloss.SetColorProfile(prev) }
 }
 
-// z has to reach every frame and come back to where it started, or a variant is
-// unreachable in the running app however well it renders.
-func TestFrameCycleVisitsEveryStyle(t *testing.T) {
-	seen := map[frameStyle]bool{}
-	f := frameRules
-	for i := 0; i < 3; i++ {
-		seen[f] = true
-		f = f.next()
-	}
-	if f != frameRules {
-		t.Errorf("cycling three times landed on %v, want back at frameRules", f)
-	}
-	for _, want := range []frameStyle{frameRules, frameTable, frameThick} {
-		if !seen[want] {
-			t.Errorf("frame %q is unreachable via z", want.label())
-		}
-	}
-}
+// An unfocused column has no selection, so nothing in it may render accented.
+func TestUnfocusedColumnHasNoSelection(t *testing.T) {
+	defer withColor(t)()
 
-func TestUnfocusedColumnHasNoHeavyRule(t *testing.T) {
 	m := testModel(t, "first", "second", "third")
 	block := m.renderTicketList(m.board.Tickets, 2, 30, 20, -1, blue, point{})
-	if strings.Contains(block, "━") {
-		t.Errorf("unfocused column drew a selection rule:\n%s", block)
-	}
-	if strings.Contains(block, "▌") {
-		t.Errorf("unfocused column drew a selection bar:\n%s", block)
+	// cursor < 0 once meant the first row read its own top rule as "the block
+	// above me is selected" and drew it accented — a bright line across the top
+	// of every unfocused column.
+	if strings.Contains(block, lipgloss.NewStyle().Foreground(blue).Render("╭")) {
+		t.Errorf("unfocused column drew a selection edge:\n%s", ansi.Strip(block))
 	}
 }
 

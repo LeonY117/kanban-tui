@@ -8,6 +8,7 @@ import (
 	"github.com/LeonY117/kanban-tui/internal/store"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestCardContentShape(t *testing.T) {
@@ -146,6 +147,55 @@ func TestTableFrameMarksSelection(t *testing.T) {
 	for _, heavy := range []string{"━", "┝", "┥", "┃"} {
 		if strings.Contains(block, heavy) {
 			t.Errorf("table frame used the heavy glyph %q:\n%s", heavy, block)
+		}
+	}
+}
+
+// The thick frame (z again) trades the rounded selection for weight: the table's
+// outer lines run unbroken past the selected row, which is drawn heavy.
+func TestThickFrameKeepsTheTableUnbroken(t *testing.T) {
+	m := testModel(t, "first", "second", "third", "fourth")
+	m.frame = frameThick
+	block := m.renderTicketList(m.board.Tickets, 1, 30, 20, 1, blue, point{})
+	lines := strings.Split(block, "\n")
+
+	for i, l := range lines {
+		if w := lipgloss.Width(l); w != 30 {
+			t.Errorf("line %d width = %d, want 30 (%q)", i, w, l)
+		}
+	}
+	top, bottom := lines[3], lines[6]
+	// Mixed-weight junctions: light stem toward the neighbour, heavy toward the
+	// selection. A rounded corner here would mean the line had been cut.
+	if !strings.HasPrefix(ansi.Strip(top), "┢") || !strings.HasSuffix(ansi.Strip(top), "┪") {
+		t.Errorf("selection top does not join the table: %q", ansi.Strip(top))
+	}
+	if !strings.HasPrefix(ansi.Strip(bottom), "┡") || !strings.HasSuffix(ansi.Strip(bottom), "┩") {
+		t.Errorf("selection bottom does not join the table: %q", ansi.Strip(bottom))
+	}
+	if !strings.Contains(lines[4], "┃") {
+		t.Errorf("selected row is not heavy-sided: %q", lines[4])
+	}
+	if !strings.Contains(block, "├") {
+		t.Errorf("ordinary neighbours should share a junction rule:\n%s", block)
+	}
+}
+
+// z has to reach every frame and come back to where it started, or a variant is
+// unreachable in the running app however well it renders.
+func TestFrameCycleVisitsEveryStyle(t *testing.T) {
+	seen := map[frameStyle]bool{}
+	f := frameRules
+	for i := 0; i < 3; i++ {
+		seen[f] = true
+		f = f.next()
+	}
+	if f != frameRules {
+		t.Errorf("cycling three times landed on %v, want back at frameRules", f)
+	}
+	for _, want := range []frameStyle{frameRules, frameTable, frameThick} {
+		if !seen[want] {
+			t.Errorf("frame %q is unreachable via z", want.label())
 		}
 	}
 }

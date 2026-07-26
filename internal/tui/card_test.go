@@ -128,11 +128,15 @@ func TestTableFrameMarksSelection(t *testing.T) {
 			t.Errorf("line %d width = %d, want 30 (%q)", i, w, l)
 		}
 	}
-	if !strings.Contains(block, "├") && !strings.Contains(block, "┝") {
+	if !strings.Contains(block, "├") {
 		t.Errorf("neighbouring rows should share a junction rule:\n%s", block)
 	}
-	if !strings.Contains(block, "┝") || !strings.Contains(block, "━") {
-		t.Errorf("selected row is not bracketed by a heavy rule:\n%s", block)
+	// Heavy glyphs overhang their cell in many fonts, which makes a selected
+	// row's rules spill past the box they belong to.
+	for _, heavy := range []string{"━", "┝", "┥", "┃"} {
+		if strings.Contains(block, heavy) {
+			t.Errorf("table frame used the heavy glyph %q:\n%s", heavy, block)
+		}
 	}
 }
 

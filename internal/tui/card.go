@@ -213,7 +213,7 @@ func renderTableBlock(content []string, first, selected, afterSelected bool, wid
 
 	side := lipgloss.NewStyle().Foreground(dimGray)
 	if selected {
-		side = lipgloss.NewStyle().Foreground(accent).Bold(true)
+		side = lipgloss.NewStyle().Foreground(accent)
 	}
 	for _, l := range content {
 		block = append(block, side.Render("│")+" "+pad(l)+" "+side.Render("│"))
@@ -221,23 +221,19 @@ func renderTableBlock(content []string, first, selected, afterSelected bool, wid
 	return block
 }
 
-// tableRule is one horizontal edge of the table. The edges bracketing the
-// selected row go heavy and accented — colour alone doesn't carry in every
-// terminal theme, and the frame has no bar to fall back on.
+// tableRule is one horizontal edge of the table, accented when it borders the
+// selected row.
+//
+// The glyphs stay light whether or not the row is selected: heavy box-drawing
+// characters (━ ┝ ┥) overhang their cell in many terminal fonts, so a heavy
+// rule visibly spills past the sides of the box it belongs to. In this frame
+// the selected row is already outlined on all four sides, so colour carries it.
 func tableRule(left, right string, width int, selected bool, accent lipgloss.Color) string {
-	if !selected {
-		return lipgloss.NewStyle().Foreground(dimGray).Render(left + strings.Repeat("─", width-2) + right)
+	color := dimGray
+	if selected {
+		color = accent
 	}
-	fill := "━"
-	switch left {
-	case "├":
-		left, right = "┝", "┥"
-	default:
-		// Rounded corners have no heavy form, so the ends stay as they are
-		// and only the fill thickens.
-		fill = "─"
-	}
-	return lipgloss.NewStyle().Foreground(accent).Bold(true).Render(left + strings.Repeat(fill, width-2) + right)
+	return lipgloss.NewStyle().Foreground(color).Render(left + strings.Repeat("─", width-2) + right)
 }
 
 // renderTicketBlock frames one ticket's content lines — a box in the large

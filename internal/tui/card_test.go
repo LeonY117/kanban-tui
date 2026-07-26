@@ -114,6 +114,19 @@ func TestLargeLayoutBoxesEachTicket(t *testing.T) {
 	}
 }
 
+// An unfocused column has no selection, so none of its rules may render as
+// the heavy accented selection rule.
+func TestUnfocusedColumnHasNoHeavyRule(t *testing.T) {
+	m := testModel(t, "first", "second", "third")
+	block := m.renderTicketList(m.board.Tickets, 2, 30, 20, -1, blue, point{})
+	if strings.Contains(block, "━") {
+		t.Errorf("unfocused column drew a selection rule:\n%s", block)
+	}
+	if strings.Contains(block, "▌") {
+		t.Errorf("unfocused column drew a selection bar:\n%s", block)
+	}
+}
+
 func TestOverflowingListFillsThePanel(t *testing.T) {
 	m := testModel(t, "first", "second", "third", "fourth", "fifth")
 

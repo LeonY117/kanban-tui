@@ -64,6 +64,7 @@ var keys = keyMap{
 	MoveDown:  key.NewBinding(key.WithKeys("J"), key.WithHelp("J", "move down")),
 	Edit:      key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
 	Move:      key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "move")),
+	Copy:      key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy")),
 	// Terminals don't report shift+enter distinctly without the kitty
 	// keyboard protocol (bubbletea v1 doesn't speak it). Ghostty is
 	// configured to send ESC CR for shift+enter, which arrives as

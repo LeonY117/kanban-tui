@@ -142,7 +142,11 @@ func (m *Model) renderCardStack(tickets []model.Ticket, colIdx, width, height, c
 	var lines []string
 	full := -1 // last block that fitted in its entirety
 	for i := start; i < len(tickets) && len(lines) < height; i++ {
-		block := renderTicketBlock(contents[i], boxed, i == cursor, i-1 == cursor, inner, pad, rule, accent)
+		// cursor is -1 when nothing is selected, so the i-1 comparison has to
+		// be guarded — otherwise the first ticket reads its own top rule as
+		// "the block above me is selected" and draws it heavy.
+		afterSelected := cursor >= 0 && i-1 == cursor
+		block := renderTicketBlock(contents[i], boxed, i == cursor, afterSelected, inner, pad, rule, accent)
 		room := height - len(lines)
 		if len(block) > room {
 			block = block[:room]

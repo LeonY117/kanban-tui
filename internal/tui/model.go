@@ -2670,10 +2670,20 @@ func renderPanel(title string, content string, width, height int, borderColor li
 	if boldTitle {
 		titleStyle = titleStyle.Bold(true)
 	}
+	// A title longer than the panel used to push the top border past the
+	// requested width. Mouse zones are registered at the width we asked for, so
+	// every column right of an overlong title sat one cell off from where it
+	// was drawn, and clicks near the boundary hit the wrong column.
+	maxTitle := innerWidth - 1
+	if maxTitle < 0 {
+		maxTitle = 0
+	}
+	if lipgloss.Width(title) > maxTitle {
+		title = ansi.Truncate(title, maxTitle, "…")
+	}
 	renderedTitle := titleStyle.Render(title)
 
-	titleLen := len([]rune(title))
-	remaining := innerWidth - 1 - titleLen
+	remaining := innerWidth - 1 - lipgloss.Width(title)
 	if remaining < 0 {
 		remaining = 0
 	}
@@ -3066,12 +3076,32 @@ func (m *Model) viewColumn() string {
 
 	innerWidth := m.width - 2
 
-	var lines []string
 	cursor := m.cursors[m.focusedCol]
+
+	// The zoomed view scrolls on the same sticky window as the column it zooms,
+	// and registers the same click targets — without them the cursor could walk
+	// off the bottom of the rendered slice and the mouse did nothing here.
+	// A ticket costs one row, two when the cursor's description shows beneath.
+	costs := make([]int, len(tickets))
 	for i, t := range tickets {
-		if len(lines) >= availHeight-2 {
+		costs[i] = 1
+		if i == cursor && t.Description != "" {
+			costs[i] = 2
+		}
+	}
+	body := availHeight - 2
+	if body < 1 {
+		body = 1
+	}
+	start := m.scrollWindow(m.focusedCol, costs, cursor, body)
+
+	var lines []string
+	for i := start; i < len(tickets); i++ {
+		t := tickets[i]
+		if len(lines) >= body {
 			break
 		}
+		rowY := len(lines)
 
 		titleText := t.Title
 		marker := "   "
@@ -3120,6 +3150,9 @@ func (m *Model) viewColumn() string {
 				PaddingLeft(4).
 				Render(desc))
 		}
+
+		// Panel border: body starts one row down and one column in.
+		m.addTicketZone(m.focusedCol, i, 1, 1+rowY, innerWidth, len(lines)-rowY)
 	}
 
 	content := strings.Join(lines, "\n")

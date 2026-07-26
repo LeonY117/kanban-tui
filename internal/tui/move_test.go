@@ -2,6 +2,7 @@ package tui
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/LeonY117/kanban-tui/internal/model"
@@ -113,5 +114,34 @@ func TestMovePopupSameBoardChangesColumn(t *testing.T) {
 	}
 	if m.focusedCol != 3 {
 		t.Errorf("focus followed to column %d, want 3", m.focusedCol)
+	}
+}
+
+// A popup shorter than its list must not leave click targets where its dropped
+// rows would have gone — those land on the bottom border and the backdrop.
+func TestMovePopupZonesStayInsideThePanel(t *testing.T) {
+	m := testModel(t, "one")
+	m.resetZones()
+
+	m.moveRows = nil
+	for i := 0; i < 20; i++ {
+		m.moveRows = append(m.moveRows, moveRow{label: "board", isBoard: true})
+	}
+
+	const height = 6
+	origin := point{x: 4, y: 3}
+	panel := m.renderMovePopup(40, height, origin)
+
+	if h := len(strings.Split(panel, "\n")); h != height {
+		t.Fatalf("popup rendered %d rows, want %d", h, height)
+	}
+	for _, z := range m.zones {
+		if z.kind != zoneMoveRow {
+			continue
+		}
+		if z.y < origin.y+1 || z.y > origin.y+height-2 {
+			t.Errorf("move row zone at y=%d is outside the panel body (rows %d..%d)",
+				z.y, origin.y+1, origin.y+height-2)
+		}
 	}
 }

@@ -275,10 +275,22 @@ func (m *Model) renderMovePopup(width, height int, origin point) string {
 	rowY := origin.y + 1
 	rowX := origin.x + 2
 
+	// renderPanel clips content to its inner height. Registering a zone for a
+	// row it drops would put a click target over the popup's bottom border and
+	// the backdrop below it, so clicking apparently empty space would pick a
+	// board that was never shown.
+	visible := height - 2
+	if visible < 0 {
+		visible = 0
+	}
+
 	var lines []string
 	for i, r := range m.moveRows {
-		if r.isOther && len(lines) > 0 {
+		if r.isOther && len(lines) > 0 && len(lines) < visible {
 			lines = append(lines, dimStyle.Render(strings.Repeat("─", innerWidth)))
+		}
+		if len(lines) >= visible {
+			break
 		}
 		m.addZone(hitZone{
 			kind: zoneMoveRow,

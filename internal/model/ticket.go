@@ -134,11 +134,21 @@ func (b *Board) FindByID(id string) (*Ticket, int) {
 		implied = strings.ToUpper(b.Prefix) + upper
 	}
 
+	// Exact matches first, across the whole board, before any implied-prefix
+	// match. A ticket moved in from another board keeps its id, so a board can
+	// hold both `1` and `KA1` — and then `update 1` meant whichever came first
+	// in board order. What the user typed wins over what the board implies.
 	for i := range b.Tickets {
 		t := &b.Tickets[i]
-		short := strings.ToUpper(t.ShortID)
-		if t.ID == lower || short == upper || (implied != "" && short == implied) {
+		if t.ID == lower || strings.ToUpper(t.ShortID) == upper {
 			return t, i
+		}
+	}
+	if implied != "" {
+		for i := range b.Tickets {
+			if strings.ToUpper(b.Tickets[i].ShortID) == implied {
+				return &b.Tickets[i], i
+			}
 		}
 	}
 	// UUID-prefix matching is the legacy path, tried last so a short id can

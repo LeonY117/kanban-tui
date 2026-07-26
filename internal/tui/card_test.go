@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -382,4 +383,59 @@ func TestDescriptionScrollClampsToContent(t *testing.T) {
 // mouseAt builds a left-click / wheel event at a cell.
 func mouseAt(x, y int) tea.MouseMsg {
 	return tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}
+}
+
+// renderPanel must honour the width it is given whatever its title. Mouse
+// zones are registered at the requested width, so a panel that renders wider
+// silently shifts every zone to its right.
+func TestPanelHonoursItsWidth(t *testing.T) {
+	long := "[2] Doing — a title far longer than the panel it belongs to (12)"
+	for _, width := range []int{8, 15, 16, 30, 80} {
+		panel := renderPanel(long, "body", width, 5, blue, true)
+		for i, line := range strings.Split(panel, "\n") {
+			if w := lipgloss.Width(line); w != width {
+				t.Errorf("width %d, line %d: rendered %d cells (%q)", width, i, w, ansi.Strip(line))
+			}
+		}
+	}
+}
+
+// The zoomed single-column view (`+`) used to render from ticket zero with a
+// hard cut at the panel height: select past the bottom and the cursor was
+// simply not on screen, and no click target existed to bring it back.
+func TestZoomedColumnScrollsAndRegistersZones(t *testing.T) {
+	titles := make([]string, 40)
+	for i := range titles {
+		titles[i] = fmt.Sprintf("ticket %02d", i)
+	}
+	m := testModel(t, titles...)
+	m.view = columnView
+	m.focusedCol = 1 // Todo, where testModel puts them
+	m.height, m.width = 20, 80
+
+	last := len(m.board.ByStatus(model.StatusTodo)) - 1
+	m.cursors[m.focusedCol] = last
+
+	m.resetZones()
+	view := ansi.Strip(m.View())
+
+	if !strings.Contains(view, titles[last]) {
+		t.Errorf("cursor at the last ticket is off screen:\n%s", view)
+	}
+	var zoned bool
+	for _, z := range m.zones {
+		if z.kind == zoneTicket && z.idx == last {
+			zoned = true
+		}
+	}
+	if !zoned {
+		t.Error("no click target registered for the selected ticket in the zoomed view")
+	}
+
+	// And back up: the window has to follow the cursor in both directions.
+	m.cursors[m.focusedCol] = 0
+	m.resetZones()
+	if view := ansi.Strip(m.View()); !strings.Contains(view, titles[0]) {
+		t.Errorf("cursor back at the first ticket is off screen:\n%s", view)
+	}
 }

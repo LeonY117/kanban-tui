@@ -3,6 +3,7 @@ package store
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/LeonY117/kanban-tui/internal/model"
 )
@@ -191,5 +192,49 @@ func TestMoveKeepsIDWhenOnlyAUUIDPrefixMatches(t *testing.T) {
 	}
 	if moved.ShortID != ticket.ShortID {
 		t.Errorf("moved ticket was renamed %s → %s on a UUID-prefix false collision", ticket.ShortID, moved.ShortID)
+	}
+}
+
+// Holding both boards' locks is what makes a move atomic, and two locks invite
+// deadlock: a move A→B holding A's lock while a move B→A holds B's would wait
+// on each other forever. Ordering the acquisition by board path prevents it.
+func TestOppositeMovesDoNotDeadlock(t *testing.T) {
+	sandboxRoot(t)
+	for _, name := range []string{"alpha", "beta"} {
+		if err := CreateSprint(name, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	alpha, err := NewSprint("alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	beta, err := NewSprint("beta")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	there, err := alpha.Add("there", "", model.StatusTodo, nil, "", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := beta.Add("back", "", model.StatusTodo, nil, "", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 2)
+	go func() { done <- MoveTicket(alpha, beta, there.ShortID, model.StatusDoing) }()
+	go func() { done <- MoveTicket(beta, alpha, back.ShortID, model.StatusDoing) }()
+
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("move %d: %v", i, err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("opposite moves deadlocked")
+		}
 	}
 }

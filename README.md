@@ -50,6 +50,7 @@ Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden
 | `+` / `-` | Zoom in / out (board → split → column / detail) |
 | `[` / `]` | Switch panels in split view |
 | `v` | Ticket size — cards (default) → large → condensed |
+| `z` | Frame — rules (default) / shared-border table |
 | `V` | Toggle columns / rows layout |
 | `x` | Archive selected ticket |
 | `X` | Open archive browser |
@@ -69,8 +70,9 @@ a fallback.
 `shortid #tags ● assignee` line. **Large** adds a three-line description
 preview and the last-edited date. **Condensed** is one line per ticket.
 
-At card and condensed size, tickets are separated by a rule above each block
-with a closing rule under the last. Large gives each ticket its own box —
+At card size, tickets are separated by a rule above each block with a closing
+rule under the last; `z` swaps that for a shared-border table, where each
+ticket is a row of one continuous box. Large gives each ticket its own box —
 at that size the extra air reads better.
 
 Columns scroll stickily: the cursor travels inside the visible window and only

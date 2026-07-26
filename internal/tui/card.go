@@ -42,6 +42,30 @@ func (l ticketLayout) label() string {
 	}
 }
 
+// frameStyle is how ticket blocks are separated. Rules is the current look;
+// table is the earlier shared-border one, kept behind `z` to compare the two
+// in real use.
+type frameStyle int
+
+const (
+	frameRules frameStyle = iota
+	frameTable
+)
+
+func (f frameStyle) next() frameStyle {
+	if f == frameRules {
+		return frameTable
+	}
+	return frameRules
+}
+
+func (f frameStyle) label() string {
+	if f == frameTable {
+		return "table frame"
+	}
+	return "rule frame"
+}
+
 // Title and description line caps per layout.
 const (
 	cardTitleMaxLines  = 2
@@ -95,8 +119,13 @@ func (m *Model) renderCardStack(tickets []model.Ticket, colIdx, width, height, c
 	if width < 4 {
 		width = 4
 	}
-	inner := width - 2 // 1 col of gutter (or border) on each side
 	boxed := m.layout == layoutLarge
+	table := m.frame == frameTable && !boxed
+
+	inner := width - 2 // 1 col of gutter (or border) on each side
+	if table {
+		inner = width - 4 // 2 border cols + 1 col of padding each side
+	}
 
 	chrome := 1 // the rule above each block
 	if boxed {
@@ -146,7 +175,13 @@ func (m *Model) renderCardStack(tickets []model.Ticket, colIdx, width, height, c
 		// be guarded — otherwise the first ticket reads its own top rule as
 		// "the block above me is selected" and draws it heavy.
 		afterSelected := cursor >= 0 && i-1 == cursor
-		block := renderTicketBlock(contents[i], boxed, i == cursor, afterSelected, inner, pad, rule, accent)
+		var block []string
+		switch {
+		case table:
+			block = renderTableBlock(contents[i], i == start, i == cursor, afterSelected, width, inner, pad, accent)
+		default:
+			block = renderTicketBlock(contents[i], boxed, i == cursor, afterSelected, inner, pad, rule, accent)
+		}
 		room := height - len(lines)
 		if len(block) > room {
 			block = block[:room]
@@ -157,9 +192,52 @@ func (m *Model) renderCardStack(tickets []model.Ticket, colIdx, width, height, c
 		lines = append(lines, block...)
 	}
 	if !boxed && len(lines) > 0 && len(lines) < height {
-		lines = append(lines, rule(full == cursor))
+		if table {
+			lines = append(lines, tableRule("╰", "╯", width, full == cursor, accent))
+		} else {
+			lines = append(lines, rule(full == cursor))
+		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// renderTableBlock draws a ticket as a row of one continuous table: each block
+// opens with the rule that also closes its predecessor, so neighbours share a
+// border line.
+func renderTableBlock(content []string, first, selected, afterSelected bool, width, inner int, pad func(string) string, accent lipgloss.Color) []string {
+	left, right := "├", "┤"
+	if first {
+		left, right = "╭", "╮"
+	}
+	block := []string{tableRule(left, right, width, selected || afterSelected, accent)}
+
+	side := lipgloss.NewStyle().Foreground(dimGray)
+	if selected {
+		side = lipgloss.NewStyle().Foreground(accent).Bold(true)
+	}
+	for _, l := range content {
+		block = append(block, side.Render("│")+" "+pad(l)+" "+side.Render("│"))
+	}
+	return block
+}
+
+// tableRule is one horizontal edge of the table. The edges bracketing the
+// selected row go heavy and accented — colour alone doesn't carry in every
+// terminal theme, and the frame has no bar to fall back on.
+func tableRule(left, right string, width int, selected bool, accent lipgloss.Color) string {
+	if !selected {
+		return lipgloss.NewStyle().Foreground(dimGray).Render(left + strings.Repeat("─", width-2) + right)
+	}
+	fill := "━"
+	switch left {
+	case "├":
+		left, right = "┝", "┥"
+	default:
+		// Rounded corners have no heavy form, so the ends stay as they are
+		// and only the fill thickens.
+		fill = "─"
+	}
+	return lipgloss.NewStyle().Foreground(accent).Bold(true).Render(left + strings.Repeat(fill, width-2) + right)
 }
 
 // renderTicketBlock frames one ticket's content lines — a box in the large

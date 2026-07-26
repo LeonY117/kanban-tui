@@ -116,6 +116,26 @@ func TestLargeLayoutBoxesEachTicket(t *testing.T) {
 
 // An unfocused column has no selection, so none of its rules may render as
 // the heavy accented selection rule.
+// The table frame (z) has to mark its selection as clearly as the rule frame.
+func TestTableFrameMarksSelection(t *testing.T) {
+	m := testModel(t, "first", "second", "third")
+	m.frame = frameTable
+	block := m.renderTicketList(m.board.Tickets, 1, 30, 20, 1, blue, point{})
+	lines := strings.Split(block, "\n")
+
+	for i, l := range lines {
+		if w := lipgloss.Width(l); w != 30 {
+			t.Errorf("line %d width = %d, want 30 (%q)", i, w, l)
+		}
+	}
+	if !strings.Contains(block, "├") && !strings.Contains(block, "┝") {
+		t.Errorf("neighbouring rows should share a junction rule:\n%s", block)
+	}
+	if !strings.Contains(block, "┝") || !strings.Contains(block, "━") {
+		t.Errorf("selected row is not bracketed by a heavy rule:\n%s", block)
+	}
+}
+
 func TestUnfocusedColumnHasNoHeavyRule(t *testing.T) {
 	m := testModel(t, "first", "second", "third")
 	block := m.renderTicketList(m.board.Tickets, 2, 30, 20, -1, blue, point{})

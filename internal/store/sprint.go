@@ -19,6 +19,7 @@ var sprintNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 type SprintInfo struct {
 	Name         string
+	Prefix       string
 	TicketCount  int
 	StatusCounts map[model.Status]int
 	LastModified time.Time
@@ -90,11 +91,21 @@ func IsSprintArchived(name string) bool {
 	return exists && archived
 }
 
-// CreateSprint creates a new empty sprint. Errors if the sprint already
-// exists, even if archived.
-func CreateSprint(name string) error {
+// CreateSprint makes a new sprint board. An empty prefix derives one from the
+// name; an explicit one is taken as given, including when another board
+// already uses it — sharing a prefix just shares its number line. It errors if
+// the sprint already exists, even if archived.
+func CreateSprint(name, prefix string) error {
 	if err := ValidateSprintName(name); err != nil {
 		return err
+	}
+	if prefix == "" {
+		prefix = DerivePrefix(name)
+	} else {
+		if err := ValidatePrefix(prefix); err != nil {
+			return err
+		}
+		prefix = strings.ToUpper(prefix)
 	}
 	if _, archived, exists, _ := resolveSprintDir(name); exists {
 		if archived {
@@ -102,7 +113,7 @@ func CreateSprint(name string) error {
 		}
 		return fmt.Errorf("sprint %q already exists", name)
 	}
-	return New(sprintDir(name)).Save(&model.Board{Version: 1, Tickets: []model.Ticket{}})
+	return New(sprintDir(name)).Save(&model.Board{Version: 1, Prefix: prefix, Tickets: []model.Ticket{}})
 }
 
 // RemoveSprint deletes a sprint's entire directory, whether active or
@@ -195,6 +206,7 @@ func ListSprints() ([]SprintInfo, error) {
 		}
 		sprints = append(sprints, SprintInfo{
 			Name:         logicalName,
+			Prefix:       EffectivePrefix(board, logicalName),
 			TicketCount:  len(board.Tickets),
 			StatusCounts: CountByStatus(board),
 			LastModified: info.ModTime(),

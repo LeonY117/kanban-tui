@@ -39,13 +39,18 @@ Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden
 | `j` `k` | Move between tickets |
 | `H` `L` | Move selected ticket to adjacent column |
 | `J` `K` | Reorder selected ticket up/down within its column |
+| `m` | Move ticket — pick a column, or another board and its column |
+| `c` | Copy to clipboard — the ticket id from a list, or the focused title / description |
 | `a` | Add a new ticket (floating popup) |
 | `e` / `enter` | Edit selected field |
-| `esc` | Stop editing / step back |
+| `enter` (while editing) | Save and stop editing — in the add popup, create the ticket |
+| `shift+enter` | New line inside a description |
+| `esc` | Stop editing / step back (the add popup asks before discarding) |
 | `0`-`4` | Jump to column (Backlog / Todo / Doing / Done / Hold) |
 | `+` / `-` | Zoom in / out (board → split → column / detail) |
 | `[` / `]` | Switch panels in split view |
-| `v` | Toggle layout |
+| `v` | Ticket size — cards (default) → large → condensed |
+| `V` | Toggle columns / rows layout |
 | `x` | Archive selected ticket |
 | `X` | Open archive browser |
 | `u` | Unarchive (in archive browser) |
@@ -53,6 +58,39 @@ Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden
 | `d` | Delete ticket (in detail view) |
 | `?` | Help |
 | `q` | Quit |
+
+`shift+enter` only reaches the TUI if your terminal sends an escape for it —
+in Ghostty, `keybind = shift+enter=text:\x1b\r`. `ctrl+j` works everywhere as
+a fallback.
+
+### Ticket sizes
+
+`v` cycles three densities. **Cards** (default) show the title and a
+`shortid #tags ● assignee` line. **Large** adds a three-line description
+preview and the last-edited date. **Condensed** is one line per ticket.
+
+At card size, each ticket is a row in one continuous table with shared borders.
+The selected row closes into its own rounded box. Large gives every ticket its
+own box — at that size the extra air reads better.
+
+Columns scroll stickily: the cursor travels inside the visible window and only
+pushes it once it reaches an edge, so scrolling back up starts exactly where
+scrolling down did. The mouse wheel banks a few notches per ticket step, to
+match the one-line-per-notch feel of scrolling a description.
+
+In card and large layouts, the ticket under the cursor gets an accented border
+and its short id in the column colour. Condensed layout uses an accent marker
+beside the title. Frames use light box-drawing glyphs throughout. None of that
+changes a block's height, so moving the cursor never shifts the list. The ticket
+that straddles the bottom of a column is cropped mid-block rather than dropped,
+so the column always reads as continuing past the fold.
+
+### Mouse
+
+The mouse is live: click a ticket to select it, click a column to focus it,
+click a field in the detail pane to jump to it. The wheel moves through tickets
+in a list or scrolls the description body under the pointer. Hold `shift` to
+select text as usual.
 
 ### Views
 
@@ -86,6 +124,28 @@ kanban archive
 kanban archive --before 2026-04-07
 ```
 
+## Ticket ids
+
+New tickets get sequential ids: bare numbers on the main board (`42`), and a
+letter prefix plus a number on a sprint (`KA7`). The prefix defaults to the
+first two letters of the board name; pass `--prefix` at creation to choose
+your own.
+
+```bash
+kanban sprints new kb-tools                  # ids KB1, KB2, …
+kanban sprints new kb-tools --prefix KT      # ids KT1, KT2, …
+```
+
+Prefixes are allowed to collide, on purpose. Numbering is tracked per prefix
+in `~/.kanban/counters.json`, not per board, so two boards sharing a prefix
+continue one another's line — archive a board at `K12`, start another on `K`,
+and its first ticket is `K13`. That keeps every id you've ever handed out
+unique, including against the archive.
+
+On a prefixed board the prefix is implied, so `kanban --sprint kanban update 7`
+resolves `KA7`. Ids match case-insensitively, and tickets created before this
+scheme keep their hex ids (`4ad9b9`), which still resolve.
+
 ## Sprint boards
 
 A sprint board is an isolated second board with its own tickets, archive, and lock — useful for time-boxed pushes or parallel tracks you want to keep off the main board.
@@ -102,7 +162,7 @@ kanban sprints unarchive demo-april            # restore
 kanban sprints rm demo-april                   # delete
 ```
 
-Sprint names: `[A-Za-z0-9_-]`, 1–64 chars. From the TUI, `tab` opens a board picker that switches between main and any active sprint.
+Sprint names: `[A-Za-z0-9_-]`, 1–64 chars. From the TUI, `tab` opens a board picker that switches between main and any active sprint. The bottom-left badge shows the current board and, as a dim hint beside it, the prefix its next ticket will carry — `kanban [KA]`, or `main [#]` for bare numbers.
 
 ## Storage
 
@@ -112,6 +172,7 @@ Everything lives in `~/.kanban/`:
 - `archive.json` — archived tickets.
 - `.board.lock` — file lock for concurrent access (so the TUI and a CLI-driven agent don't trample each other).
 - `sprints/<name>/` — same layout, per sprint.
+- `counters.json` — the last ticket number issued per id prefix.
 
 Override the root with the `KANBAN_FILE` env var.
 

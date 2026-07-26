@@ -1,0 +1,240 @@
+package store
+
+import (
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/LeonY117/kanban-tui/internal/model"
+)
+
+// sandboxRoot points every board path — main, sprints and the shared id
+// counters — at a temp dir, so tests never touch the real ~/.kanban.
+func sandboxRoot(t *testing.T) {
+	t.Helper()
+	t.Setenv("KANBAN_FILE", filepath.Join(t.TempDir(), "board.json"))
+}
+
+func TestMoveTicketAcrossBoards(t *testing.T) {
+	sandboxRoot(t)
+	src := New("")
+	if err := CreateSprint("demo", ""); err != nil {
+		t.Fatal(err)
+	}
+	dst, err := NewSprint("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ticket, err := src.Add("hello", "body", model.StatusTodo, []string{"x"}, "leon", "test")
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	if err := MoveTicket(src, dst, ticket.ID, model.StatusDoing); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+
+	srcBoard, err := src.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(srcBoard.Tickets) != 0 {
+		t.Fatalf("source board still holds %d tickets", len(srcBoard.Tickets))
+	}
+
+	dstBoard, err := dst.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dstBoard.Tickets) != 1 {
+		t.Fatalf("destination board holds %d tickets, want 1", len(dstBoard.Tickets))
+	}
+	moved := dstBoard.Tickets[0]
+	if moved.ID != ticket.ID {
+		t.Errorf("id changed: %s → %s", ticket.ID, moved.ID)
+	}
+	if moved.Status != model.StatusDoing {
+		t.Errorf("status = %s, want doing", moved.Status)
+	}
+	if moved.Title != "hello" || moved.Description != "body" || moved.AssignedTo != "leon" {
+		t.Errorf("content not preserved: %+v", moved)
+	}
+	if moved.ShortID == "" {
+		t.Error("short id not re-derived")
+	}
+}
+
+func TestMoveTicketSameBoardIsStatusChange(t *testing.T) {
+	sandboxRoot(t)
+	s := New("")
+	ticket, err := s.Add("hello", "", model.StatusTodo, nil, "", "test")
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	if err := MoveTicket(s, s, ticket.ID, model.StatusDone); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+
+	board, err := s.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(board.Tickets) != 1 {
+		t.Fatalf("board holds %d tickets, want 1", len(board.Tickets))
+	}
+	if board.Tickets[0].Status != model.StatusDone {
+		t.Errorf("status = %s, want done", board.Tickets[0].Status)
+	}
+	if board.Tickets[0].ShortID != ticket.ShortID {
+		t.Errorf("short id changed on a same-board move")
+	}
+}
+
+// A move that dies between the destination write and the source removal leaves
+// the ticket on both boards, and the obvious response is to run it again. The
+// retry has to finish the move, not append a second copy carrying the first
+// one's UUID — two tickets with one UUID can't be told apart by any lookup.
+func TestRetryingAnInterruptedMoveDoesNotDuplicate(t *testing.T) {
+	sandboxRoot(t)
+	src := New("")
+	if err := CreateSprint("demo", ""); err != nil {
+		t.Fatal(err)
+	}
+	dst, err := NewSprint("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ticket, err := src.Add("hello", "body", model.StatusTodo, nil, "", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate the interrupted first attempt: the destination has the ticket,
+	// the source still does too.
+	board, err := dst.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	board.Tickets = append(board.Tickets, *ticket)
+	if err := dst.Save(board); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := MoveTicket(src, dst, ticket.ShortID, model.StatusDoing); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+
+	dstBoard, err := dst.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(dstBoard.Tickets); n != 1 {
+		t.Fatalf("destination has %d tickets, want 1 — the retry duplicated it", n)
+	}
+	srcBoard, err := src.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(srcBoard.Tickets) != 0 {
+		t.Errorf("source still holds the ticket after the retry: %+v", srcBoard.Tickets)
+	}
+}
+
+// Collision detection must compare short ids exactly. FindByID also matches
+// UUID prefixes, so moving a ticket whose short id is "1" into a board holding
+// an unrelated ticket whose UUID merely starts with "1" used to look like a
+// collision and renamed the moved ticket for no reason.
+func TestMoveKeepsIDWhenOnlyAUUIDPrefixMatches(t *testing.T) {
+	sandboxRoot(t)
+	src := New("")
+	if err := CreateSprint("demo", "KA"); err != nil {
+		t.Fatal(err)
+	}
+	dst, err := NewSprint("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ticket, err := src.Add("moved", "", model.StatusTodo, nil, "", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A destination ticket whose UUID starts with the moved ticket's short id.
+	board, err := dst.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	board.Tickets = append(board.Tickets, model.Ticket{
+		ID:      ticket.ShortID + "0000000-0000-0000-0000-000000000000"[len(ticket.ShortID)-1:],
+		ShortID: "KA9",
+		Title:   "unrelated",
+		Status:  model.StatusTodo,
+	})
+	if err := dst.Save(board); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := MoveTicket(src, dst, ticket.ShortID, model.StatusDoing); err != nil {
+		t.Fatal(err)
+	}
+
+	dstBoard, err := dst.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, _ := dstBoard.FindByUUID(ticket.ID)
+	if moved == nil {
+		t.Fatal("moved ticket is not on the destination board")
+	}
+	if moved.ShortID != ticket.ShortID {
+		t.Errorf("moved ticket was renamed %s → %s on a UUID-prefix false collision", ticket.ShortID, moved.ShortID)
+	}
+}
+
+// Holding both boards' locks is what makes a move atomic, and two locks invite
+// deadlock: a move A→B holding A's lock while a move B→A holds B's would wait
+// on each other forever. Ordering the acquisition by board path prevents it.
+func TestOppositeMovesDoNotDeadlock(t *testing.T) {
+	sandboxRoot(t)
+	for _, name := range []string{"alpha", "beta"} {
+		if err := CreateSprint(name, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	alpha, err := NewSprint("alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	beta, err := NewSprint("beta")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	there, err := alpha.Add("there", "", model.StatusTodo, nil, "", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := beta.Add("back", "", model.StatusTodo, nil, "", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 2)
+	go func() { done <- MoveTicket(alpha, beta, there.ShortID, model.StatusDoing) }()
+	go func() { done <- MoveTicket(beta, alpha, back.ShortID, model.StatusDoing) }()
+
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("move %d: %v", i, err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("opposite moves deadlocked")
+		}
+	}
+}

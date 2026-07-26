@@ -80,6 +80,11 @@ func loadCounters() (map[string]int, error) {
 		// an empty map, which reseeds from the boards on disk below.
 		return map[string]int{}, nil
 	}
+	if counters == nil {
+		// `null` is valid JSON and unmarshals into a nil map, which panics on
+		// the first assignment rather than erroring.
+		return map[string]int{}, nil
+	}
 	return counters, nil
 }
 
@@ -121,7 +126,11 @@ func NextTicketID(prefix string) (string, error) {
 		if !ok {
 			// First use of this prefix (or a lost counter file): pick up from
 			// the highest id already issued anywhere on disk.
-			n = highestIssued(prefix)
+			seed, err := highestIssued(prefix)
+			if err != nil {
+				return err
+			}
+			n = seed
 		}
 		n++
 		counters[prefix] = n
@@ -150,7 +159,12 @@ func withCountersLock(fn func() error) error {
 // highestIssued scans every board and archive on disk for ids carrying this
 // prefix and returns the largest number found. Only runs when the counter file
 // has no entry for the prefix, so the cost lands once per prefix.
-func highestIssued(prefix string) int {
+//
+// A board it cannot read is an error, not a zero: skipping one silently would
+// hand out an id that board already uses, and duplicate ids are precisely what
+// the counter exists to prevent. Better to refuse to create the ticket and say
+// why.
+func highestIssued(prefix string) (int, error) {
 	max := 0
 	consider := func(board *model.Board) {
 		if board == nil {
@@ -166,27 +180,40 @@ func highestIssued(prefix string) int {
 		}
 	}
 
-	scan := func(s *Store) {
-		if b, err := s.Load(); err == nil {
-			consider(b)
+	scan := func(s *Store) error {
+		b, err := s.Load()
+		if err != nil {
+			return fmt.Errorf("cannot read %s to seed the %q counter: %w", s.BoardPath(), prefix, err)
 		}
-		if b, err := s.LoadArchive(); err == nil {
-			consider(b)
+		consider(b)
+		a, err := s.LoadArchive()
+		if err != nil {
+			return fmt.Errorf("cannot read the archive beside %s to seed the %q counter: %w", s.BoardPath(), prefix, err)
 		}
+		consider(a)
+		return nil
 	}
 
-	scan(New(""))
+	if err := scan(New("")); err != nil {
+		return 0, err
+	}
 	root := filepath.Join(defaultRoot(), sprintsSubdir)
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		return max
+		if os.IsNotExist(err) {
+			return max, nil
+		}
+		return 0, err
 	}
 	for _, e := range entries {
-		if e.IsDir() {
-			scan(New(filepath.Join(root, e.Name())))
+		if !e.IsDir() {
+			continue
+		}
+		if err := scan(New(filepath.Join(root, e.Name()))); err != nil {
+			return 0, err
 		}
 	}
-	return max
+	return max, nil
 }
 
 // isLegacyShortID reports whether a ticket carries a pre-prefix id — six or

@@ -12,6 +12,7 @@ import (
 	"github.com/LeonY117/kanban-tui/internal/store"
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/runeutil"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -526,10 +527,20 @@ func wrapDesc(text string, width int) string {
 		width = 1
 	}
 	var out []string
-	for _, line := range strings.Split(text, "\n") {
+	for _, line := range strings.Split(sanitizeDesc(text), "\n") {
 		out = append(out, wrapDescLine(line, width)...)
 	}
 	return strings.Join(out, "\n")
+}
+
+// sanitizeDesc runs the description through the same sanitizer the textarea
+// applies on SetValue. Wrapping identically isn't enough on its own: the editor
+// expands every tab to four spaces and drops control characters, so a
+// description carrying either would still re-flow the moment editing started —
+// the exact bug the wrap port exists to prevent. Descriptions arrive from the
+// CLI and from agents, so neither is hypothetical.
+func sanitizeDesc(text string) string {
+	return string(runeutil.NewSanitizer().Sanitize([]rune(text)))
 }
 
 // wrapDescLine is a port of bubbles' textarea.wrap (MIT). Reimplementing it by

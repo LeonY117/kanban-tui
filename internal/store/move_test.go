@@ -90,3 +90,106 @@ func TestMoveTicketSameBoardIsStatusChange(t *testing.T) {
 		t.Errorf("short id changed on a same-board move")
 	}
 }
+
+// A move that dies between the destination write and the source removal leaves
+// the ticket on both boards, and the obvious response is to run it again. The
+// retry has to finish the move, not append a second copy carrying the first
+// one's UUID — two tickets with one UUID can't be told apart by any lookup.
+func TestRetryingAnInterruptedMoveDoesNotDuplicate(t *testing.T) {
+	sandboxRoot(t)
+	src := New("")
+	if err := CreateSprint("demo", ""); err != nil {
+		t.Fatal(err)
+	}
+	dst, err := NewSprint("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ticket, err := src.Add("hello", "body", model.StatusTodo, nil, "", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate the interrupted first attempt: the destination has the ticket,
+	// the source still does too.
+	board, err := dst.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	board.Tickets = append(board.Tickets, *ticket)
+	if err := dst.Save(board); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := MoveTicket(src, dst, ticket.ShortID, model.StatusDoing); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+
+	dstBoard, err := dst.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(dstBoard.Tickets); n != 1 {
+		t.Fatalf("destination has %d tickets, want 1 — the retry duplicated it", n)
+	}
+	srcBoard, err := src.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(srcBoard.Tickets) != 0 {
+		t.Errorf("source still holds the ticket after the retry: %+v", srcBoard.Tickets)
+	}
+}
+
+// Collision detection must compare short ids exactly. FindByID also matches
+// UUID prefixes, so moving a ticket whose short id is "1" into a board holding
+// an unrelated ticket whose UUID merely starts with "1" used to look like a
+// collision and renamed the moved ticket for no reason.
+func TestMoveKeepsIDWhenOnlyAUUIDPrefixMatches(t *testing.T) {
+	sandboxRoot(t)
+	src := New("")
+	if err := CreateSprint("demo", "KA"); err != nil {
+		t.Fatal(err)
+	}
+	dst, err := NewSprint("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ticket, err := src.Add("moved", "", model.StatusTodo, nil, "", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A destination ticket whose UUID starts with the moved ticket's short id.
+	board, err := dst.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	board.Tickets = append(board.Tickets, model.Ticket{
+		ID:      ticket.ShortID + "0000000-0000-0000-0000-000000000000"[len(ticket.ShortID)-1:],
+		ShortID: "KA9",
+		Title:   "unrelated",
+		Status:  model.StatusTodo,
+	})
+	if err := dst.Save(board); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := MoveTicket(src, dst, ticket.ShortID, model.StatusDoing); err != nil {
+		t.Fatal(err)
+	}
+
+	dstBoard, err := dst.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, _ := dstBoard.FindByUUID(ticket.ID)
+	if moved == nil {
+		t.Fatal("moved ticket is not on the destination board")
+	}
+	if moved.ShortID != ticket.ShortID {
+		t.Errorf("moved ticket was renamed %s → %s on a UUID-prefix false collision", ticket.ShortID, moved.ShortID)
+	}
+}

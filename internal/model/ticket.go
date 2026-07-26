@@ -151,6 +151,38 @@ func (b *Board) FindByID(id string) (*Ticket, int) {
 	return nil, -1
 }
 
+// FindByUUID resolves a ticket by its full UUID and nothing else. Used where a
+// caller has to recognise one specific ticket rather than resolve what a human
+// typed — FindByID's prefix and implied-prefix matching are wrong there.
+func (b *Board) FindByUUID(id string) (*Ticket, int) {
+	id = strings.ToLower(strings.TrimSpace(id))
+	for i := range b.Tickets {
+		if b.Tickets[i].ID == id {
+			return &b.Tickets[i], i
+		}
+	}
+	return nil, -1
+}
+
+// ShortIDTaken reports whether a ticket already carries this exact short id,
+// case-insensitively.
+//
+// Deliberately not FindByID: that resolver also matches UUID prefixes, so short
+// id "1" would collide with any ticket whose UUID merely starts with 1 — a
+// false collision that renames a ticket for no reason.
+func (b *Board) ShortIDTaken(shortID string) bool {
+	want := strings.ToUpper(strings.TrimSpace(shortID))
+	if want == "" {
+		return false
+	}
+	for i := range b.Tickets {
+		if strings.ToUpper(b.Tickets[i].ShortID) == want {
+			return true
+		}
+	}
+	return false
+}
+
 func isAllDigits(s string) bool {
 	if s == "" {
 		return false

@@ -43,13 +43,21 @@ func MoveTicket(src, dst *Store, id string, newStatus model.Status) error {
 		if err != nil {
 			return err
 		}
+		// A move interrupted between the two writes leaves the ticket on both
+		// boards, and the natural response is to run it again. Recognising our
+		// own earlier write by UUID makes that retry finish the move instead of
+		// appending a second copy sharing the first one's UUID — which no
+		// lookup could tell apart afterwards.
+		if existing, _ := board.FindByUUID(ticket.ID); existing != nil {
+			return nil
+		}
 		t := ticket
 		t.Status = newStatus
 		t.UpdatedAt = time.Now()
 		// The ticket keeps its id — references to it in commits and notes stay
 		// good — unless the destination already uses that id, in which case it
 		// takes a fresh one from the destination's own prefix.
-		if existing, _ := board.FindByID(t.ShortID); existing != nil {
+		if board.ShortIDTaken(t.ShortID) {
 			newID, err := NextTicketID(dst.ensurePrefix(board))
 			if err != nil {
 				return err
@@ -67,7 +75,10 @@ func MoveTicket(src, dst *Store, id string, newStatus model.Status) error {
 		if err != nil {
 			return err
 		}
-		_, idx := board.FindByID(id)
+		// By UUID, not by what the user typed: the id they gave resolves against
+		// a board that may have changed since, and removing "whatever that
+		// resolves to now" could delete a different ticket than the one moved.
+		_, idx := board.FindByUUID(ticket.ID)
 		if idx < 0 {
 			return nil
 		}

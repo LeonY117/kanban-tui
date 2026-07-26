@@ -178,8 +178,14 @@ func TestUnfocusedColumnHasNoSelection(t *testing.T) {
 	// cursor < 0 once meant the first row read its own top rule as "the block
 	// above me is selected" and drew it accented — a bright line across the top
 	// of every unfocused column.
-	if strings.Contains(block, lipgloss.NewStyle().Foreground(blue).Render("╭")) {
-		t.Errorf("unfocused column drew a selection edge:\n%s", ansi.Strip(block))
+	// tableRule colours the whole ╭────╮ span in one escape, so looking for a
+	// rendered single glyph finds nothing whether or not the rule is accented.
+	// Check what colour each line opens in instead.
+	accent := colorOpener(blue)
+	for i, line := range strings.Split(block, "\n") {
+		if strings.HasPrefix(line, accent) {
+			t.Errorf("line %d of an unfocused column is accented: %q", i, line)
+		}
 	}
 }
 

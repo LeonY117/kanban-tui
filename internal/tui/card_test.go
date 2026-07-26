@@ -118,7 +118,7 @@ func TestLargeLayoutBoxesEachTicket(t *testing.T) {
 // the heavy accented selection rule.
 // The table frame (z) has to mark its selection as clearly as the rule frame.
 func TestTableFrameMarksSelection(t *testing.T) {
-	m := testModel(t, "first", "second", "third")
+	m := testModel(t, "first", "second", "third", "fourth")
 	m.frame = frameTable
 	block := m.renderTicketList(m.board.Tickets, 1, 30, 20, 1, blue, point{})
 	lines := strings.Split(block, "\n")
@@ -129,7 +129,17 @@ func TestTableFrameMarksSelection(t *testing.T) {
 		}
 	}
 	if !strings.Contains(block, "├") {
-		t.Errorf("neighbouring rows should share a junction rule:\n%s", block)
+		t.Errorf("ordinary neighbours should share a junction rule:\n%s", block)
+	}
+	// The selected row is closed into its own box: rounded corners top and
+	// bottom, no T-junction hanging off it.
+	rows := strings.Split(block, "\n")
+	top, bottom := rows[3], rows[6]
+	if !strings.Contains(top, "╭") || !strings.Contains(top, "╮") {
+		t.Errorf("selection top is not rounded: %q", top)
+	}
+	if !strings.Contains(bottom, "╰") || !strings.Contains(bottom, "╯") {
+		t.Errorf("selection bottom is not rounded: %q", bottom)
 	}
 	// Heavy glyphs overhang their cell in many fonts, which makes a selected
 	// row's rules spill past the box they belong to.

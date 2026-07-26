@@ -204,9 +204,20 @@ func (m *Model) renderCardStack(tickets []model.Ticket, colIdx, width, height, c
 // renderTableBlock draws a ticket as a row of one continuous table: each block
 // opens with the rule that also closes its predecessor, so neighbours share a
 // border line.
+//
+// A shared line is only ever a T-junction while it sits between two ordinary
+// rows. When it borders the selected row it belongs to that row alone, so its
+// ends round toward it — closing the selection into a box of its own and
+// leaving the neighbour open on that side, which is what the shared line
+// means anyway.
 func renderTableBlock(content []string, first, selected, afterSelected bool, width, inner int, pad func(string) string, accent lipgloss.Color) []string {
 	left, right := "├", "┤"
-	if first {
+	switch {
+	case selected:
+		left, right = "╭", "╮" // the selection's top edge
+	case afterSelected:
+		left, right = "╰", "╯" // the selection's bottom edge
+	case first:
 		left, right = "╭", "╮"
 	}
 	block := []string{tableRule(left, right, width, selected || afterSelected, accent)}

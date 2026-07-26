@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/LeonY117/kanban-tui/internal/model"
 	"github.com/LeonY117/kanban-tui/internal/store"
@@ -494,7 +495,7 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Move):
 		return m.enterMovePopup()
 	case key.Matches(msg, keys.Copy):
-		m.copyTicketID()
+		m.copyFocused()
 	case key.Matches(msg, keys.ArchiveView):
 		m.enterArchive()
 	case key.Matches(msg, keys.BoardPicker):
@@ -511,18 +512,98 @@ func (m *Model) enterSplit() {
 	m.view = splitView
 }
 
-// setDescWidth sizes a description textarea to wrap at exactly wrapWidth
-// columns — the same width renderDescBody uses when the field is read-only, so
-// entering edit mode doesn't re-flow the text under the cursor.
+// wrapDesc wraps a description the way the textarea does, so the read-only
+// render and the editor agree line for line.
 //
-// The +1 is textarea's own wrapping rule: it breaks a line when the content
-// plus the *following* space exceeds the width it was given, which costs one
-// usable column.
+// Both lipgloss and ansi.Wordwrap break at hyphens, which the textarea never
+// does — "daily-management-report" would split in one mode and jump whole to
+// the next line in the other. This mirrors the textarea instead: whitespace is
+// the only break, a word too long for the width is chopped, and runs of spaces
+// are preserved so indented lists keep their shape.
+func wrapDesc(text string, width int) string {
+	if width < 1 {
+		width = 1
+	}
+	var out []string
+	for _, line := range strings.Split(text, "\n") {
+		out = append(out, wrapDescLine(line, width)...)
+	}
+	return strings.Join(out, "\n")
+}
+
+// wrapDescLine is a port of bubbles' textarea.wrap (MIT). Reimplementing it by
+// eye kept leaving a handful of lines out of step wherever runs of spaces met a
+// break, so the algorithm is mirrored outright: words accumulate with the
+// spaces that follow them, and a break happens when the line plus the pending
+// word plus those spaces would exceed the width.
+func wrapDescLine(line string, width int) []string {
+	var (
+		lines  = [][]rune{{}}
+		word   []rune
+		row    int
+		spaces int
+	)
+	runeWidth := func(r []rune) int { return lipgloss.Width(string(r)) }
+	pad := func(n int) []rune { return []rune(strings.Repeat(" ", n)) }
+
+	for _, r := range line {
+		if unicode.IsSpace(r) {
+			spaces++
+		} else {
+			word = append(word, r)
+		}
+
+		if spaces > 0 {
+			if runeWidth(lines[row])+runeWidth(word)+spaces > width {
+				row++
+				lines = append(lines, []rune{})
+			}
+			lines[row] = append(lines[row], word...)
+			lines[row] = append(lines[row], pad(spaces)...)
+			spaces, word = 0, nil
+			continue
+		}
+
+		// A word on its own too wide for the line moves down whole.
+		lastCharLen := lipgloss.Width(string(word[len(word)-1]))
+		if runeWidth(word)+lastCharLen > width {
+			if len(lines[row]) > 0 {
+				row++
+				lines = append(lines, []rune{})
+			}
+			lines[row] = append(lines[row], word...)
+			word = nil
+		}
+	}
+	if runeWidth(lines[row])+runeWidth(word)+spaces >= width {
+		lines = append(lines, []rune{})
+		row++
+	}
+	lines[row] = append(lines[row], word...)
+
+	// The textarea's viewport chops whatever still overflows; trailing spaces
+	// are invisible against the panel's own padding, so they're dropped here.
+	var out []string
+	for _, l := range lines {
+		s := strings.TrimRight(string(l), " ")
+		for lipgloss.Width(s) > width {
+			cut := ansi.Truncate(s, width, "")
+			out = append(out, cut)
+			s = strings.TrimPrefix(s, cut)
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// setDescWidth sizes a description textarea to the same column count
+// renderDescBody wraps to, so entering edit mode doesn't re-flow the text
+// under the cursor. wrapDesc mirrors the textarea's own rules from there.
 func setDescWidth(ta *textarea.Model, wrapWidth int) {
 	if wrapWidth < 1 {
 		wrapWidth = 1
 	}
-	ta.SetWidth(wrapWidth + 1)
+	ta.SetWidth(wrapWidth)
 }
 
 // newTitleInput builds a blurred title input seeded with value.
@@ -630,7 +711,7 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Move):
 		return m.enterMovePopup()
 	case key.Matches(msg, keys.Copy):
-		m.copyTicketID()
+		m.copyFocused()
 	case key.Matches(msg, keys.Layout):
 		m.layout = m.layout.next()
 		m.notice = m.layout.label()
@@ -692,7 +773,7 @@ func (m *Model) updateSplitDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Move):
 		return m.enterMovePopup()
 	case key.Matches(msg, keys.Copy):
-		m.copyTicketID()
+		m.copyFocused()
 	case key.Matches(msg, keys.Delete):
 		m.deleteTicket()
 		m.splitFocus = 0
@@ -759,7 +840,7 @@ func (m *Model) updateSplitDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.editTitle.Focus()
 		return m, textinput.Blink
 	case key.Matches(msg, keys.Copy):
-		m.copyTicketID()
+		m.copyFocused()
 	case key.Matches(msg, keys.PanelPrev), key.Matches(msg, keys.Esc):
 		m.splitFocus = 0
 	case key.Matches(msg, keys.Unzoom):
@@ -820,7 +901,7 @@ func (m *Model) updateSplitDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.editDesc.Focus()
 		return m, nil
 	case key.Matches(msg, keys.Copy):
-		m.copyTicketID()
+		m.copyFocused()
 	case key.Matches(msg, keys.PanelPrev), key.Matches(msg, keys.Esc):
 		m.splitFocus = 0
 	case key.Matches(msg, keys.Unzoom):
@@ -897,7 +978,7 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Move):
 		return m.enterMovePopup()
 	case key.Matches(msg, keys.Copy):
-		m.copyTicketID()
+		m.copyFocused()
 	}
 	return m, nil
 }
@@ -961,7 +1042,7 @@ func (m *Model) updateDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Move):
 		return m.enterMovePopup()
 	case key.Matches(msg, keys.Copy):
-		m.copyTicketID()
+		m.copyFocused()
 	case key.Matches(msg, keys.Delete):
 		m.deleteTicket()
 		m.view = boardView
@@ -1056,7 +1137,7 @@ func (m *Model) updateDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.editTitle.Focus()
 		return m, textinput.Blink
 	case key.Matches(msg, keys.Copy):
-		m.copyTicketID()
+		m.copyFocused()
 	case key.Matches(msg, keys.Esc), key.Matches(msg, keys.Unzoom):
 		m.editField = 0
 		m.enterSplit()
@@ -1095,7 +1176,7 @@ func (m *Model) updateDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.editDesc.Focus()
 		return m, textarea.Blink
 	case key.Matches(msg, keys.Copy):
-		m.copyTicketID()
+		m.copyFocused()
 	case key.Matches(msg, keys.Esc), key.Matches(msg, keys.Unzoom):
 		m.editField = 0
 		m.enterSplit()
@@ -1315,20 +1396,71 @@ func (m *Model) moveTicketInColumn(dir int) {
 	m.clampCursors()
 }
 
-// copyTicketID puts the selected ticket's short id on the system clipboard —
-// the id you paste into a `kanban update <id>` for an agent to pick up.
-func (m *Model) copyTicketID() {
-	if t := m.selectedTicket(); t != nil {
-		m.copyShortID(t.ShortID)
+// copyKind is what `c` puts on the clipboard, chosen by what's focused.
+type copyKind int
+
+const (
+	copyID copyKind = iota
+	copyTitle
+	copyDescription
+)
+
+func (k copyKind) label() string {
+	switch k {
+	case copyTitle:
+		return "title"
+	case copyDescription:
+		return "description"
+	default:
+		return "ticket id"
 	}
 }
 
-func (m *Model) copyShortID(id string) {
-	if err := clipboard.WriteAll(id); err != nil {
-		m.notice = "clipboard unavailable: " + err.Error()
+// copyFocused copies whatever the cursor is on: the ticket id from a list or
+// the info bar, the title or description when that field is focused.
+func (m *Model) copyFocused() {
+	t := m.selectedTicket()
+	if t == nil {
 		return
 	}
-	m.notice = "copied " + id
+
+	kind := copyID
+	// Field focus only counts in the detail pane — from the rail, `c` always
+	// means the id.
+	inDetail := m.view == detailView || (m.view == splitView && m.splitFocus == 1)
+	if inDetail {
+		switch m.editField {
+		case 1:
+			kind = copyTitle
+		case 2:
+			kind = copyDescription
+		}
+	}
+
+	var value string
+	switch kind {
+	case copyTitle:
+		value = t.Title
+	case copyDescription:
+		value = t.Description
+	default:
+		value = t.ShortID
+	}
+	m.copyToClipboard(value, kind)
+}
+
+// copyToClipboard writes to the system clipboard and reports what happened in
+// the footer either way — a copy you can't see is a copy you don't trust.
+func (m *Model) copyToClipboard(value string, kind copyKind) {
+	if strings.TrimSpace(value) == "" {
+		m.notice = fmt.Sprintf("nothing to copy — %s is empty", kind.label())
+		return
+	}
+	if err := clipboard.WriteAll(value); err != nil {
+		m.notice = "clipboard failed: " + err.Error()
+		return
+	}
+	m.notice = fmt.Sprintf("copied %s to clipboard", kind.label())
 }
 
 func (m *Model) archiveTicket() {
@@ -1400,7 +1532,7 @@ func (m *Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.unarchiveSelected()
 	case key.Matches(msg, keys.Copy):
 		if t := m.archiveSelected(); t != nil {
-			m.copyShortID(t.ShortID)
+			m.copyToClipboard(t.ShortID, copyID)
 		}
 	}
 	return m, nil
@@ -2891,7 +3023,7 @@ func (m *Model) renderDescBody(desc string, width, height int) string {
 		return lipgloss.NewStyle().Foreground(subtle).Render("(empty)")
 	}
 
-	wrapped := strings.Split(lipgloss.NewStyle().Width(width).Render(desc), "\n")
+	wrapped := strings.Split(wrapDesc(desc, width), "\n")
 	maxScroll := len(wrapped) - height
 	if maxScroll < 0 {
 		maxScroll = 0

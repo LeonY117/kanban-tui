@@ -14,7 +14,16 @@ import (
 func TestDescriptionWrapsIdenticallyInEditMode(t *testing.T) {
 	sandboxRoot(t)
 	s := store.New("")
-	desc := "The quick brown fox jumps over the lazy dog and keeps running until it reaches the end of the line, then wraps.\n\nSecond paragraph here to be sure."
+	desc := strings.Join([]string{
+		"The quick brown fox jumps over the lazy dog and keeps running until it reaches the end of the line, then wraps.",
+		"",
+		"Notion transcript READ and folded in — it added the daily-management-report opportunity (~8h/wk), the group-company ODBC feeds and P-class semantics.",
+		"",
+		"  - an indented bullet whose text is long enough to need wrapping at every width under test",
+		"  - https://example.com/a/very/long/url/that/cannot/be/broken/on/spaces/at/all/whatsoever",
+		"",
+		"⏰ Wed 10:00 call · Fri 10:30 in person — emoji and middots included.",
+	}, "\n")
 	if _, err := s.Add("ticket", desc, model.StatusTodo, nil, "", "test"); err != nil {
 		t.Fatal(err)
 	}

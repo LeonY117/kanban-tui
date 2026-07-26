@@ -40,7 +40,7 @@ Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden
 | `H` `L` | Move selected ticket to adjacent column |
 | `J` `K` | Reorder selected ticket up/down within its column |
 | `m` | Move ticket — pick a column, or another board and its column |
-| `c` | Copy the selected ticket's short id to the clipboard |
+| `c` | Copy to clipboard — the ticket id from a list, or the focused title / description |
 | `a` | Add a new ticket (floating popup) |
 | `e` / `enter` | Edit selected field |
 | `enter` (while editing) | Save and stop editing — in the add popup, create the ticket |

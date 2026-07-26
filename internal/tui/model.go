@@ -107,8 +107,7 @@ type Model struct {
 	// Board layout toggle. false = columns (default), true = rows.
 	rowLayout bool
 
-	// How much of each ticket a list row shows (cards by default), and how
-	// the blocks are separated.
+	// How much of each ticket a list row shows (cards by default).
 	layout ticketLayout
 
 	// First ticket rendered per column. Sticky: the cursor moves inside the
@@ -490,8 +489,7 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Archive):
 		m.archiveTicket()
 	case key.Matches(msg, keys.Layout):
-		m.layout = m.layout.next()
-		m.notice = m.layout.label()
+		m.cycleTicketLayout()
 	case key.Matches(msg, keys.RowLayout):
 		m.rowLayout = !m.rowLayout
 	case key.Matches(msg, keys.Move):
@@ -725,8 +723,7 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Copy):
 		m.copyFocused()
 	case key.Matches(msg, keys.Layout):
-		m.layout = m.layout.next()
-		m.notice = m.layout.label()
+		m.cycleTicketLayout()
 	case key.Matches(msg, keys.ArchiveView):
 		m.enterArchive()
 	}
@@ -2786,9 +2783,9 @@ func (m *Model) renderColumn(colIdx int, status model.Status, width, height int,
 
 	visibleCount := height - 2
 
-	// Only scroll to keep the cursor visible when the column is focused;
-	// unfocused columns always render from the top so switching away doesn't
-	// leave a column scrolled mid-list.
+	// Only the focused column has a selection. Passing cursor -1 keeps an
+	// unfocused column at its remembered scroll position without highlighting
+	// a ticket.
 	cursor := -1
 	if focused {
 		cursor = m.cursors[colIdx]

@@ -50,7 +50,6 @@ Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden
 | `+` / `-` | Zoom in / out (board → split → column / detail) |
 | `[` / `]` | Switch panels in split view |
 | `v` | Ticket size — cards (default) → large → condensed |
-| `z` | Frame — rules (default) / shared-border table |
 | `V` | Toggle columns / rows layout |
 | `x` | Archive selected ticket |
 | `X` | Open archive browser |
@@ -70,29 +69,28 @@ a fallback.
 `shortid #tags ● assignee` line. **Large** adds a three-line description
 preview and the last-edited date. **Condensed** is one line per ticket.
 
-At card size, tickets are separated by a rule above each block with a closing
-rule under the last; `z` swaps that for a shared-border table, where each
-ticket is a row of one continuous box. Large gives each ticket its own box —
-at that size the extra air reads better.
+At card size, each ticket is a row in one continuous table with shared borders.
+The selected row closes into its own rounded box. Large gives every ticket its
+own box — at that size the extra air reads better.
 
 Columns scroll stickily: the cursor travels inside the visible window and only
 pushes it once it reaches an edge, so scrolling back up starts exactly where
 scrolling down did. The mouse wheel banks a few notches per ticket step, to
 match the one-line-per-notch feel of scrolling a description.
 
-The ticket under the cursor gets an accent bar down its left edge, heavy
-accented rules bracketing it, and its short id in the column colour — in the
-large size, the box border carries the accent instead. None of that changes a
-block's height, so moving the cursor never shifts the list. The ticket that
-straddles the bottom of a column is cropped mid-block rather than dropped, so
-the column always reads as continuing past the fold.
+In card and large layouts, the ticket under the cursor gets an accented border
+and its short id in the column colour. Condensed layout uses an accent marker
+beside the title. Frames use light box-drawing glyphs throughout. None of that
+changes a block's height, so moving the cursor never shifts the list. The ticket
+that straddles the bottom of a column is cropped mid-block rather than dropped,
+so the column always reads as continuing past the fold.
 
 ### Mouse
 
 The mouse is live: click a ticket to select it, click a column to focus it,
-click a field in the detail pane to jump to it. The wheel scrolls one line at
-a time — tickets in a list, or the description body under the pointer. Hold
-`shift` to select text as usual.
+click a field in the detail pane to jump to it. The wheel moves through tickets
+in a list or scrolls the description body under the pointer. Hold `shift` to
+select text as usual.
 
 ### Views
 

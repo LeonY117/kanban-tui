@@ -42,6 +42,11 @@ func (l ticketLayout) label() string {
 	}
 }
 
+func (m *Model) cycleTicketLayout() {
+	m.layout = m.layout.next()
+	m.notice = m.layout.label()
+}
+
 // Title and description line caps per layout.
 const (
 	cardTitleMaxLines  = 2
@@ -50,9 +55,9 @@ const (
 )
 
 // renderTicketList renders a column's tickets into `height` rows, scrolling so
-// the cursor stays visible. cursor < 0 means nothing is selected and the list
-// renders from the top. The returned block is a plain "\n"-joined string, ready
-// to hand to renderPanel.
+// the cursor stays visible. cursor < 0 means nothing is selected and preserves
+// the column's remembered scroll position. The returned block is a plain
+// "\n"-joined string, ready to hand to renderPanel.
 //
 // Every ticket it emits is registered as a click target via m.addTicketZone, so
 // mouse hit-testing stays in lockstep with what's actually on screen.
@@ -82,15 +87,13 @@ func (m *Model) renderTicketLines(tickets []model.Ticket, colIdx, width, height,
 	return strings.Join(lines, "\n")
 }
 
-// renderCardStack stacks ticket blocks. Card and condensed-adjacent sizes
-// separate them with rules — one above each ticket, plus a closing rule under
-// the last, so every block is bracketed. The large size gives each ticket its
-// own box instead, since at that size the extra air reads better.
+// renderCardStack renders card-size tickets as rows of one table. The large
+// size gives each ticket its own box instead, since at that size the extra air
+// reads better.
 //
-// The ticket under the cursor is picked out by an accent bar down its left
-// edge and heavy accented rules bracketing it (in the large size, by its box
-// border going accent). Nothing about the geometry depends on the selection,
-// so moving the cursor shifts nothing.
+// The ticket under the cursor is picked out by an accented border. Nothing
+// about the geometry depends on the selection, so moving the cursor shifts
+// nothing.
 func (m *Model) renderCardStack(tickets []model.Ticket, colIdx, width, height, cursor int, accent lipgloss.Color, origin point) string {
 	if width < 4 {
 		width = 4
@@ -123,42 +126,34 @@ func (m *Model) renderCardStack(tickets []model.Ticket, colIdx, width, height, c
 	}
 	start := m.scrollWindow(colIdx, costs, cursor, avail)
 
-	pad := func(l string) string {
-		n := inner - lipgloss.Width(l)
-		if n < 0 {
-			n = 0
-		}
-		return l + strings.Repeat(" ", n)
-	}
-
 	// Blocks are emitted line by line up to the panel's height, so the ticket
 	// that straddles the bottom edge shows as much of itself as fits rather
-	// than leaving a gap. The cursor's block is always whole: fitScrollStart
+	// than leaving a gap. The cursor's block is always whole: scrollWindow
 	// guarantees it ends within avail.
 	var lines []string
-	full := -1 // last block that fitted in its entirety
+	lastComplete := -1
 	for i := start; i < len(tickets) && len(lines) < height; i++ {
 		// cursor is -1 when nothing is selected, so the i-1 comparison has to
 		// be guarded — otherwise the first ticket reads its own top rule as
-		// "the block above me is selected" and draws it heavy.
+		// "the block above me is selected" and draws it accented.
 		afterSelected := cursor >= 0 && i-1 == cursor
 		var block []string
 		if boxed {
-			block = renderBoxedBlock(contents[i], i == cursor, inner, pad, accent)
+			block = renderBoxedBlock(contents[i], i == cursor, inner, accent)
 		} else {
-			block = renderTableBlock(contents[i], i == start, i == cursor, afterSelected, width, pad, accent)
+			block = renderTableBlock(contents[i], i == start, i == cursor, afterSelected, width, accent)
 		}
 		room := height - len(lines)
 		if len(block) > room {
 			block = block[:room]
 		} else {
-			full = i
+			lastComplete = i
 		}
 		m.addTicketZone(colIdx, i, origin.x, origin.y+len(lines), width, len(block))
 		lines = append(lines, block...)
 	}
 	if !boxed && len(lines) > 0 && len(lines) < height {
-		lines = append(lines, tableRule("╰", "╯", width, full == cursor, accent))
+		lines = append(lines, tableRule("╰", "╯", width, lastComplete == cursor, accent))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -172,7 +167,7 @@ func (m *Model) renderCardStack(tickets []model.Ticket, colIdx, width, height, c
 // ends round toward it — closing the selection into a box of its own and
 // leaving the neighbour open on that side, which is what the shared line
 // means anyway.
-func renderTableBlock(content []string, first, selected, afterSelected bool, width int, pad func(string) string, accent lipgloss.Color) []string {
+func renderTableBlock(content []string, first, selected, afterSelected bool, width int, accent lipgloss.Color) []string {
 	left, right := "├", "┤"
 	switch {
 	case selected:
@@ -189,7 +184,7 @@ func renderTableBlock(content []string, first, selected, afterSelected bool, wid
 		side = lipgloss.NewStyle().Foreground(accent)
 	}
 	for _, l := range content {
-		block = append(block, side.Render("│")+" "+pad(l)+" "+side.Render("│"))
+		block = append(block, side.Render("│")+" "+padCardLine(l, width-4)+" "+side.Render("│"))
 	}
 	return block
 }
@@ -201,9 +196,9 @@ func renderTableBlock(content []string, first, selected, afterSelected bool, wid
 // characters (━ ┝ ┥) overhang their cell in many terminal fonts, so a heavy
 // rule visibly spills past the sides of the box it belongs to. In this frame
 // the selected row is already outlined on all four sides, so colour carries it.
-func tableRule(left, right string, width int, selected bool, accent lipgloss.Color) string {
+func tableRule(left, right string, width int, accented bool, accent lipgloss.Color) string {
 	color := dimGray
-	if selected {
+	if accented {
 		color = accent
 	}
 	return lipgloss.NewStyle().Foreground(color).Render(left + strings.Repeat("─", width-2) + right)
@@ -211,16 +206,24 @@ func tableRule(left, right string, width int, selected bool, accent lipgloss.Col
 
 // renderBoxedBlock frames one ticket's content lines as its own box — the
 // large layout, where the extra air reads better than a shared rule.
-func renderBoxedBlock(content []string, selected bool, inner int, pad func(string) string, accent lipgloss.Color) []string {
+func renderBoxedBlock(content []string, selected bool, inner int, accent lipgloss.Color) []string {
 	border := lipgloss.NewStyle().Foreground(dimGray)
 	if selected {
 		border = lipgloss.NewStyle().Foreground(accent).Bold(true)
 	}
 	block := []string{border.Render("╭" + strings.Repeat("─", inner) + "╮")}
 	for _, l := range content {
-		block = append(block, border.Render("│")+pad(l)+border.Render("│"))
+		block = append(block, border.Render("│")+padCardLine(l, inner)+border.Render("│"))
 	}
 	return append(block, border.Render("╰"+strings.Repeat("─", inner)+"╯"))
+}
+
+func padCardLine(line string, width int) string {
+	padding := width - lipgloss.Width(line)
+	if padding < 0 {
+		padding = 0
+	}
+	return line + strings.Repeat(" ", padding)
 }
 
 // scrollWindow advances a column's remembered scroll position by the least

@@ -69,7 +69,7 @@ func (m *Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// mouseScroll moves whatever sits under the pointer by exactly one line.
+// mouseScroll routes wheel input to the content under the pointer.
 func (m *Model) mouseScroll(msg tea.MouseMsg, dir int) (tea.Model, tea.Cmd) {
 	z := m.zoneAt(msg.X, msg.Y)
 	if z == nil {

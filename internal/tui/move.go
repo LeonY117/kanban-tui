@@ -158,10 +158,12 @@ func (m *Model) moveActivate() (tea.Model, tea.Cmd) {
 		m.moveTargetBoard = row.board
 		m.moveStage = moveStageTargetColumn
 		m.buildMoveRows()
-	case row.isStatus && m.moveStage == moveStageColumn:
-		m.commitMove(m.sprintName, row.status)
 	case row.isStatus:
-		m.commitMove(m.moveTargetBoard, row.status)
+		targetBoard := m.moveTargetBoard
+		if m.moveStage == moveStageColumn {
+			targetBoard = m.sprintName
+		}
+		m.commitMove(targetBoard, row.status)
 	}
 	return m, nil
 }

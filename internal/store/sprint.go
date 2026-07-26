@@ -91,11 +91,10 @@ func IsSprintArchived(name string) bool {
 	return exists && archived
 }
 
-// CreateSprint creates a new empty sprint. Errors if the sprint already
-// exists, even if archived.
 // CreateSprint makes a new sprint board. An empty prefix derives one from the
 // name; an explicit one is taken as given, including when another board
-// already uses it — sharing a prefix just shares its number line.
+// already uses it — sharing a prefix just shares its number line. It errors if
+// the sprint already exists, even if archived.
 func CreateSprint(name, prefix string) error {
 	if err := ValidateSprintName(name); err != nil {
 		return err

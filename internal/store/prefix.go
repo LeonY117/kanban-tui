@@ -235,8 +235,8 @@ func isLegacyShortID(t model.Ticket) bool {
 }
 
 // parseTicketNumber splits an id like "KB7" into its prefix and number, and
-// reports whether the prefix is the one asked for. Legacy hex ids (4ad9b9)
-// never parse, so they can't perturb a counter.
+// reports whether the prefix is the one asked for. highestIssued filters legacy
+// ids before calling this, including the all-digit ones that would parse here.
 func parseTicketNumber(shortID, prefix string) (int, bool) {
 	if !strings.HasPrefix(shortID, prefix) {
 		return 0, false

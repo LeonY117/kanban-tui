@@ -38,6 +38,8 @@ type keyMap struct {
 	ArchiveView key.Binding
 	Unarchive   key.Binding
 	BoardPicker key.Binding
+	Pin         key.Binding
+	Rename      key.Binding
 }
 
 var keys = keyMap{
@@ -83,4 +85,6 @@ var keys = keyMap{
 	ArchiveView: key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "archive browser")),
 	Unarchive:   key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "unarchive")),
 	BoardPicker: key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "board picker")),
+	Pin:         key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pin board")),
+	Rename:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rename board")),
 }

@@ -58,10 +58,16 @@ kanban sprints new Demo_Apr --prefix DA   # …with an explicit ticket-id prefix
 kanban sprints rm Demo_Apr           # delete a sprint (prompts; --force skips)
 kanban sprints archive Demo_Apr      # hide from defaults; freeze writes (reads still work)
 kanban sprints unarchive Demo_Apr    # restore
+kanban sprints pin Demo_Apr          # sort above the rest in the picker / sprints list
+kanban sprints unpin Demo_Apr        # release back to mtime order
+kanban sprints rename Demo_Apr Demo_May   # rename the board; ticket ids untouched
+kanban sprints prefix Demo_May DM         # retag ids: DA7 → DM7, board + archive
 ```
 
 Notes:
 - Sprint names: `[A-Za-z0-9_-]`, 1–64 chars.
+- Pinned sprints sort above the rest (in pin order) everywhere boards are listed; in the TUI picker they sit above a divider, `p` toggles a pin and `J`/`K` reorder the pinned block. Main is implicitly pinned and holds the top slot. **Archiving a pinned sprint is refused** — unpin first.
+- `r` in the picker renames a sprint and/or its ticket-id prefix (same as `sprints rename` + `sprints prefix`). A prefix change rewrites board **and** archive short ids keeping their numbers (`KA7` → `KB7`), and is refused per-id if another board already issued one of them. Both are refused on archived sprints.
 - On **CLI subcommands**, a missing sprint hard-errors (no silent creation, no hanging prompts for agents).
 - On **TUI launch**, a missing sprint prompts `[y/N]` before creating. Answering no aborts cleanly.
 - `--sprint` composes with `KANBAN_FILE`: sprints live at `$(dirname $KANBAN_FILE)/sprints/<name>/` when the env var is set, so both main and sprint boards share the same root.
@@ -96,6 +102,7 @@ Note: BACKLOG status exists in data but is hidden from TUI.
 - Archive: `~/.kanban/archive.json`
 - Lock: `~/.kanban/.board.lock`
 - Id counters: `~/.kanban/counters.json`
+- Pinned sprints: `~/.kanban/pins.json` (ordered list of sprint names)
 - Sprints: `~/.kanban/sprints/<name>/{board,archive}.json` + `.board.lock`
 - Override: `KANBAN_FILE` env var redirects the main board path; sprints live under `$(dirname $KANBAN_FILE)/sprints/`
 

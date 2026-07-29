@@ -194,26 +194,31 @@ func highestIssued(prefix string) (int, error) {
 		return nil
 	}
 
-	if err := scan(New("")); err != nil {
+	if err := eachStore(scan); err != nil {
 		return 0, err
-	}
-	root := filepath.Join(defaultRoot(), sprintsSubdir)
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return max, nil
-		}
-		return 0, err
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		if err := scan(New(filepath.Join(root, e.Name()))); err != nil {
-			return 0, err
-		}
 	}
 	return max, nil
+}
+
+// raiseCounter lifts a prefix's counter to at least n, so ids handed out after a
+// retag can't collide with the ones it just rewrote. A missing counter needs no
+// help: NextTicketID seeds one from the highest id on disk, which by then
+// includes the retagged ids.
+func raiseCounter(prefix string, n int) error {
+	if n <= 0 {
+		return nil
+	}
+	return withCountersLock(func() error {
+		counters, err := loadCounters()
+		if err != nil {
+			return err
+		}
+		if cur, ok := counters[prefix]; !ok || cur >= n {
+			return nil
+		}
+		counters[prefix] = n
+		return saveCounters(counters)
+	})
 }
 
 // isLegacyShortID reports whether a ticket carries a pre-prefix id — six or

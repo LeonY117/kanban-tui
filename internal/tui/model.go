@@ -2367,13 +2367,20 @@ func (m *Model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) selectedPickerBoard() (pickerEntry, bool) {
+	if m.pickerIdx < 0 || m.pickerIdx >= len(m.pickerBoards) {
+		return pickerEntry{}, false
+	}
+	return m.pickerBoards[m.pickerIdx], true
+}
+
 // pickerTogglePin pins or unpins the highlighted sprint. The cursor follows the
 // board it was on, which the re-sort has usually moved.
 func (m *Model) pickerTogglePin() (tea.Model, tea.Cmd) {
-	if m.pickerIdx < 0 || m.pickerIdx >= len(m.pickerBoards) {
+	e, ok := m.selectedPickerBoard()
+	if !ok {
 		return m, nil
 	}
-	e := m.pickerBoards[m.pickerIdx]
 	if e.name == "" {
 		m.notice = "main is always pinned"
 		return m, nil
@@ -2401,10 +2408,10 @@ func (m *Model) pickerTogglePin() (tea.Model, tea.Cmd) {
 // pinned block. Main holds the top slot, and the block's lower edge is the
 // divider — J on the last pinned sprint does nothing rather than unpinning it.
 func (m *Model) pickerReorderPin(dir int) (tea.Model, tea.Cmd) {
-	if m.pickerIdx < 0 || m.pickerIdx >= len(m.pickerBoards) {
+	e, ok := m.selectedPickerBoard()
+	if !ok {
 		return m, nil
 	}
-	e := m.pickerBoards[m.pickerIdx]
 	if e.name == "" {
 		m.notice = "main stays at the top"
 		return m, nil
@@ -2459,10 +2466,10 @@ const (
 // startPickerRename opens the two-field rename form on the highlighted sprint:
 // its name, and the prefix its ticket ids carry.
 func (m *Model) startPickerRename() (tea.Model, tea.Cmd) {
-	if m.pickerIdx < 0 || m.pickerIdx >= len(m.pickerBoards) {
+	e, ok := m.selectedPickerBoard()
+	if !ok {
 		return m, nil
 	}
-	e := m.pickerBoards[m.pickerIdx]
 	if e.name == "" {
 		m.notice = "main board can't be renamed"
 		return m, nil
@@ -2625,10 +2632,10 @@ func (m *Model) pickerActivate() (tea.Model, tea.Cmd) {
 // sprint. Refuses on the main board (always shown but never archivable) and
 // on already-archived sprints.
 func (m *Model) startPickerArchive() (tea.Model, tea.Cmd) {
-	if m.pickerIdx < 0 || m.pickerIdx >= len(m.pickerBoards) {
+	e, ok := m.selectedPickerBoard()
+	if !ok {
 		return m, nil
 	}
-	e := m.pickerBoards[m.pickerIdx]
 	if e.name == "" {
 		m.notice = "main board can't be archived"
 		return m, nil
@@ -2675,10 +2682,10 @@ func (m *Model) updatePickerConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // pickerUnarchive unarchives the highlighted sprint, no confirm needed.
 func (m *Model) pickerUnarchive() (tea.Model, tea.Cmd) {
-	if m.pickerIdx < 0 || m.pickerIdx >= len(m.pickerBoards) {
+	e, ok := m.selectedPickerBoard()
+	if !ok {
 		return m, nil
 	}
-	e := m.pickerBoards[m.pickerIdx]
 	if e.name == "" {
 		return m, nil
 	}

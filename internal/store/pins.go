@@ -70,7 +70,7 @@ func savePins(pinned []string) error {
 	return nil
 }
 
-func withPinsLock(fn func() error) error {
+func editPins(fn func([]string) error) error {
 	if err := os.MkdirAll(defaultRoot(), 0755); err != nil {
 		return err
 	}
@@ -83,7 +83,11 @@ func withPinsLock(fn func() error) error {
 		return err
 	}
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-	return fn()
+	pinned, err := LoadPins()
+	if err != nil {
+		return err
+	}
+	return fn(pinned)
 }
 
 // IsPinned reports whether a sprint is pinned. The main board ("") is always
@@ -116,11 +120,7 @@ func Pin(name string) error {
 	if archived {
 		return fmt.Errorf("sprint %q is archived; unarchive it before pinning", name)
 	}
-	return withPinsLock(func() error {
-		pinned, err := LoadPins()
-		if err != nil {
-			return err
-		}
+	return editPins(func(pinned []string) error {
 		if indexOf(pinned, name) >= 0 {
 			return nil
 		}
@@ -134,20 +134,13 @@ func Unpin(name string) error {
 	if err := ValidateSprintName(name); err != nil {
 		return err
 	}
-	return withPinsLock(func() error { return unpinLocked(name) })
-}
-
-// unpinLocked drops a name from the pinned list. Callers hold the pins lock.
-func unpinLocked(name string) error {
-	pinned, err := LoadPins()
-	if err != nil {
-		return err
-	}
-	i := indexOf(pinned, name)
-	if i < 0 {
-		return nil
-	}
-	return savePins(append(pinned[:i:i], pinned[i+1:]...))
+	return editPins(func(pinned []string) error {
+		i := indexOf(pinned, name)
+		if i < 0 {
+			return nil
+		}
+		return savePins(append(pinned[:i:i], pinned[i+1:]...))
+	})
 }
 
 // TogglePin flips a sprint's pinned state and reports the new one.
@@ -166,11 +159,7 @@ func MovePin(name string, dir int) error {
 	if err := ValidateSprintName(name); err != nil {
 		return err
 	}
-	return withPinsLock(func() error {
-		pinned, err := LoadPins()
-		if err != nil {
-			return err
-		}
+	return editPins(func(pinned []string) error {
 		i := indexOf(pinned, name)
 		if i < 0 {
 			return fmt.Errorf("sprint %q isn't pinned", name)

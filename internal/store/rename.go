@@ -362,11 +362,7 @@ func eachStore(fn func(*Store) error) error {
 
 // renamePin follows a sprint rename, keeping its slot in the pinned order.
 func renamePin(oldName, newName string) error {
-	return withPinsLock(func() error {
-		pinned, err := LoadPins()
-		if err != nil {
-			return err
-		}
+	return editPins(func(pinned []string) error {
 		i := indexOf(pinned, oldName)
 		if i < 0 {
 			return nil

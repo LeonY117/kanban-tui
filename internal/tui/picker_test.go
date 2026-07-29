@@ -8,6 +8,7 @@ import (
 
 	"github.com/LeonY117/kanban-tui/internal/model"
 	"github.com/LeonY117/kanban-tui/internal/store"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // pickerModel returns a model sitting on the main board with the named sprints
@@ -546,6 +547,41 @@ func TestPickerRowsAreInertWhileRenaming(t *testing.T) {
 		if z.kind == zonePickerRow {
 			t.Fatalf("board row at y=%d is still clickable while the rename form is open", z.y)
 		}
+	}
+}
+
+// The terminal truncates an over-long footer with no ellipsis, and the picker's
+// footer is the only place its keys are documented — so the hint telling you how
+// to get out has to survive at any width.
+func TestFooterKeepsTheEscapeHintWhenItCannotFit(t *testing.T) {
+	m := pickerModel(t, "alpha")
+	full := m.helpText()
+	if !strings.HasSuffix(full, "esc/tab close") {
+		t.Fatalf("picker help no longer ends with the escape hint: %q", full)
+	}
+
+	for _, width := range []int{200, 120, 100, 80, 60, 40, 20} {
+		got := fitHints(full, width)
+		if lipgloss.Width(got) > width {
+			t.Errorf("at width %d the footer is %d wide: %q", width, lipgloss.Width(got), got)
+		}
+		if !strings.Contains(got, "esc/tab close") {
+			t.Errorf("at width %d the escape hint was dropped: %q", width, got)
+		}
+		if width >= lipgloss.Width(full) && got != full {
+			t.Errorf("at width %d the footer was trimmed despite fitting: %q", width, got)
+		}
+	}
+
+	// The whole footer, badge included, has to fit a normal terminal.
+	m.width = 100
+	if w := lipgloss.Width(m.footerLine()); w > m.width {
+		t.Errorf("footer renders %d columns wide on a %d-column terminal", w, m.width)
+	}
+	m.pickerShowArchived = true
+	m.reloadPickerEntries()
+	if w := lipgloss.Width(m.footerLine()); w > m.width {
+		t.Errorf("archived-mode footer renders %d columns wide on a %d-column terminal", w, m.width)
 	}
 }
 

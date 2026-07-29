@@ -264,7 +264,8 @@ func checkNoSelfClash(board, archive *model.Board, boardIDs, archiveIDs []retagg
 		return nil
 	}
 	sort.Strings(clashes)
-	return fmt.Errorf("this board already holds %s — a ticket moved in from another board carries that id; move it out or renumber it first",
+	// Kept short: this surfaces in the TUI footer, which the terminal truncates.
+	return fmt.Errorf("board already holds %s (moved in from another board) — move or renumber it first",
 		strings.Join(clashes, ", "))
 }
 

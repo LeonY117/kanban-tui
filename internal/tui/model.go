@@ -307,10 +307,40 @@ func (m *Model) footerLine() string {
 	if m.notice != "" {
 		rightText = m.notice
 	} else {
-		rightText = m.helpText()
+		rightText = fitHints(m.helpText(), m.width-lipgloss.Width(badge)-2)
 	}
 	help := helpStyle.Render(rightText)
 	return lipgloss.JoinHorizontal(lipgloss.Center, badge, help)
+}
+
+// fitHints drops whole hints off the end of a help line until it fits, keeping
+// the last one — how to get out of wherever you are.
+//
+// Bubble Tea truncates a rendered line to the terminal width with no ellipsis,
+// so an over-long footer loses its tail silently. The picker's footer is the
+// only place its keys are documented, and the tail is where "esc/tab close"
+// lives, so losing it strands the user in a popup with no visible way out.
+func fitHints(text string, width int) string {
+	if width < 1 || lipgloss.Width(text) <= width {
+		return text
+	}
+	const sep = " | "
+	hints := strings.Split(text, sep)
+	if len(hints) < 2 {
+		return text
+	}
+	// The escape hint is the one worth protecting; everything before it is
+	// negotiable, dropped from the end so the leading hints survive.
+	last := hints[len(hints)-1]
+	for n := len(hints) - 1; n > 0; n-- {
+		// Fresh slice each round: appending onto hints[:n] would write into the
+		// hint list we are still reading from.
+		candidate := strings.Join(append(append([]string{}, hints[:n]...), last), sep)
+		if lipgloss.Width(candidate) <= width {
+			return candidate
+		}
+	}
+	return last
 }
 
 func (m *Model) Init() tea.Cmd {

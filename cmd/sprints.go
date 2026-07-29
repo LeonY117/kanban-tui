@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/LeonY117/kanban-tui/internal/store"
 	"github.com/spf13/cobra"
@@ -53,6 +54,9 @@ var sprintsCmd = &cobra.Command{
 			tag := ""
 			if s.Archived {
 				tag = "  (archived)"
+			}
+			if s.Pinned {
+				tag = "  (pinned)"
 			}
 			fmt.Printf("  %-24s %-4s %d ticket(s)%s\n", s.Name, s.Prefix, s.TicketCount, tag)
 		}
@@ -151,6 +155,65 @@ var sprintsUnarchiveCmd = &cobra.Command{
 	},
 }
 
+var sprintsPinCmd = &cobra.Command{
+	Use:   "pin <name>",
+	Short: "Pin a sprint to the top of the board picker",
+	Long:  "Pinned sprints sort above the rest in `kanban sprints` and in the TUI board picker, in the order they were pinned. Reorder them with J/K in the picker. A pinned sprint can't be archived until it's unpinned.",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name := args[0]
+		if err := store.Pin(name); err != nil {
+			return err
+		}
+		fmt.Printf("Pinned sprint %q.\n", name)
+		return nil
+	},
+}
+
+var sprintsUnpinCmd = &cobra.Command{
+	Use:   "unpin <name>",
+	Short: "Unpin a sprint",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name := args[0]
+		if err := store.Unpin(name); err != nil {
+			return err
+		}
+		fmt.Printf("Unpinned sprint %q.\n", name)
+		return nil
+	},
+}
+
+var sprintsRenameCmd = &cobra.Command{
+	Use:   "rename <name> <new-name>",
+	Short: "Rename a sprint board",
+	Long:  "Renames the sprint's directory and carries its pin across. Ticket ids are untouched — use `kanban sprints prefix` to change those.",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		oldName, newName := args[0], args[1]
+		if err := store.UpdateSprint(oldName, newName, ""); err != nil {
+			return err
+		}
+		fmt.Printf("Renamed sprint %q to %q.\n", oldName, newName)
+		return nil
+	},
+}
+
+var sprintsPrefixCmd = &cobra.Command{
+	Use:   "prefix <name> <prefix>",
+	Short: "Change the ticket-id prefix of a sprint's tickets",
+	Long:  "Rewrites the short id of every ticket on the board and in its archive, keeping the number: KA7 becomes KB7. Refused if another board already issued one of the target ids.",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name, prefix := args[0], args[1]
+		if err := store.UpdateSprint(name, name, prefix); err != nil {
+			return err
+		}
+		fmt.Printf("Sprint %q ids now carry %s.\n", name, strings.ToUpper(prefix))
+		return nil
+	},
+}
+
 func init() {
 	sprintsCmd.Flags().Bool("json", false, "Output as JSON")
 	sprintsCmd.Flags().Bool("archived", false, "Show only archived sprints")
@@ -161,4 +224,8 @@ func init() {
 	sprintsCmd.AddCommand(sprintsRmCmd)
 	sprintsCmd.AddCommand(sprintsArchiveCmd)
 	sprintsCmd.AddCommand(sprintsUnarchiveCmd)
+	sprintsCmd.AddCommand(sprintsPinCmd)
+	sprintsCmd.AddCommand(sprintsUnpinCmd)
+	sprintsCmd.AddCommand(sprintsRenameCmd)
+	sprintsCmd.AddCommand(sprintsPrefixCmd)
 }

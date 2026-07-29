@@ -146,6 +146,13 @@ type Model struct {
 	pickerShowArchived bool   // when true, picker lists archived sprints below active ones
 	confirmArchive     string // non-empty = mid-confirm prompt for that sprint name
 
+	// Sprint rename form, hosted inside the picker popup.
+	renameTarget     string // non-empty = the sprint being renamed
+	renameFromPrefix string // its prefix when the form opened, for the id hint
+	renameName       textinput.Model
+	renamePrefix     textinput.Model
+	renameFocus      int // renameFocusName | renameFocusPrefix
+
 	// Move popup state
 	moveStage        moveStage
 	moveRows         []moveRow
@@ -177,11 +184,50 @@ type archiveEntry struct {
 	ticket   model.Ticket
 }
 
-// pickerEntry is one row in the board picker — the main board or a sprint.
+// pickerEntry is one board in the board picker — the main board or a sprint.
 type pickerEntry struct {
 	name     string // "" for main
+	prefix   string // ticket-id prefix; "" on main, whose ids are bare numbers
 	counts   map[model.Status]int
 	archived bool // sprints only; main is never archived
+	pinned   bool // main is always pinned; sprints opt in with p
+}
+
+// pickerLine is one rendered line of the board picker: a board, or the divider
+// closing the pinned block. Keeping the divider out of pickerBoards means the
+// cursor index stays a board index and never has to skip over a non-board row.
+type pickerLine struct {
+	boardIdx int // index into pickerBoards; -1 for the divider
+}
+
+// pickerLines lays the picker out: pinned boards, a divider, then the rest.
+// The divider is dropped when either side of it is empty — with nothing pinned
+// but main, a line under main is noise rather than structure.
+func (m *Model) pickerLines() []pickerLine {
+	lines := make([]pickerLine, 0, len(m.pickerBoards)+1)
+	pinnedSprints := 0
+	for _, e := range m.pickerBoards {
+		if e.pinned && e.name != "" {
+			pinnedSprints++
+		}
+	}
+	for i, e := range m.pickerBoards {
+		if !e.pinned && pinnedSprints > 0 && (i == 0 || m.pickerBoards[i-1].pinned) {
+			lines = append(lines, pickerLine{boardIdx: -1})
+		}
+		lines = append(lines, pickerLine{boardIdx: i})
+	}
+	return lines
+}
+
+// pickerLineOf returns the rendered line index showing a given board.
+func pickerLineOf(lines []pickerLine, boardIdx int) int {
+	for i, l := range lines {
+		if l.boardIdx == boardIdx {
+			return i
+		}
+	}
+	return 0
 }
 
 // prefixLabel renders a board's ticket-id prefix. The main board has none —
@@ -2206,10 +2252,11 @@ func (m *Model) addHelpLine() string {
 // ─── Board picker ───────────────────────────────────────────────────
 
 func (m *Model) enterPicker() (tea.Model, tea.Cmd) {
-	// Each open is a clean default view — show-archived and confirm state
-	// are session-scoped to one popup, not persistent.
+	// Each open is a clean default view — show-archived, confirm and rename
+	// state are session-scoped to one popup, not persistent.
 	m.pickerShowArchived = false
 	m.confirmArchive = ""
+	m.renameTarget = ""
 	if !m.loadPickerData() {
 		return m, nil
 	}
@@ -2252,16 +2299,17 @@ func (m *Model) reloadPickerEntries() {
 	}
 }
 
-// loadPickerEntries returns main first (always sticky), then active sprints by
-// most recently edited; if includeArchived, archived sprints follow at the
-// bottom in the same order.
+// loadPickerEntries returns main first (always sticky, always pinned), then
+// pinned sprints in pin order, then the remaining active sprints by most
+// recently edited; if includeArchived, archived sprints follow at the bottom in
+// the same order. ListSprints does the pinned-first sorting.
 func loadPickerEntries(includeArchived bool) ([]pickerEntry, error) {
 	mainStore := store.New("")
 	mainBoard, err := mainStore.Load()
 	if err != nil {
 		return nil, err
 	}
-	entries := []pickerEntry{{name: "", counts: store.CountByStatus(mainBoard)}}
+	entries := []pickerEntry{{name: "", counts: store.CountByStatus(mainBoard), pinned: true}}
 
 	sprints, err := store.ListSprints()
 	if err != nil {
@@ -2271,7 +2319,13 @@ func loadPickerEntries(includeArchived bool) ([]pickerEntry, error) {
 		if s.Archived && !includeArchived {
 			continue
 		}
-		entries = append(entries, pickerEntry{name: s.Name, counts: s.StatusCounts, archived: s.Archived})
+		entries = append(entries, pickerEntry{
+			name:     s.Name,
+			prefix:   s.Prefix,
+			counts:   s.StatusCounts,
+			archived: s.Archived,
+			pinned:   s.Pinned,
+		})
 	}
 	return entries, nil
 }
@@ -2279,6 +2333,9 @@ func loadPickerEntries(includeArchived bool) ([]pickerEntry, error) {
 func (m *Model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.confirmArchive != "" {
 		return m.updatePickerConfirm(msg)
+	}
+	if m.renameTarget != "" {
+		return m.updatePickerRename(msg)
 	}
 	switch {
 	case key.Matches(msg, keys.Quit):
@@ -2298,8 +2355,209 @@ func (m *Model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.reloadPickerEntries()
 	case key.Matches(msg, keys.Unarchive):
 		return m.pickerUnarchive()
+	case key.Matches(msg, keys.Pin):
+		return m.pickerTogglePin()
+	case key.Matches(msg, keys.Rename):
+		return m.startPickerRename()
+	case key.Matches(msg, keys.MoveUp):
+		return m.pickerReorderPin(-1)
+	case key.Matches(msg, keys.MoveDown):
+		return m.pickerReorderPin(1)
 	}
 	return m, nil
+}
+
+// pickerTogglePin pins or unpins the highlighted sprint. The cursor follows the
+// board it was on, which the re-sort has usually moved.
+func (m *Model) pickerTogglePin() (tea.Model, tea.Cmd) {
+	if m.pickerIdx < 0 || m.pickerIdx >= len(m.pickerBoards) {
+		return m, nil
+	}
+	e := m.pickerBoards[m.pickerIdx]
+	if e.name == "" {
+		m.notice = "main is always pinned"
+		return m, nil
+	}
+	if e.archived {
+		m.notice = "archived sprints can't be pinned — press u to unarchive"
+		return m, nil
+	}
+	pinned, err := store.TogglePin(e.name)
+	if err != nil {
+		m.err = err
+		m.notice = err.Error()
+		return m, nil
+	}
+	m.reloadPickerEntriesOn(e.name)
+	if pinned {
+		m.notice = fmt.Sprintf("pinned %q", e.name)
+	} else {
+		m.notice = fmt.Sprintf("unpinned %q", e.name)
+	}
+	return m, nil
+}
+
+// pickerReorderPin moves the highlighted pinned sprint up or down within the
+// pinned block. Main holds the top slot, and the block's lower edge is the
+// divider — J on the last pinned sprint does nothing rather than unpinning it.
+func (m *Model) pickerReorderPin(dir int) (tea.Model, tea.Cmd) {
+	if m.pickerIdx < 0 || m.pickerIdx >= len(m.pickerBoards) {
+		return m, nil
+	}
+	e := m.pickerBoards[m.pickerIdx]
+	if e.name == "" {
+		m.notice = "main stays at the top"
+		return m, nil
+	}
+	if !e.pinned {
+		m.notice = "only pinned boards can be reordered — press p to pin"
+		return m, nil
+	}
+	if err := store.MovePin(e.name, dir); err != nil {
+		m.err = err
+		m.notice = err.Error()
+		return m, nil
+	}
+	m.reloadPickerEntriesOn(e.name)
+	return m, nil
+}
+
+// renameFocus values — also the tab cycle order.
+const (
+	renameFocusName = iota
+	renameFocusPrefix
+)
+
+// startPickerRename opens the two-field rename form on the highlighted sprint:
+// its name, and the prefix its ticket ids carry.
+func (m *Model) startPickerRename() (tea.Model, tea.Cmd) {
+	if m.pickerIdx < 0 || m.pickerIdx >= len(m.pickerBoards) {
+		return m, nil
+	}
+	e := m.pickerBoards[m.pickerIdx]
+	if e.name == "" {
+		m.notice = "main board can't be renamed"
+		return m, nil
+	}
+	if e.archived {
+		m.notice = "archived sprints are read-only — press u to unarchive"
+		return m, nil
+	}
+
+	nameIn := textinput.New()
+	nameIn.Prompt = ""
+	nameIn.CharLimit = 64
+	nameIn.Width = 28 // a 64-char name would otherwise push past the popup edge
+	nameIn.SetValue(e.name)
+	nameIn.CursorEnd()
+	nameIn.Focus()
+	m.renameName = nameIn
+
+	prefixIn := textinput.New()
+	prefixIn.Prompt = ""
+	prefixIn.CharLimit = 4
+	prefixIn.Width = 4
+	prefixIn.SetValue(e.prefix)
+	prefixIn.CursorEnd()
+	prefixIn.Blur()
+	m.renamePrefix = prefixIn
+
+	m.renameFocus = renameFocusName
+	m.renameFromPrefix = e.prefix
+	m.renameTarget = e.name
+	return m, textinput.Blink
+}
+
+func (m *Model) updatePickerRename(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// The fields swallow runes, so j/k can't move between them — tab and the
+	// arrow keys do.
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.cancelPickerRename()
+		return m, nil
+	case tea.KeyEnter:
+		return m.submitPickerRename()
+	case tea.KeyTab, tea.KeyDown:
+		m.focusRenameField(1)
+		return m, nil
+	case tea.KeyShiftTab, tea.KeyUp:
+		m.focusRenameField(-1)
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	if m.renameFocus == renameFocusName {
+		m.renameName, cmd = m.renameName.Update(msg)
+	} else {
+		m.renamePrefix, cmd = m.renamePrefix.Update(msg)
+	}
+	return m, cmd
+}
+
+func (m *Model) focusRenameField(dir int) {
+	m.renameFocus = (m.renameFocus + dir + 2) % 2
+	if m.renameFocus == renameFocusName {
+		m.renameName.Focus()
+		m.renamePrefix.Blur()
+		return
+	}
+	m.renamePrefix.Focus()
+	m.renameName.Blur()
+}
+
+func (m *Model) cancelPickerRename() {
+	m.renameTarget = ""
+	m.renameName.Blur()
+	m.renamePrefix.Blur()
+}
+
+// submitPickerRename applies the form. A rejected change leaves the form open on
+// the values the user typed, with the reason in the footer — retyping a name
+// from scratch to fix one character would be the worse trade.
+func (m *Model) submitPickerRename() (tea.Model, tea.Cmd) {
+	target := m.renameTarget
+	newName := strings.TrimSpace(m.renameName.Value())
+	newPrefix := strings.TrimSpace(m.renamePrefix.Value())
+	if newName == "" {
+		newName = target
+	}
+
+	if err := store.UpdateSprint(target, newName, newPrefix); err != nil {
+		m.notice = err.Error()
+		return m, nil
+	}
+	m.cancelPickerRename()
+
+	// The live board's directory just moved, so a model sitting on it has to be
+	// re-pointed before its next read.
+	if m.sprintName == target {
+		if err := m.switchBoard(newName); err != nil {
+			m.err = err
+			return m, nil
+		}
+	}
+	m.reloadPickerEntriesOn(newName)
+	if newName != target {
+		m.notice = fmt.Sprintf("renamed %q to %q", target, newName)
+	} else {
+		m.notice = fmt.Sprintf("%q ids now carry %s", newName, strings.ToUpper(newPrefix))
+	}
+	return m, nil
+}
+
+// reloadPickerEntriesOn refreshes the list and parks the cursor on a named
+// board, wherever the new ordering put it.
+func (m *Model) reloadPickerEntriesOn(name string) {
+	if !m.loadPickerData() {
+		return
+	}
+	m.pickerIdx = 0
+	for i, e := range m.pickerBoards {
+		if e.name == name {
+			m.pickerIdx = i
+			break
+		}
+	}
 }
 
 func (m *Model) movePickerCursor(dir int) {
@@ -2337,6 +2595,10 @@ func (m *Model) startPickerArchive() (tea.Model, tea.Cmd) {
 	}
 	if e.archived {
 		m.notice = "already archived — press u to unarchive"
+		return m, nil
+	}
+	if e.pinned {
+		m.notice = "pinned — press p to unpin before archiving"
 		return m, nil
 	}
 	m.confirmArchive = e.name
@@ -2429,12 +2691,15 @@ func (m *Model) switchBoard(sprintName string) error {
 }
 
 func (m *Model) viewPicker() string {
-	rowCount := len(m.pickerBoards)
+	rowCount := len(m.pickerLines())
 	if rowCount < 1 {
 		rowCount = 1
 	}
 	if m.confirmArchive != "" {
 		rowCount += 2 // blank + confirm prompt
+	}
+	if m.renameTarget != "" {
+		rowCount += 4 // blank + heading + name + prefix
 	}
 	popupHeight := rowCount + 2
 	if popupHeight > m.height-4 {
@@ -2489,14 +2754,23 @@ func (m *Model) renderPickerPopup(width, height int, origin point) string {
 		innerWidth = 10
 	}
 
+	lines := m.pickerLines()
 	var rows []string
-	for i, e := range m.pickerBoards {
-		rows = append(rows, renderPickerRow(e, innerWidth, i == m.pickerIdx, e.name == m.sprintName))
+	for _, l := range lines {
+		if l.boardIdx < 0 {
+			rows = append(rows, dimStyle.Render(strings.Repeat("─", innerWidth)))
+			continue
+		}
+		e := m.pickerBoards[l.boardIdx]
+		rows = append(rows, renderPickerRow(e, innerWidth, l.boardIdx == m.pickerIdx, e.name == m.sprintName))
 	}
 	rowOffset := 0
 	if m.confirmArchive != "" {
 		prompt := fmt.Sprintf("archive %q? [y/N]", m.confirmArchive)
 		rows = append(rows, "", lipgloss.NewStyle().Foreground(peach).Bold(true).Render(prompt))
+	}
+	if m.renameTarget != "" {
+		rows = append(rows, m.renameFormRows(innerWidth)...)
 	}
 
 	visible := height - 2
@@ -2504,7 +2778,12 @@ func (m *Model) renderPickerPopup(width, height int, origin point) string {
 		visible = 1
 	}
 	if len(rows) > visible {
-		start := m.pickerIdx - visible/2
+		start := pickerLineOf(lines, m.pickerIdx) - visible/2
+		if m.renameTarget != "" || m.confirmArchive != "" {
+			// Both live at the bottom of the list and both want keys: anchor
+			// there so a short terminal never hides the thing being typed into.
+			start = len(rows) - visible
+		}
 		if start < 0 {
 			start = 0
 		}
@@ -2515,18 +2794,63 @@ func (m *Model) renderPickerPopup(width, height int, origin point) string {
 		rowOffset = start
 	}
 
-	// Board rows are clickable; the confirm prompt rows (appended after them)
-	// are not, and fall outside the loop below.
+	// Board rows are clickable; the divider and the confirm prompt rows
+	// (appended after the boards) are not.
 	for i := range rows {
 		idx := rowOffset + i
-		if idx >= len(m.pickerBoards) {
+		if idx >= len(lines) {
 			break
 		}
-		m.addZone(hitZone{kind: zonePickerRow, x: origin.x + 2, y: origin.y + 1 + i, w: innerWidth, h: 1, idx: idx})
+		if lines[idx].boardIdx < 0 {
+			continue
+		}
+		m.addZone(hitZone{
+			kind: zonePickerRow,
+			x:    origin.x + 2,
+			y:    origin.y + 1 + i,
+			w:    innerWidth,
+			h:    1,
+			idx:  lines[idx].boardIdx,
+		})
 	}
 
 	content := lipgloss.NewStyle().PaddingLeft(1).Render(strings.Join(rows, "\n"))
 	return renderPanel("Boards", content, width, height, green, true)
+}
+
+// renameFormRows renders the rename form under the board list: a heading, then
+// the name and prefix fields. The focused field's label carries the accent —
+// styling the inputs themselves mangles the cursor textinput draws.
+func (m *Model) renameFormRows(width int) []string {
+	const labelWidth = 8
+	label := func(text string, focused bool) string {
+		style := lipgloss.NewStyle().Foreground(midGray).Width(labelWidth)
+		if focused {
+			style = style.Foreground(green).Bold(true)
+		}
+		return style.Render(text)
+	}
+	// No sprint name in the heading — the name field below is already showing
+	// it, and a 64-char one would push the popup past its width cap.
+	heading := lipgloss.NewStyle().Foreground(peach).Bold(true).Render("rename sprint")
+
+	return []string{
+		"",
+		heading,
+		label("name", m.renameFocus == renameFocusName) + m.renameName.View(),
+		label("prefix", m.renameFocus == renameFocusPrefix) + m.renamePrefix.View() + m.renameIDHint(),
+	}
+}
+
+// renameIDHint spells out what a changed prefix does to existing ids — the part
+// that isn't obvious from typing two letters into a field. Silent when the
+// prefix is untouched.
+func (m *Model) renameIDHint() string {
+	next := strings.ToUpper(strings.TrimSpace(m.renamePrefix.Value()))
+	if next == "" || next == strings.ToUpper(m.renameFromPrefix) {
+		return ""
+	}
+	return dimStyle.Render(fmt.Sprintf("  %s1 → %s1", m.renameFromPrefix, next))
 }
 
 func renderPickerRow(e pickerEntry, width int, selected, current bool) string {
@@ -2591,10 +2915,13 @@ func (m *Model) helpText() string {
 		if m.confirmArchive != "" {
 			return fmt.Sprintf("archive %q? y / n", m.confirmArchive)
 		}
-		if m.pickerShowArchived {
-			return "j/k select | enter switch | x archive | u unarchive | X hide archived | esc/tab close"
+		if m.renameTarget != "" {
+			return "tab/↑↓ fields | enter apply | esc cancel"
 		}
-		return "j/k select | enter switch | x archive | X show archived | esc/tab close"
+		if m.pickerShowArchived {
+			return "j/k select | enter switch | r rename | p pin | J/K reorder | x archive | u unarchive | X hide archived | esc/tab close"
+		}
+		return "j/k select | enter switch | r rename | p pin | J/K reorder | x archive | X show archived | esc/tab close"
 	case archiveView:
 		return "j/k nav | u unarchive | c copy id | X/esc back | q quit"
 	case splitView:

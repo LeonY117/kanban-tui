@@ -24,6 +24,7 @@ type SprintInfo struct {
 	StatusCounts map[model.Status]int
 	LastModified time.Time
 	Archived     bool
+	Pinned       bool
 }
 
 func ValidateSprintName(name string) error {
@@ -117,7 +118,8 @@ func CreateSprint(name, prefix string) error {
 }
 
 // RemoveSprint deletes a sprint's entire directory, whether active or
-// archived. Errors if it doesn't exist.
+// archived. Errors if it doesn't exist. Drops the sprint's pin too, so the
+// pinned list never carries a name with nothing behind it.
 func RemoveSprint(name string) error {
 	path, _, exists, err := resolveSprintDir(name)
 	if err != nil {
@@ -126,12 +128,17 @@ func RemoveSprint(name string) error {
 	if !exists {
 		return fmt.Errorf("sprint %q doesn't exist", name)
 	}
-	return os.RemoveAll(path)
+	if err := os.RemoveAll(path); err != nil {
+		return err
+	}
+	return Unpin(name)
 }
 
 // ArchiveSprint renames a sprint's directory to add the archived suffix.
 // Acquires the board lock first so in-flight operations finish before the
-// rename. Errors if the sprint doesn't exist or is already archived.
+// rename. Errors if the sprint doesn't exist, is already archived, or is
+// pinned — a pin says "keep this in front of me", so archiving one is taken as
+// a mistake rather than silently unpinning it.
 func ArchiveSprint(name string) error {
 	path, archived, exists, err := resolveSprintDir(name)
 	if err != nil {
@@ -142,6 +149,9 @@ func ArchiveSprint(name string) error {
 	}
 	if archived {
 		return fmt.Errorf("sprint %q is already archived", name)
+	}
+	if IsPinned(name) {
+		return fmt.Errorf("sprint %q is pinned; unpin it first (`kanban sprints unpin %s`, or p in the board picker)", name, name)
 	}
 	s := New(path)
 	return s.WithLock(func() error {
@@ -169,10 +179,11 @@ func UnarchiveSprint(name string) error {
 	})
 }
 
-// ListSprints returns all sprints (active and archived). Active sprints come
-// first, sub-sorted by board mtime (most recently edited first); archived
-// sprints come after, sub-sorted the same way. A sprint is a directory under
-// sprints/ containing a board.json — bare directories are skipped.
+// ListSprints returns all sprints (active and archived). Pinned sprints come
+// first in pin order, then the rest by board mtime (most recently edited
+// first); archived sprints come last, sub-sorted by mtime. A sprint is a
+// directory under sprints/ containing a board.json — bare directories are
+// skipped.
 func ListSprints() ([]SprintInfo, error) {
 	root := filepath.Join(defaultRoot(), sprintsSubdir)
 	entries, err := os.ReadDir(root)
@@ -181,6 +192,15 @@ func ListSprints() ([]SprintInfo, error) {
 			return nil, nil
 		}
 		return nil, err
+	}
+
+	pinned, err := LoadPins()
+	if err != nil {
+		return nil, err
+	}
+	pinRank := make(map[string]int, len(pinned))
+	for i, name := range pinned {
+		pinRank[name] = i
 	}
 
 	var sprints []SprintInfo
@@ -204,6 +224,7 @@ func ListSprints() ([]SprintInfo, error) {
 		if err != nil {
 			continue
 		}
+		_, isPinned := pinRank[logicalName]
 		sprints = append(sprints, SprintInfo{
 			Name:         logicalName,
 			Prefix:       EffectivePrefix(board, logicalName),
@@ -211,12 +232,23 @@ func ListSprints() ([]SprintInfo, error) {
 			StatusCounts: CountByStatus(board),
 			LastModified: info.ModTime(),
 			Archived:     archived,
+			// A pin on an archived sprint can only come from hand-editing
+			// pins.json — ArchiveSprint refuses while pinned and Pin refuses
+			// when archived. Report it unpinned so it sorts with the archived
+			// block rather than jumping to the top.
+			Pinned: isPinned && !archived,
 		})
 	}
 
 	sort.Slice(sprints, func(i, j int) bool {
 		if sprints[i].Archived != sprints[j].Archived {
 			return !sprints[i].Archived // active first
+		}
+		if sprints[i].Pinned != sprints[j].Pinned {
+			return sprints[i].Pinned // pinned above the rest
+		}
+		if sprints[i].Pinned {
+			return pinRank[sprints[i].Name] < pinRank[sprints[j].Name]
 		}
 		if !sprints[i].LastModified.Equal(sprints[j].LastModified) {
 			return sprints[i].LastModified.After(sprints[j].LastModified)

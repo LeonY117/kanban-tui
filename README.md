@@ -55,6 +55,8 @@ Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden
 | `X` | Open archive browser |
 | `u` | Unarchive (in archive browser) |
 | `tab` | Open board picker (main + sprints) |
+| `p` | Pin / unpin the highlighted board (in board picker) |
+| `r` | Rename the highlighted sprint + its ticket-id prefix (in board picker) |
 | `d` | Delete ticket (in detail view) |
 | `?` | Help |
 | `q` | Quit |
@@ -159,10 +161,35 @@ kanban sprints                                 # list active sprints + ticket co
 kanban sprints new demo-april                  # create
 kanban sprints archive demo-april              # hide + freeze (reads still work)
 kanban sprints unarchive demo-april            # restore
+kanban sprints pin demo-april                  # keep it at the top of the picker
+kanban sprints unpin demo-april                # release it back to mtime order
+kanban sprints rename demo-april demo-may      # rename the board (ids untouched)
+kanban sprints prefix demo-may DM              # DA7 → DM7, board + archive
 kanban sprints rm demo-april                   # delete
 ```
 
 Sprint names: `[A-Za-z0-9_-]`, 1–64 chars. From the TUI, `tab` opens a board picker that switches between main and any active sprint. The bottom-left badge shows the current board and, as a dim hint beside it, the prefix its next ticket will carry — `kanban [KA]`, or `main [#]` for bare numbers.
+
+### Pinned boards
+
+Unpinned boards sort by most recently edited, which buries the board you check
+often but rarely write to. `p` in the picker pins one above a divider line;
+`J` / `K` reorder the pinned block. Main is always pinned and holds the top
+slot. A pinned board can't be archived until it's unpinned — the pin is the
+statement that you still want it in front of you.
+
+### Renaming a board
+
+`r` in the picker opens a two-field form: the sprint's name, and the prefix its
+ticket ids carry. Changing the prefix rewrites the short id of every ticket on
+the board **and in its archive**, keeping the number — `KA7` becomes `KB7` — so
+the part people actually quote survives. It's refused outright if another board
+already issued one of the target ids, per id rather than per prefix, since two
+boards are allowed to share a prefix and interleave their numbers.
+
+Renaming the name alone never touches ids. It does pin down a prefix that was
+being derived from the name, so a board created before prefixes existed doesn't
+quietly change which ids it hands out next.
 
 ## Storage
 
@@ -173,6 +200,7 @@ Everything lives in `~/.kanban/`:
 - `.board.lock` — file lock for concurrent access (so the TUI and a CLI-driven agent don't trample each other).
 - `sprints/<name>/` — same layout, per sprint.
 - `counters.json` — the last ticket number issued per id prefix.
+- `pins.json` — pinned sprint names, in the order they appear.
 
 Override the root with the `KANBAN_FILE` env var.
 

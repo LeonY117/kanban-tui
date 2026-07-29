@@ -2413,6 +2413,12 @@ func (m *Model) pickerReorderPin(dir int) (tea.Model, tea.Cmd) {
 		m.notice = "only pinned boards can be reordered — press p to pin"
 		return m, nil
 	}
+	// MovePin clamps silently at both ends, so say which edge was hit rather
+	// than leaving the keypress looking broken.
+	if atEdge, edge := m.pinnedBlockEdge(m.pickerIdx, dir); atEdge {
+		m.notice = edge
+		return m, nil
+	}
 	if err := store.MovePin(e.name, dir); err != nil {
 		m.err = err
 		m.notice = err.Error()
@@ -2420,6 +2426,28 @@ func (m *Model) pickerReorderPin(dir int) (tea.Model, tea.Cmd) {
 	}
 	m.reloadPickerEntriesOn(e.name)
 	return m, nil
+}
+
+// pinnedBlockEdge reports whether moving the board at idx by dir would leave the
+// pinned block, and what to tell the user if so.
+func (m *Model) pinnedBlockEdge(idx, dir int) (bool, string) {
+	if dir < 0 {
+		// Index 0 is main, which always holds the top slot.
+		if idx <= 1 {
+			return true, "main stays at the top"
+		}
+		return false, ""
+	}
+	last := idx
+	for i, e := range m.pickerBoards {
+		if e.pinned && e.name != "" {
+			last = i
+		}
+	}
+	if idx >= last {
+		return true, "already last in the pinned block — press p to unpin"
+	}
+	return false, ""
 }
 
 // renameFocus values — also the tab cycle order.
@@ -2522,25 +2550,37 @@ func (m *Model) submitPickerRename() (tea.Model, tea.Cmd) {
 		newName = target
 	}
 
+	// What actually changed, decided before the write so the notice can't claim
+	// more than happened. An empty prefix field means "leave it alone", which is
+	// UpdateSprint's own reading of it.
+	renamed := newName != target
+	retagged := newPrefix != "" && !strings.EqualFold(newPrefix, m.renameFromPrefix)
+
 	if err := store.UpdateSprint(target, newName, newPrefix); err != nil {
 		m.notice = err.Error()
 		return m, nil
 	}
 	m.cancelPickerRename()
 
-	// The live board's directory just moved, so a model sitting on it has to be
-	// re-pointed before its next read.
-	if m.sprintName == target {
+	// Only re-point the live model when its directory actually moved —
+	// switchBoard resets column focus, cursors and scroll, so doing it on an
+	// unchanged submit would throw away the user's place on the board.
+	if renamed && m.sprintName == target {
 		if err := m.switchBoard(newName); err != nil {
 			m.err = err
 			return m, nil
 		}
 	}
 	m.reloadPickerEntriesOn(newName)
-	if newName != target {
+	switch {
+	case renamed && retagged:
+		m.notice = fmt.Sprintf("renamed %q to %q, ids now carry %s", target, newName, strings.ToUpper(newPrefix))
+	case renamed:
 		m.notice = fmt.Sprintf("renamed %q to %q", target, newName)
-	} else {
+	case retagged:
 		m.notice = fmt.Sprintf("%q ids now carry %s", newName, strings.ToUpper(newPrefix))
+	default:
+		m.notice = "nothing changed"
 	}
 	return m, nil
 }
@@ -2795,8 +2835,12 @@ func (m *Model) renderPickerPopup(width, height int, origin point) string {
 	}
 
 	// Board rows are clickable; the divider and the confirm prompt rows
-	// (appended after the boards) are not.
-	for i := range rows {
+	// (appended after the boards) are not. While the rename form or the archive
+	// confirm owns the keyboard, no row is: moving the highlight would leave it
+	// pointing at a board the form isn't editing, and a click would close the
+	// popup and silently discard what was typed.
+	rowsAreLive := m.renameTarget == "" && m.confirmArchive == ""
+	for i := 0; rowsAreLive && i < len(rows); i++ {
 		idx := rowOffset + i
 		if idx >= len(lines) {
 			break

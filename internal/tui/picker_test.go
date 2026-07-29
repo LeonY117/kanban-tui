@@ -453,6 +453,102 @@ func TestPickerRenameFormStaysVisibleWhenCramped(t *testing.T) {
 	}
 }
 
+// MovePin clamps silently at both ends, so the TUI has to say which edge was hit
+// — otherwise the keypress just looks broken.
+func TestPickerReorderExplainsBothEdges(t *testing.T) {
+	m := pickerModel(t, "alpha", "beta")
+	for _, name := range []string{"alpha", "beta"} {
+		selectBoard(t, m, name)
+		m.pickerTogglePin()
+	}
+
+	selectBoard(t, m, "alpha") // top of the pinned block, under main
+	m.notice = ""
+	m.pickerReorderPin(-1)
+	if !strings.Contains(m.notice, "main") {
+		t.Errorf("notice at the top edge = %q, want it to mention main", m.notice)
+	}
+
+	selectBoard(t, m, "beta") // bottom of the pinned block
+	m.notice = ""
+	m.pickerReorderPin(1)
+	if m.notice == "" {
+		t.Error("no notice at the bottom edge of the pinned block")
+	}
+	if !store.IsPinned("beta") {
+		t.Error("the clamped move unpinned beta")
+	}
+}
+
+// The notice must describe what actually happened — an unedited submit changes
+// nothing, and an emptied prefix field means "leave it alone".
+func TestPickerRenameNoticeMatchesWhatChanged(t *testing.T) {
+	m := pickerModel(t, "kanban")
+
+	selectBoard(t, m, "kanban")
+	m.startPickerRename()
+	m.submitPickerRename() // nothing edited
+	if m.notice != "nothing changed" {
+		t.Errorf("notice on an unedited submit = %q, want \"nothing changed\"", m.notice)
+	}
+
+	selectBoard(t, m, "kanban")
+	m.startPickerRename()
+	m.renamePrefix.SetValue("") // cleared, not changed to something
+	m.submitPickerRename()
+	if strings.Contains(m.notice, "ids now carry") {
+		t.Errorf("notice = %q, want no claim that ids were retagged", m.notice)
+	}
+
+	selectBoard(t, m, "kanban")
+	m.startPickerRename()
+	m.renamePrefix.SetValue("ZZ")
+	m.submitPickerRename()
+	if !strings.Contains(m.notice, "ZZ") {
+		t.Errorf("notice on a real retag = %q, want it to name ZZ", m.notice)
+	}
+}
+
+// An unedited submit must not cost the user their place on the board.
+func TestPickerRenameNoOpKeepsBoardPosition(t *testing.T) {
+	m := pickerModel(t, "kanban")
+	if err := m.switchBoard("kanban"); err != nil {
+		t.Fatal(err)
+	}
+	m.focusedCol = 2
+	m.cursors = [5]int{0, 0, 3, 0, 0}
+	m.enterPicker()
+	selectBoard(t, m, "kanban")
+
+	m.startPickerRename()
+	m.submitPickerRename() // nothing edited
+
+	if m.focusedCol != 2 {
+		t.Errorf("focusedCol = %d, want 2 — an unchanged submit moved the user", m.focusedCol)
+	}
+	if m.cursors[2] != 3 {
+		t.Errorf("cursors = %v, want the Doing cursor still on index 3", m.cursors)
+	}
+}
+
+// While the rename form owns the keyboard, a click or wheel event over the board
+// list would move a highlight that no longer means anything — and a click would
+// discard everything typed.
+func TestPickerRowsAreInertWhileRenaming(t *testing.T) {
+	m := pickerModel(t, "alpha", "beta")
+	selectBoard(t, m, "alpha")
+	m.startPickerRename()
+
+	m.resetZones()
+	m.renderPickerPopup(50, 12, point{x: 0, y: 0})
+
+	for _, z := range m.zones {
+		if z.kind == zonePickerRow {
+			t.Fatalf("board row at y=%d is still clickable while the rename form is open", z.y)
+		}
+	}
+}
+
 // A pinned board the user rarely touches is the whole point: reopening the
 // picker must not re-sort it back down by mtime.
 func TestPinSurvivesReopeningThePicker(t *testing.T) {

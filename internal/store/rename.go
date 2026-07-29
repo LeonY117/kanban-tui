@@ -49,8 +49,10 @@ func UpdateSprint(oldName, newName, newPrefix string) error {
 	if archived {
 		return fmt.Errorf("sprint %q is archived (read-only); run `kanban sprints unarchive %s` first", oldName, oldName)
 	}
-	if newName != oldName && SprintExists(newName) {
-		return fmt.Errorf("sprint %q already exists", newName)
+	if newName != oldName {
+		if err := checkNameFree(path, newName); err != nil {
+			return err
+		}
 	}
 
 	s := New(path)
@@ -71,6 +73,9 @@ func UpdateSprint(oldName, newName, newPrefix string) error {
 	boardIDs := retaggedIDs(board, oldPrefix, newPrefix)
 	archiveIDs := retaggedIDs(archive, oldPrefix, newPrefix)
 	if newPrefix != oldPrefix {
+		if err := checkNoSelfClash(board, archive, boardIDs, archiveIDs); err != nil {
+			return err
+		}
 		if err := checkIDsFree(path, newPrefix, boardIDs, archiveIDs); err != nil {
 			return err
 		}
@@ -119,6 +124,44 @@ func UpdateSprint(oldName, newName, newPrefix string) error {
 		}
 	}
 	return nil
+}
+
+// checkNameFree reports whether newName is available for the sprint currently at
+// oldPath.
+//
+// Two cases need more than "already exists". On a case-insensitive filesystem a
+// case-only rename resolves to the sprint's own directory, so refusing it would
+// make capitalisation permanently unfixable — os.Rename handles that in place, so
+// allow it. And an archived sprint is invisible in the default picker, so a bare
+// "already exists" names a board the user cannot see; say it's archived, the way
+// CreateSprint does.
+func checkNameFree(oldPath, newName string) error {
+	target, archived, exists, err := resolveSprintDir(newName)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	if !archived {
+		if same, err := sameDir(oldPath, target); err == nil && same {
+			return nil // case-only rename of this very sprint
+		}
+		return fmt.Errorf("sprint %q already exists", newName)
+	}
+	return fmt.Errorf("sprint %q already exists (archived); run `kanban sprints unarchive %s` to restore or pick another name", newName, newName)
+}
+
+func sameDir(a, b string) (bool, error) {
+	fa, err := os.Stat(a)
+	if err != nil {
+		return false, err
+	}
+	fb, err := os.Stat(b)
+	if err != nil {
+		return false, err
+	}
+	return os.SameFile(fa, fb), nil
 }
 
 // retaggedID is one planned short-id rewrite.
@@ -174,6 +217,55 @@ func highestNumber(sets ...[]retaggedID) int {
 		}
 	}
 	return max
+}
+
+// checkNoSelfClash refuses the retag if an id it would mint is already held by a
+// ticket on this same board.
+//
+// A cross-board move keeps the ticket's short id, so a board can hold ids from a
+// prefix that isn't its own — sprint `kanban` holding an `AL1` that arrived from
+// `alpha`. Those ids don't parse under the old prefix, so retaggedIDs leaves them
+// alone, and checkIDsFree can't see them because it skips this board's own
+// directory. Retagging `kanban` to AL would then rewrite KA1 → AL1 and leave two
+// AL1s on one board, where FindByID returns the first and the other ticket
+// becomes unreachable by id.
+func checkNoSelfClash(board, archive *model.Board, boardIDs, archiveIDs []retaggedID) error {
+	retagged := map[string]bool{}
+	for _, set := range [][]retaggedID{boardIDs, archiveIDs} {
+		for _, r := range set {
+			retagged[r.ticketID] = true
+		}
+	}
+	// Ids that survive the rewrite untouched, and so still occupy their slot.
+	kept := map[string]bool{}
+	for _, b := range []*model.Board{board, archive} {
+		if b == nil {
+			continue
+		}
+		for _, t := range b.Tickets {
+			if !retagged[t.ID] {
+				kept[strings.ToUpper(t.ShortID)] = true
+			}
+		}
+	}
+
+	var clashes []string
+	seen := map[string]bool{}
+	for _, set := range [][]retaggedID{boardIDs, archiveIDs} {
+		for _, r := range set {
+			key := strings.ToUpper(r.newID)
+			if kept[key] && !seen[key] {
+				seen[key] = true
+				clashes = append(clashes, r.newID)
+			}
+		}
+	}
+	if len(clashes) == 0 {
+		return nil
+	}
+	sort.Strings(clashes)
+	return fmt.Errorf("this board already holds %s — a ticket moved in from another board carries that id; move it out or renumber it first",
+		strings.Join(clashes, ", "))
 }
 
 // checkIDsFree refuses the retag if any id it would mint is already issued on

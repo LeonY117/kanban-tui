@@ -295,6 +295,91 @@ func TestPrefixChangeAllowsASharedPrefixWithFreeNumbers(t *testing.T) {
 	}
 }
 
+// A cross-board move keeps the ticket's short id, so a board can hold ids from a
+// foreign prefix. Retagging onto that prefix would mint an id the board already
+// holds — and the cross-board check can't see it, because it skips this board.
+func TestPrefixChangeRefusesIDsHeldByTheBoardItself(t *testing.T) {
+	sandboxRoot(t)
+	if err := CreateSprint("alpha", "AL"); err != nil {
+		t.Fatal(err)
+	}
+	mustCreateSprint(t, "kanban")
+	alpha, err := NewSprint("alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kanban, err := NewSprint("kanban")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	moved := addTicket(t, alpha, "born on alpha") // AL1
+	addTicket(t, kanban, "ka one")                // KA1
+	if err := MoveTicket(alpha, kanban, moved.ID, model.StatusTodo); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := shortIDs(t, kanban), []string{"KA1", "AL1"}; !equalStrings(got, want) {
+		t.Fatalf("setup ids = %v, want %v", got, want)
+	}
+
+	err = UpdateSprint("kanban", "kanban", "AL")
+	if err == nil {
+		t.Fatal("retag succeeded, leaving two AL1 tickets on one board")
+	}
+	if !strings.Contains(err.Error(), "AL1") {
+		t.Errorf("error %q doesn't name the clashing id", err)
+	}
+	if got, want := shortIDs(t, kanban), []string{"KA1", "AL1"}; !equalStrings(got, want) {
+		t.Errorf("ids = %v, want %v — a refused retag rewrote them anyway", got, want)
+	}
+}
+
+// Capitalisation has to be fixable. On a case-insensitive filesystem the new name
+// resolves to the sprint's own directory, which must not read as "taken".
+func TestRenameAllowsACaseOnlyChange(t *testing.T) {
+	sandboxRoot(t)
+	mustCreateSprint(t, "kanban")
+	s, err := NewSprint("kanban")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addTicket(t, s, "one")
+
+	if err := UpdateSprint("kanban", "Kanban", ""); err != nil {
+		t.Fatalf("case-only rename refused: %v", err)
+	}
+	renamed, err := NewSprint("Kanban")
+	if err != nil {
+		t.Fatal(err)
+	}
+	board, err := renamed.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(board.Tickets) != 1 {
+		t.Errorf("tickets after a case-only rename: %d, want 1", len(board.Tickets))
+	}
+}
+
+// An archived sprint is hidden from the default picker, so a bare "already
+// exists" names a board the user cannot see.
+func TestRenameOntoArchivedNameSaysItIsArchived(t *testing.T) {
+	sandboxRoot(t)
+	mustCreateSprint(t, "alpha")
+	mustCreateSprint(t, "beta")
+	if err := ArchiveSprint("beta"); err != nil {
+		t.Fatal(err)
+	}
+
+	err := UpdateSprint("alpha", "beta", "")
+	if err == nil {
+		t.Fatal("rename onto an archived name succeeded")
+	}
+	if !strings.Contains(err.Error(), "archived") {
+		t.Errorf("error %q doesn't say the existing sprint is archived", err)
+	}
+}
+
 func TestPrefixChangeRejectsInvalidPrefix(t *testing.T) {
 	sandboxRoot(t)
 	mustCreateSprint(t, "kanban")

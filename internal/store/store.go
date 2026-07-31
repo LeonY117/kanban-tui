@@ -90,6 +90,7 @@ func (s *Store) Load() (*model.Board, error) {
 	if board.Tickets == nil {
 		board.Tickets = []model.Ticket{}
 	}
+	board.NormalizeStatuses()
 	return &board, nil
 }
 
@@ -338,6 +339,7 @@ func (s *Store) loadArchive() (*model.Board, error) {
 	if board.Tickets == nil {
 		board.Tickets = []model.Ticket{}
 	}
+	board.NormalizeStatuses()
 	return &board, nil
 }
 

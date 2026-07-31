@@ -21,8 +21,21 @@ var AllStatuses = []Status{StatusBacklog, StatusTodo, StatusDoing, StatusDone, S
 // ColumnOrder defines display order for TUI columns.
 var ColumnOrder = []Status{StatusBacklog, StatusTodo, StatusDoing, StatusDone, StatusHold}
 
+// statusAliases maps names that aren't statuses of their own to the status they
+// resolve to. "Waiting" and "hold" turned out to be two words for the same
+// state, work you've put down, so WAITING resolves to HOLD instead of becoming
+// a sixth column: boards that stored it are normalised on load, and anyone in
+// the habit of typing --status WAITING still lands where they meant.
+var statusAliases = map[string]Status{
+	"WAITING":    StatusHold,
+	"WAITING ON": StatusHold,
+	"WAITING-ON": StatusHold,
+	"WAITING_ON": StatusHold,
+}
+
 func ParseStatus(s string) (Status, error) {
-	switch strings.ToUpper(strings.TrimSpace(s)) {
+	key := strings.ToUpper(strings.TrimSpace(s))
+	switch key {
 	case "BACKLOG":
 		return StatusBacklog, nil
 	case "TODO":
@@ -33,9 +46,11 @@ func ParseStatus(s string) (Status, error) {
 		return StatusDone, nil
 	case "HOLD":
 		return StatusHold, nil
-	default:
-		return "", fmt.Errorf("invalid status %q, valid: BACKLOG, TODO, DOING, DONE, HOLD", s)
 	}
+	if aliased, ok := statusAliases[key]; ok {
+		return aliased, nil
+	}
+	return "", fmt.Errorf("invalid status %q, valid: BACKLOG, TODO, DOING, DONE, HOLD", s)
 }
 
 type Priority string
@@ -118,6 +133,24 @@ func (b *Board) Filter(opts FilterOptions) []Ticket {
 func (b *Board) ByStatus(status Status) []Ticket {
 	s := status
 	return b.Filter(FilterOptions{Status: &s})
+}
+
+// NormalizeStatuses rewrites tickets carrying an aliased status to the status it
+// resolves to, and reports how many changed. Boards are normalised as they load,
+// so a ticket written by a build with a column this one doesn't have still lands
+// in a real column instead of going invisible. The rewrite is in memory; it
+// reaches disk with the next save.
+func (b *Board) NormalizeStatuses() int {
+	changed := 0
+	for i := range b.Tickets {
+		aliased, ok := statusAliases[strings.ToUpper(string(b.Tickets[i].Status))]
+		if !ok {
+			continue
+		}
+		b.Tickets[i].Status = aliased
+		changed++
+	}
+	return changed
 }
 
 // FindByID resolves a ticket by full UUID, short id, or UUID prefix. Short ids

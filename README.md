@@ -29,7 +29,7 @@ Requires Go 1.22+.
 kanban
 ```
 
-Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden by default — press `0` to jump to it.
+Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden by default — press `0` to jump to it. Hold is the parked column, for work you've put down on purpose or that's blocked on someone else; you can [rename it](#config) if another word fits better.
 
 ### Keys
 
@@ -201,8 +201,32 @@ Everything lives in `~/.kanban/`:
 - `sprints/<name>/` — same layout, per sprint.
 - `counters.json` — the last ticket number issued per id prefix.
 - `pins.json` — pinned sprint names, in the order they appear.
+- `config.json` — display preferences (see [Config](#config)).
 
 Override the root with the `KANBAN_FILE` env var.
+
+## Config
+
+`~/.kanban/config.json` is optional. Without it you get the defaults; if it's malformed you also get the defaults, because a typo here shouldn't stand between you and your board.
+
+```json
+{
+  "statusLabels": { "HOLD": "Waiting" }
+}
+```
+
+**Renaming columns.** `statusLabels` changes what a column is called on screen. Keys are the canonical statuses (`BACKLOG`, `TODO`, `DOING`, `DONE`, `HOLD`), case-insensitive. Anything you leave out keeps its usual name.
+
+This is a label and nothing more. The status stored in `board.json` doesn't change, so `kanban list --status HOLD` still finds the column you renamed to Waiting, a board stays readable to someone whose labels differ, and agents and scripts get one vocabulary instead of having to read your config first. `WAITING` is also accepted anywhere a status is and resolves to `HOLD`.
+
+A renamed column takes the first letter of its new name in the board picker's count strip. Set `statusLabelsShort` if you want something else there:
+
+```json
+{
+  "statusLabels": { "HOLD": "Waiting" },
+  "statusLabelsShort": { "HOLD": "Wt" }
+}
+```
 
 ## Live reload
 

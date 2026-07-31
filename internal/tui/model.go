@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"sort"
 	"strings"
@@ -43,8 +44,8 @@ const (
 	inputSelect // for status picker
 )
 
-// statusDisplay maps internal status to sentence-case display name.
-var statusDisplay = map[model.Status]string{
+// defaultStatusDisplay maps internal status to sentence-case display name.
+var defaultStatusDisplay = map[model.Status]string{
 	model.StatusBacklog: "Backlog",
 	model.StatusTodo:    "Todo",
 	model.StatusDoing:   "Doing",
@@ -52,13 +53,65 @@ var statusDisplay = map[model.Status]string{
 	model.StatusHold:    "Hold",
 }
 
-// statusShort is the compact label used in the board picker count strip.
-var statusShort = map[model.Status]string{
+// defaultStatusShort is the compact label used in the board picker count strip.
+var defaultStatusShort = map[model.Status]string{
 	model.StatusBacklog: "B",
 	model.StatusTodo:    "T",
 	model.StatusDoing:   "Do",
 	model.StatusDone:    "Dn",
 	model.StatusHold:    "H",
+}
+
+// The labels the TUI actually draws. They start as the defaults and pick up
+// whatever config.json renames, so "hold" and "waiting" can be one column that
+// two people call different things without either board changing on disk.
+var (
+	statusDisplay = maps.Clone(defaultStatusDisplay)
+	statusShort   = maps.Clone(defaultStatusShort)
+)
+
+// ApplyConfig points the display labels at the user's config. Statuses the
+// config leaves alone keep their built-in label. A renamed status also takes a
+// matching short label, its first character, so the picker's count strip stops
+// showing the old initial; config.StatusLabelsShort overrides that.
+//
+// Call this before NewModel. It is separate from NewModel so tests set labels
+// explicitly instead of inheriting whatever the machine running them has in
+// config.json.
+func ApplyConfig(cfg store.Config) {
+	statusDisplay = maps.Clone(defaultStatusDisplay)
+	statusShort = maps.Clone(defaultStatusShort)
+	for status, label := range cfg.Labels() {
+		statusDisplay[status] = label
+		statusShort[status] = firstRune(label)
+	}
+	for status, label := range cfg.ShortLabels() {
+		statusShort[status] = label
+	}
+}
+
+func firstRune(s string) string {
+	for _, r := range s {
+		return string(r)
+	}
+	return ""
+}
+
+// statusChoices lists the statuses the meta-bar picker offers, labelled as they
+// appear on the board, with a way back from the label the user picked. Backlog
+// is absent, matching the fixed list this replaced.
+func statusChoices() ([]string, map[string]model.Status) {
+	labels := make([]string, 0, len(model.ColumnOrder))
+	byLabel := make(map[string]model.Status, len(model.ColumnOrder))
+	for _, status := range model.ColumnOrder {
+		if status == model.StatusBacklog {
+			continue
+		}
+		label := statusDisplay[status]
+		labels = append(labels, label)
+		byLabel[label] = status
+	}
+	return labels, byLabel
 }
 
 var (
@@ -1158,9 +1211,10 @@ func (m *Model) editMetaField() (tea.Model, tea.Cmd) {
 	}
 	switch m.metaIdx {
 	case 0: // status
-		m.startSelect("Status", []string{"Todo", "Doing", "Done", "Hold"}, func(val string) {
-			status, err := model.ParseStatus(val)
-			if err != nil {
+		labels, byLabel := statusChoices()
+		m.startSelect("Status", labels, func(val string) {
+			status, ok := byLabel[val]
+			if !ok {
 				return
 			}
 			m.store.Update(m.editTicketID, func(ticket *model.Ticket) {

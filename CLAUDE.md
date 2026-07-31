@@ -85,7 +85,25 @@ Notes:
 
 TODO → DOING → DONE (or HOLD)
 
-Note: BACKLOG status exists in data but is hidden from TUI.
+HOLD is the parked column, whether it's parked by choice or blocked on someone else. `WAITING` (and `waiting on`) is accepted wherever a status is, and resolves to HOLD; a board still holding `WAITING` on disk is rewritten as it loads.
+
+Columns can be renamed on screen (see Config below). **The stored value never changes** — always write and query `HOLD`, whatever the board is labelled. The CLI keeps one vocabulary so scripts and agents don't have to read anyone's config.
+
+Note: BACKLOG exists in data and has a column, but isn't offered in the meta-bar status picker.
+
+## Config
+
+`~/.kanban/config.json` holds local display preferences. Optional; a missing or malformed file just means defaults.
+
+```json
+{
+  "statusLabels": { "HOLD": "Waiting" },
+  "statusLabelsShort": { "HOLD": "Wt" }
+}
+```
+
+- `statusLabels` renames a column in the TUI. Keys are canonical statuses, case-insensitive, and accept the same aliases as `--status`.
+- `statusLabelsShort` overrides the board picker's count strip. Usually skip it: a renamed column takes the first letter of its new label.
 
 ## Architecture
 
@@ -103,6 +121,7 @@ Note: BACKLOG status exists in data but is hidden from TUI.
 - Lock: `~/.kanban/.board.lock`
 - Id counters: `~/.kanban/counters.json`
 - Pinned sprints: `~/.kanban/pins.json` (ordered list of sprint names)
+- Display preferences: `~/.kanban/config.json` (see Config)
 - Sprints: `~/.kanban/sprints/<name>/{board,archive}.json` + `.board.lock`
 - Override: `KANBAN_FILE` env var redirects the main board path; sprints live under `$(dirname $KANBAN_FILE)/sprints/`
 

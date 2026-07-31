@@ -43,3 +43,49 @@ func TestFindByIDPrefersShortIDOverAUUIDPrefix(t *testing.T) {
 		t.Errorf("FindByID(\"12\") = %v, want the ticket whose short id is 12", got)
 	}
 }
+
+// WAITING shipped as a sixth column in a fork before "waiting" and "hold" were
+// settled as one state. Anyone who got used to typing it should still land in
+// the column they meant.
+func TestParseStatusAcceptsWaitingAsHold(t *testing.T) {
+	for _, in := range []string{"WAITING", "waiting", " Waiting ", "waiting on", "WAITING_ON", "waiting-on"} {
+		got, err := ParseStatus(in)
+		if err != nil {
+			t.Errorf("ParseStatus(%q) errored: %v", in, err)
+			continue
+		}
+		if got != StatusHold {
+			t.Errorf("ParseStatus(%q) = %q, want %q", in, got, StatusHold)
+		}
+	}
+}
+
+func TestParseStatusStillRejectsNonsense(t *testing.T) {
+	if _, err := ParseStatus("blocked"); err == nil {
+		t.Error("ParseStatus(\"blocked\") = nil error, want a rejection")
+	}
+}
+
+// A board written by the build that had a WAITING column would otherwise hold
+// tickets in a status no column renders, so they'd vanish from the TUI while
+// still sitting in board.json.
+func TestNormalizeStatusesRewritesAliasedStatuses(t *testing.T) {
+	board := &Board{Tickets: []Ticket{
+		{ShortID: "1", Status: "WAITING"},
+		{ShortID: "2", Status: StatusHold},
+		{ShortID: "3", Status: StatusTodo},
+	}}
+
+	if changed := board.NormalizeStatuses(); changed != 1 {
+		t.Errorf("NormalizeStatuses() = %d, want 1", changed)
+	}
+	want := []Status{StatusHold, StatusHold, StatusTodo}
+	for i, w := range want {
+		if board.Tickets[i].Status != w {
+			t.Errorf("ticket %s status = %q, want %q", board.Tickets[i].ShortID, board.Tickets[i].Status, w)
+		}
+	}
+	if len(board.ByStatus(StatusHold)) != 2 {
+		t.Errorf("ByStatus(HOLD) = %d tickets, want 2", len(board.ByStatus(StatusHold)))
+	}
+}

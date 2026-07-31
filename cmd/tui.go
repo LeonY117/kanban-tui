@@ -3,11 +3,13 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/LeonY117/kanban-tui/internal/store"
 	"github.com/LeonY117/kanban-tui/internal/tui"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 func runTUI(sprintName string) error {
+	tui.ApplyConfig(store.LoadConfig())
 	m, err := tui.NewModel(st, sprintName)
 	if err != nil {
 		return err

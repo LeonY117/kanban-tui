@@ -87,11 +87,13 @@ type Board struct {
 	Tickets []Ticket `json:"tickets"`
 }
 
-// FilterOptions for querying tickets.
+// FilterOptions for querying tickets. Every field set narrows the result
+// further, so Tag and Untagged together match nothing.
 type FilterOptions struct {
 	Status     *Status
 	Priority   *Priority
 	Tag        string
+	Untagged   bool    // only tickets carrying no tags at all; Tag can't express this, since "" means "any"
 	AssignedTo *string // pointer so we can distinguish "not set" from "filter for empty"
 }
 
@@ -105,6 +107,9 @@ func (b *Board) Filter(opts FilterOptions) []Ticket {
 			continue
 		}
 		if opts.Tag != "" && !containsTag(t.Tags, opts.Tag) {
+			continue
+		}
+		if opts.Untagged && len(t.Tags) > 0 {
 			continue
 		}
 		if opts.AssignedTo != nil && t.AssignedTo != *opts.AssignedTo {

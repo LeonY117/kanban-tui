@@ -23,14 +23,15 @@ import (
 type viewMode int
 
 const (
-	boardView   viewMode = iota
-	splitView            // list + detail side by side
-	columnView           // full-width single column
-	detailView           // full-screen detail editor
-	archiveView          // archive browser (split: list + read-only detail)
-	addView              // floating popup for new ticket
-	pickerView           // floating board picker (main + sprints)
-	moveView             // floating move-ticket picker (column / other board)
+	boardView     viewMode = iota
+	splitView              // list + detail side by side
+	columnView             // full-width single column
+	detailView             // full-screen detail editor
+	archiveView            // archive browser (split: list + read-only detail)
+	addView                // floating popup for new ticket
+	pickerView             // floating board picker (main + sprints)
+	moveView               // floating move-ticket picker (column / other board)
+	tagPickerView          // floating tag filter picker
 )
 
 // inputMode tracks what the user is typing into.
@@ -160,6 +161,12 @@ type Model struct {
 	moveTicketID     string
 	moveTicketStatus model.Status
 	moveTargetBoard  string
+
+	// Tag filter state. tagFilter is session-only and never persisted:
+	// "" = no filter, untaggedFilter = cards with no tags, else a tag name.
+	tagFilter  string
+	tagEntries []tagEntry
+	tagIdx     int
 
 	// Source view for the active popup or picker — restored on close, also
 	// rendered as the backdrop behind the popup.
@@ -302,6 +309,12 @@ func (m *Model) footerLine() string {
 		archivedTag := lipgloss.NewStyle().Foreground(dimGray).Render("[archived]")
 		badge = lipgloss.JoinHorizontal(lipgloss.Top, badge, archivedTag)
 	}
+	// A filtered board looks like a board that lost its cards, so say what's
+	// filtering it.
+	if m.tagFilter != "" {
+		filterTag := lipgloss.NewStyle().Foreground(green).Bold(true).Render(tagDisplayName(m.tagFilter))
+		badge = lipgloss.JoinHorizontal(lipgloss.Top, badge, filterTag)
+	}
 
 	var rightText string
 	if m.notice != "" {
@@ -400,6 +413,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updatePicker(msg)
 		case moveView:
 			return m.updateMove(msg)
+		case tagPickerView:
+			return m.updateTagPicker(msg)
 		}
 	}
 	return m, nil
@@ -438,7 +453,7 @@ func (m *Model) reload() {
 
 func (m *Model) selectedTicket() *model.Ticket {
 	status := model.ColumnOrder[m.focusedCol]
-	tickets := m.board.ByStatus(status)
+	tickets := m.visibleTickets(status)
 	idx := m.cursors[m.focusedCol]
 	if idx >= len(tickets) {
 		return nil
@@ -507,7 +522,7 @@ func (m *Model) moveCursor(dir int) {
 		return
 	}
 	status := model.ColumnOrder[m.focusedCol]
-	count := len(m.board.ByStatus(status))
+	count := len(m.visibleTickets(status))
 	if m.cursors[m.focusedCol] < count-1 {
 		m.cursors[m.focusedCol]++
 	}
@@ -515,7 +530,7 @@ func (m *Model) moveCursor(dir int) {
 
 func (m *Model) clampCursors() {
 	for i, status := range model.ColumnOrder {
-		count := len(m.board.ByStatus(status))
+		count := len(m.visibleTickets(status))
 		if m.cursors[i] >= count && count > 0 {
 			m.cursors[i] = count - 1
 		}
@@ -570,6 +585,8 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.rowLayout = !m.rowLayout
 	case key.Matches(msg, keys.Move):
 		return m.enterMovePopup()
+	case key.Matches(msg, keys.TagPicker):
+		return m.enterTagPicker()
 	case key.Matches(msg, keys.Copy):
 		m.copyFocused()
 	case key.Matches(msg, keys.ArchiveView):
@@ -757,7 +774,7 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case key.Matches(msg, keys.Down):
 		status := model.ColumnOrder[m.focusedCol]
-		count := len(m.board.ByStatus(status))
+		count := len(m.visibleTickets(status))
 		if m.cursors[m.focusedCol] < count-1 {
 			m.cursors[m.focusedCol]++
 			m.refreshDetailEditors()
@@ -796,6 +813,8 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.refreshDetailEditors()
 	case key.Matches(msg, keys.Move):
 		return m.enterMovePopup()
+	case key.Matches(msg, keys.TagPicker):
+		return m.enterTagPicker()
 	case key.Matches(msg, keys.Copy):
 		m.copyFocused()
 	case key.Matches(msg, keys.Layout):
@@ -1030,7 +1049,7 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case key.Matches(msg, keys.Down):
 		status := model.ColumnOrder[m.focusedCol]
-		count := len(m.board.ByStatus(status))
+		count := len(m.visibleTickets(status))
 		if m.cursors[m.focusedCol] < count-1 {
 			m.cursors[m.focusedCol]++
 		}
@@ -1062,6 +1081,8 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.archiveTicket()
 	case key.Matches(msg, keys.Move):
 		return m.enterMovePopup()
+	case key.Matches(msg, keys.TagPicker):
+		return m.enterTagPicker()
 	case key.Matches(msg, keys.Copy):
 		m.copyFocused()
 	}
@@ -1437,7 +1458,7 @@ func (m *Model) moveTicket(dir int) {
 	})
 	m.focusedCol = colIdx
 	m.reload()
-	newColTickets := m.board.ByStatus(newStatus)
+	newColTickets := m.visibleTickets(newStatus)
 	for i, nt := range newColTickets {
 		if nt.ID == ticketID {
 			m.cursors[colIdx] = i
@@ -1455,7 +1476,7 @@ func (m *Model) moveTicketInColumn(dir int) {
 	if t == nil {
 		return
 	}
-	colTickets := m.board.ByStatus(model.ColumnOrder[m.focusedCol])
+	colTickets := m.visibleTickets(model.ColumnOrder[m.focusedCol])
 	cursor := m.cursors[m.focusedCol]
 	newCursor := cursor + dir
 	if newCursor < 0 || newCursor >= len(colTickets) {
@@ -2052,8 +2073,13 @@ func (m *Model) submitAdd() {
 	}
 	m.reload()
 	// Store.Add appends, so the new ticket is last within its status column.
-	m.cursors[m.focusedCol] = len(m.board.ByStatus(status)) - 1
+	m.cursors[m.focusedCol] = len(m.visibleTickets(status)) - 1
 	m.clampCursors()
+	// The card saved fine but the filter keeps it off the board. Say so, rather
+	// than letting it look like the add silently failed.
+	if m.hiddenByFilter(&model.Ticket{Tags: tags}) {
+		m.notice = fmt.Sprintf("added — hidden by %s filter", tagDisplayName(m.tagFilter))
+	}
 	m.closeAddPopup()
 }
 
@@ -2119,6 +2145,8 @@ func (m *Model) renderView(v viewMode) string {
 		return m.viewPicker()
 	case moveView:
 		return m.viewMove()
+	case tagPickerView:
+		return m.viewTagPicker()
 	default:
 		return m.viewBoard()
 	}
@@ -2127,7 +2155,7 @@ func (m *Model) renderView(v viewMode) string {
 // popupBackdrop renders the source view as the backdrop behind a popup, but
 // avoids recursing into popup views themselves.
 func (m *Model) popupBackdrop(source viewMode) string {
-	if source == addView || source == pickerView || source == moveView {
+	if source == addView || source == pickerView || source == moveView || source == tagPickerView {
 		return m.viewBoard()
 	}
 	return m.renderView(source)
@@ -2757,6 +2785,9 @@ func (m *Model) switchBoard(sprintName string) error {
 	m.focusedCol = 1
 	m.cursors = [5]int{}
 	m.scrollStart = [5]int{}
+	// Tags don't carry between boards, so a filter held across a switch would
+	// usually land you on an empty board with no obvious reason why.
+	m.tagFilter = ""
 	m.clampCursors()
 
 	if info, err := os.Stat(newStore.BoardPath()); err == nil {
@@ -2984,7 +3015,9 @@ func formatCounts(counts map[model.Status]int) string {
 func (m *Model) helpText() string {
 	switch m.view {
 	case boardView:
-		return "h/l nav | j/k select | v size | H/L move | m move | c copy id | a add | x archive | q quit"
+		return "h/l nav | j/k select | v size | H/L move | m move | c copy id | a add | t tag | x archive | q quit"
+	case tagPickerView:
+		return "j/k select | enter filter | esc/t close"
 	case moveView:
 		switch m.moveStage {
 		case moveStageColumn:
@@ -3007,7 +3040,7 @@ func (m *Model) helpText() string {
 		return "j/k nav | u unarchive | c copy id | X/esc back | q quit"
 	case splitView:
 		if m.splitFocus == 0 {
-			return "j/k select | ] edit | + zoom | H/L move | m move | c copy id | x archive | - back | q quit"
+			return "j/k select | ] edit | + zoom | H/L move | m move | c copy id | t tag | x archive | - back | q quit"
 		}
 		if m.editDesc.Focused() {
 			return "enter save | shift+enter new line | esc save"
@@ -3022,7 +3055,7 @@ func (m *Model) helpText() string {
 			return "j/k fields | enter/e edit | H/L move | h list | q quit"
 		}
 	case columnView:
-		return "j/k select | H/L move | m move to | x archive | enter detail | - back | a add | q quit"
+		return "j/k select | H/L move | m move to | x archive | enter detail | - back | a add | t tag | q quit"
 	case detailView:
 		if m.editDesc.Focused() {
 			return "enter save | shift+enter new line | esc save"
@@ -3176,7 +3209,7 @@ func (m *Model) viewBoard() string {
 // renderColumn renders a single column panel. origin is the panel's top-left
 // cell on screen, used to register mouse zones.
 func (m *Model) renderColumn(colIdx int, status model.Status, width, height int, focused bool, origin point) string {
-	tickets := m.board.ByStatus(status)
+	tickets := m.visibleTickets(status)
 	title := fmt.Sprintf("[%d] %s (%d)", colIdx, statusDisplay[status], len(tickets))
 
 	color := softWhite
@@ -3293,7 +3326,7 @@ func (m *Model) viewBoardRows() string {
 // renderRow draws one status as a full-width panel with its tickets as a
 // vertical list (one ticket per line, same shape as renderColumn content).
 func (m *Model) renderRow(colIdx int, status model.Status, width, height int, focused bool, origin point) string {
-	tickets := m.board.ByStatus(status)
+	tickets := m.visibleTickets(status)
 	title := fmt.Sprintf("[%d] %s (%d)", colIdx, statusDisplay[status], len(tickets))
 
 	color := softWhite
@@ -3362,7 +3395,7 @@ func (m *Model) viewSplit() string {
 }
 
 func (m *Model) renderSplitList(status model.Status, width, height int, focused bool, borderColor lipgloss.Color, origin point) string {
-	tickets := m.board.ByStatus(status)
+	tickets := m.visibleTickets(status)
 	title := fmt.Sprintf("[%d] %s (%d)", m.focusedCol, statusDisplay[status], len(tickets))
 
 	innerWidth := width - 2
@@ -3473,7 +3506,7 @@ func (m *Model) renderDescBody(desc string, width, height int) string {
 // viewColumn renders the expanded single-column view.
 func (m *Model) viewColumn() string {
 	status := model.ColumnOrder[m.focusedCol]
-	tickets := m.board.ByStatus(status)
+	tickets := m.visibleTickets(status)
 	availHeight := m.height - 1
 	color := columnColor(status)
 

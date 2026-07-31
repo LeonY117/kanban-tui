@@ -40,6 +40,7 @@ type keyMap struct {
 	BoardPicker key.Binding
 	Pin         key.Binding
 	Rename      key.Binding
+	TagPicker   key.Binding
 }
 
 var keys = keyMap{
@@ -87,4 +88,5 @@ var keys = keyMap{
 	BoardPicker: key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "board picker")),
 	Pin:         key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pin board")),
 	Rename:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rename board")),
+	TagPicker:   key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "tag filter")),
 }

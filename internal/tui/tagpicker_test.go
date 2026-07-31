@@ -174,16 +174,24 @@ func TestTagPickerKeyFlow(t *testing.T) {
 }
 
 // Cursors index what's on screen, so following a moved card has to use the
-// filtered column. Here the target column holds an untagged card first, so the
-// moved card sits at real index 1 but visible index 0.
+// filtered column.
+//
+// The seed order matters. A same-board move only flips the ticket's status, so
+// the card keeps its slice position, and clampCursors repairs an out-of-range
+// index on its own — which hides the bug in any layout where the moved card
+// ends up last. Two hidden cards ahead of it put the unfiltered index (2) inside
+// the filtered column's range, so a wrong read survives clamping and lands the
+// cursor on a different card.
 func TestCommitMoveFollowsTheCardInTheFilteredColumn(t *testing.T) {
 	m := boardWith(t,
-		seedCard{"doing untagged", model.StatusDoing, nil},
-		seedCard{"customer todo", model.StatusTodo, []string{"customer"}},
+		seedCard{"hidden one", model.StatusDoing, nil},
+		seedCard{"hidden two", model.StatusDoing, nil},
+		seedCard{"moved card", model.StatusTodo, []string{"customer"}},
+		seedCard{"other customer", model.StatusDoing, []string{"customer"}},
 	)
-	moved, _ := m.board.FindByID("2")
-	if moved == nil || moved.Title != "customer todo" {
-		t.Fatalf("seed lookup = %+v, want customer todo", moved)
+	moved, _ := m.board.FindByID("3")
+	if moved == nil || moved.Title != "moved card" {
+		t.Fatalf("seed lookup = %+v, want moved card", moved)
 	}
 
 	m.tagFilter = "customer"
@@ -194,11 +202,11 @@ func TestCommitMoveFollowsTheCardInTheFilteredColumn(t *testing.T) {
 	if m.focusedCol != doingCol {
 		t.Fatalf("focusedCol = %d, want %d", m.focusedCol, doingCol)
 	}
+	if tk := m.selectedTicket(); tk == nil || tk.Title != "moved card" {
+		t.Errorf("selectedTicket = %+v, want the card we just moved", tk)
+	}
 	if m.cursors[doingCol] != 0 {
 		t.Errorf("cursor = %d, want 0 — the moved card is first in the filtered column", m.cursors[doingCol])
-	}
-	if tk := m.selectedTicket(); tk == nil || tk.Title != "customer todo" {
-		t.Errorf("selectedTicket = %+v, want the card we just moved", tk)
 	}
 }
 

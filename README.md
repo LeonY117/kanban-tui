@@ -42,6 +42,7 @@ Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden
 | `m` | Move ticket — pick a column, or another board and its column |
 | `c` | Copy to clipboard — the ticket id from a list, or the focused title / description |
 | `a` | Add a new ticket (floating popup) |
+| `t` | Filter the board by tag (floating picker) |
 | `e` / `enter` | Edit selected field |
 | `enter` (while editing) | Save and stop editing — in the add popup, create the ticket |
 | `shift+enter` | New line inside a description |
@@ -64,6 +65,14 @@ Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden
 `shift+enter` only reaches the TUI if your terminal sends an escape for it —
 in Ghostty, `keybind = shift+enter=text:\x1b\r`. `ctrl+j` works everywhere as
 a fallback.
+
+### Filtering by tag
+
+`t` opens a picker listing every tag on the board's open cards with a count each, plus **all tickets** at the top and **(untagged)** when some cards have no tags. Pick one and every column narrows to matching cards; the active tag shows in the footer. `t` again or `esc` closes it, and picking *all tickets* clears the filter.
+
+Counts come from open cards only, so a tag that survives only on finished work doesn't clutter the list. The filter is per-session and per-board: it isn't saved, and switching boards clears it, since tags don't carry across boards.
+
+Two things worth knowing. Reordering with `J`/`K` under a filter swaps the two cards you can see, leaving any hidden cards between them where they are. Adding a card the filter would hide still saves it, and the footer says so rather than letting it look like the add failed.
 
 ### Ticket sizes
 

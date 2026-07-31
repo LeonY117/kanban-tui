@@ -87,6 +87,12 @@ TODO → DOING → DONE (or HOLD)
 
 Note: BACKLOG status exists in data but is hidden from TUI.
 
+## Tag filter (TUI)
+
+`t` filters the board to one tag (or to untagged cards). Session-only, cleared by switching boards, never persisted. The CLI equivalent is `kanban list --tag <tag>`; both go through `model.Board.Filter`, so they agree on what carrying a tag means.
+
+In the TUI code, `Model.visibleTickets(status)` is the single read that answers "what is in this column right now" — every cursor, render, and move path goes through it. Reads that mean "what is actually on the board" (per-board counts in the picker, anything writing to the store) use the board directly. Adding a read to a column without going through `visibleTickets` is how a filtered board drifts.
+
 ## Architecture
 
 - `internal/model/` — Ticket struct, status/priority types, filtering

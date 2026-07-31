@@ -310,9 +310,10 @@ func (m *Model) footerLine() string {
 		badge = lipgloss.JoinHorizontal(lipgloss.Top, badge, archivedTag)
 	}
 	// A filtered board looks like a board that lost its cards, so say what's
-	// filtering it.
+	// filtering it. Leading space: the id-prefix hint ends in "]" and a tag
+	// starts with "#", which run together into "[#]#customer" otherwise.
 	if m.tagFilter != "" {
-		filterTag := lipgloss.NewStyle().Foreground(green).Bold(true).Render(tagDisplayName(m.tagFilter))
+		filterTag := lipgloss.NewStyle().Foreground(green).Bold(true).Render(" " + tagDisplayName(m.tagFilter))
 		badge = lipgloss.JoinHorizontal(lipgloss.Top, badge, filterTag)
 	}
 

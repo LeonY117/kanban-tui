@@ -31,6 +31,7 @@ const (
 	addView              // floating popup for new ticket
 	pickerView           // floating board picker (main + sprints)
 	moveView             // floating move-ticket picker (column / other board)
+	settingsView         // floating settings popup (PROTOTYPE)
 )
 
 // inputMode tracks what the user is typing into.
@@ -160,6 +161,8 @@ type Model struct {
 	moveTicketID     string
 	moveTicketStatus model.Status
 	moveTargetBoard  string
+
+	settings settingsState
 
 	// Source view for the active popup or picker — restored on close, also
 	// rendered as the backdrop behind the popup.
@@ -400,6 +403,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updatePicker(msg)
 		case moveView:
 			return m.updateMove(msg)
+		case settingsView:
+			return m.updateSettings(msg)
 		}
 	}
 	return m, nil
@@ -570,6 +575,8 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.rowLayout = !m.rowLayout
 	case key.Matches(msg, keys.Move):
 		return m.enterMovePopup()
+	case key.Matches(msg, keys.Help):
+		return m.enterSettings()
 	case key.Matches(msg, keys.Copy):
 		m.copyFocused()
 	case key.Matches(msg, keys.ArchiveView):
@@ -796,6 +803,8 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.refreshDetailEditors()
 	case key.Matches(msg, keys.Move):
 		return m.enterMovePopup()
+	case key.Matches(msg, keys.Help):
+		return m.enterSettings()
 	case key.Matches(msg, keys.Copy):
 		m.copyFocused()
 	case key.Matches(msg, keys.Layout):
@@ -857,6 +866,8 @@ func (m *Model) updateSplitDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.editMetaField()
 	case key.Matches(msg, keys.Move):
 		return m.enterMovePopup()
+	case key.Matches(msg, keys.Help):
+		return m.enterSettings()
 	case key.Matches(msg, keys.Copy):
 		m.copyFocused()
 	case key.Matches(msg, keys.Delete):
@@ -1062,6 +1073,8 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.archiveTicket()
 	case key.Matches(msg, keys.Move):
 		return m.enterMovePopup()
+	case key.Matches(msg, keys.Help):
+		return m.enterSettings()
 	case key.Matches(msg, keys.Copy):
 		m.copyFocused()
 	}
@@ -1126,6 +1139,8 @@ func (m *Model) updateDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.editMetaField()
 	case key.Matches(msg, keys.Move):
 		return m.enterMovePopup()
+	case key.Matches(msg, keys.Help):
+		return m.enterSettings()
 	case key.Matches(msg, keys.Copy):
 		m.copyFocused()
 	case key.Matches(msg, keys.Delete):
@@ -2119,6 +2134,8 @@ func (m *Model) renderView(v viewMode) string {
 		return m.viewPicker()
 	case moveView:
 		return m.viewMove()
+	case settingsView:
+		return m.viewSettings()
 	default:
 		return m.viewBoard()
 	}
@@ -2127,7 +2144,7 @@ func (m *Model) renderView(v viewMode) string {
 // popupBackdrop renders the source view as the backdrop behind a popup, but
 // avoids recursing into popup views themselves.
 func (m *Model) popupBackdrop(source viewMode) string {
-	if source == addView || source == pickerView || source == moveView {
+	if source == addView || source == pickerView || source == moveView || source == settingsView {
 		return m.viewBoard()
 	}
 	return m.renderView(source)

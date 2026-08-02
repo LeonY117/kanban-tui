@@ -103,6 +103,7 @@ func init() {
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(showCmd)
 	rootCmd.AddCommand(updateCmd)
+	rootCmd.AddCommand(moveCmd)
 	rootCmd.AddCommand(archiveCmd)
 	rootCmd.AddCommand(sprintsCmd)
 }

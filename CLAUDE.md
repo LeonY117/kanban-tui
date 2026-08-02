@@ -29,6 +29,12 @@ kanban list --assigned-to claude
 # Show ticket detail
 kanban show <id> --json
 
+# Move a ticket to another board (source = --sprint or main; "main" targets the
+# main board). Keeps its short id unless the destination already issued it;
+# --status picks the landing column, default keeps the current one.
+kanban --sprint onsite move ON3 reorder-revamp --status BACKLOG
+kanban move 42 Demo_Apr
+
 # Archive a single ticket (any status)
 kanban archive <id>
 

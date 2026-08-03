@@ -3057,9 +3057,12 @@ func (m *Model) helpText() string {
 		if m.pickerShowArchived {
 			return "j/k select | enter switch | r rename | p pin | J/K reorder | x archive | u unarchive | X hide archived | esc/tab close"
 		}
-		return "j/k select | enter switch | r rename | p pin | J/K reorder | x archive | X show archived | esc/tab close"
+		return fmt.Sprintf("j/k select | enter switch | %s rename | %s pin | %s/%s reorder | %s archive | %s show archived | esc/tab close",
+			hk("board.rename"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
+			hk("card.archive"), hk("board.archiveView"))
 	case archiveView:
-		return "j/k nav | u unarchive | c copy id | X/esc back | q quit"
+		return fmt.Sprintf("j/k nav | %s unarchive | %s copy id | %s/esc back | q quit",
+			hk("board.unarchive"), hk("card.copy"), hk("board.archiveView"))
 	case splitView:
 		if m.splitFocus == 0 {
 			return fmt.Sprintf("j/k select | %s edit | %s/%s move | %s move | %s archive | %s back | %s settings | q quit",
@@ -3076,7 +3079,8 @@ func (m *Model) helpText() string {
 		case 0:
 			return "h/l meta | j/k fields | enter edit | H/L move | m move to | x archive | q quit"
 		case 1, 2:
-			return "j/k fields | enter/e edit | H/L move | h list | q quit"
+			return fmt.Sprintf("j/k fields | enter/%s edit | %s/%s move | h list | q quit",
+				hk("card.edit"), hk("card.moveLeft"), hk("card.moveRight"))
 		}
 	case columnView:
 		return fmt.Sprintf("j/k select | %s/%s move | %s move to | %s archive | enter detail | %s back | %s add | %s settings | q quit",

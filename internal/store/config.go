@@ -5,11 +5,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/LeonY117/kanban-tui/internal/model"
 )
 
 const configFile = "config.json"
+const configLock = ".config.lock"
 
 // ColumnConfig is one column's local display settings. Status is the canonical
 // name and is what identifies the row; Label and Short only change what's drawn.
@@ -59,7 +61,12 @@ func LoadConfig() Config {
 	return cfg
 }
 
-// SaveConfig writes config.json atomically.
+// SaveConfig writes config.json atomically, under a lock.
+//
+// The lock matters because every process shares one config.json.tmp: two TUIs
+// closing their settings at the same moment would otherwise write the same
+// temp file concurrently and rename whichever won, installing a mixture. Pins
+// take the same precaution for the same reason.
 func SaveConfig(cfg Config) error {
 	cfg.Version = 1
 	data, err := json.MarshalIndent(cfg, "", "  ")
@@ -70,6 +77,18 @@ func SaveConfig(cfg Config) error {
 	if err := os.MkdirAll(defaultRoot(), 0755); err != nil {
 		return err
 	}
+
+	lock, err := os.OpenFile(filepath.Join(defaultRoot(), configLock),
+		os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+
 	tmp := configPath() + ".tmp"
 	if err := os.WriteFile(tmp, data, 0644); err != nil {
 		return err

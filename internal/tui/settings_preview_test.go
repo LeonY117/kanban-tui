@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -75,52 +74,77 @@ func crop(full string) string {
 	return strings.Join(out, "\n")
 }
 
-func TestZZSettingsSections(t *testing.T) {
+// The popup must not resize as sections change — a page that grows and shrinks
+// under the cursor was the first thing that felt wrong.
+func TestSettingsHeightIsConstantAcrossSections(t *testing.T) {
+	m := settingsModel(t)
+	want := 0
 	for _, sec := range []settingsSection{sectionShortcuts, sectionColumns, sectionAbout} {
-		m := settingsModel(t)
 		m.settings.section = sec
-		fmt.Printf("\n===== %s =====\n", sectionNames[sec])
-		fmt.Println(crop(m.View()))
+		got := len(strings.Split(crop(m.View()), "\n"))
+		if want == 0 {
+			want = got
+		}
+		if got != want {
+			t.Errorf("%s renders %d rows, want %d — the popup is resizing",
+				sectionNames[sec], got, want)
+		}
 	}
 }
 
-func TestZZSettingsStates(t *testing.T) {
-	// Conflict: bind "archive" (idx 9) onto m, which "move" already has.
+// A list longer than the popup has to scroll, and the footer must not be what
+// scrolls away — it carries the conflict warning.
+func TestLongSectionScrollsButKeepsItsFooter(t *testing.T) {
 	m := settingsModel(t)
-	press(m, "j", "j", "j", "j", "j", "j", "j", "j", "j", "enter", "m")
-	fmt.Println("\n===== CONFLICT: archive stole m from move =====")
-	fmt.Println(crop(m.View()))
-	fmt.Println("conflicts:", m.settings.conflictCount())
+	m.settings.idx = len(bindActions) - 1
+	out := crop(m.View())
 
-	press(m, "esc")
-	fmt.Println("\n===== ESC ONCE: refused =====")
-	fmt.Println(crop(m.View()))
-	fmt.Println("still in settings:", m.view == settingsView)
+	if !strings.Contains(out, "more") {
+		t.Error("no scroll indicator on a list longer than the popup")
+	}
+	if !strings.Contains(out, "esc close") {
+		t.Error("the footer scrolled out of view")
+	}
+	last := bindActions[len(bindActions)-1]
+	if !strings.Contains(out, last.label) {
+		t.Errorf("the focused row %q is not on screen", last.label)
+	}
+}
 
-	press(m, "esc")
-	fmt.Println("\n===== ESC TWICE: conflicting edits undone, closed =====")
-	fmt.Println("view is board:", m.view != settingsView, "| notice:", m.notice)
-	fmt.Println("archive is back to:", m.settings.binds["card.archive"])
+func TestLockedRowsRefuseToRebind(t *testing.T) {
+	m := settingsModel(t)
+	m.settings.idx = findAction(t, "nav.quit")
+	press(m, "enter")
 
-	// Columns
-	m2 := settingsModel(t)
-	press(m2, "2", "j", "j", "j", "j", "enter")
-	press(m2, "W", "a", "i", "t", "i", "n", "g")
-	fmt.Println("\n===== COLUMNS: renaming HOLD =====")
-	fmt.Println(crop(m2.View()))
+	if m.settings.capturing {
+		t.Error("a locked row entered capture mode")
+	}
+	if !strings.Contains(m.settings.notice, "can't be rebound") {
+		t.Errorf("notice = %q, want a refusal", m.settings.notice)
+	}
+}
 
-	press(m2, "enter")
-	fmt.Println("\n===== COLUMNS: after rename =====")
-	fmt.Println(crop(m2.View()))
+func TestReservedKeyIsRefusedDuringCapture(t *testing.T) {
+	m := settingsModel(t)
+	m.settings.idx = findAction(t, "card.archive")
+	press(m, "enter", "left")
 
-	// Reset-all confirm
-	press(m2, "R")
-	fmt.Println("\n===== RESET ALL: confirm gate =====")
-	fmt.Println(crop(m2.View()))
+	if got := m.settings.binds["card.archive"]; got != "x" {
+		t.Errorf("card.archive = %q, want the arrow refused", got)
+	}
+	if !strings.Contains(m.settings.notice, "reserved") {
+		t.Errorf("notice = %q, want it to say the key is reserved", m.settings.notice)
+	}
+}
 
-	// About
-	m3 := settingsModel(t)
-	press(m3, "3")
-	fmt.Println("\n===== ABOUT =====")
-	fmt.Println(crop(m3.View()))
+func TestAlreadyDefaultIsReportedInsteadOfAPointlessReset(t *testing.T) {
+	m := settingsModel(t)
+	m.settings.idx = findAction(t, "card.add")
+	press(m, "r")
+	if m.settings.notice != "already default" {
+		t.Errorf("notice = %q, want \"already default\"", m.settings.notice)
+	}
+	if m.settings.dirty {
+		t.Error("a no-op reset marked the page dirty")
+	}
 }

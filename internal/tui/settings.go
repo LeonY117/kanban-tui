@@ -50,8 +50,6 @@ var bindActions = []bindAction{
 	{id: "card.delete", group: "Cards", label: "delete", def: "d"},
 	{id: "card.move", group: "Cards", label: "move to column / board", def: "m"},
 	{id: "card.copy", group: "Cards", label: "copy id", def: "c"},
-	{id: "card.status", group: "Cards", label: "set status", def: "s"},
-	{id: "card.assign", group: "Cards", label: "assign", def: "A"},
 	{id: "card.moveLeft", group: "Cards", label: "move a column left", def: "H"},
 	{id: "card.moveRight", group: "Cards", label: "move a column right", def: "L"},
 	{id: "card.reorderUp", group: "Cards", label: "reorder up", def: "K"},
@@ -147,15 +145,64 @@ func (s *settingsState) conflictCount() int { return len(s.conflicts()) }
 // when the page opened, and leaves clean edits alone.
 func (s *settingsState) revertConflicts() int {
 	n := 0
-	for _, ids := range s.conflicts() {
-		for _, id := range ids {
-			if s.binds[id] != s.baseline[id] {
-				s.binds[id] = s.baseline[id]
-				n++
+	// One pass can trade one clash for another: with add a->z, edit e->a and
+	// archive x->z, reverting the z clash puts add back on "a", which edit now
+	// holds. Keep going until the working copy is clean. The baseline itself is
+	// conflict-free, so full reversion is the floor and this terminates; the
+	// bound is belt and braces.
+	for i := 0; i <= len(bindActions); i++ {
+		if s.conflictCount() == 0 {
+			return n
+		}
+		for _, ids := range s.conflicts() {
+			for _, id := range ids {
+				if s.binds[id] != s.baseline[id] {
+					s.binds[id] = s.baseline[id]
+					n++
+				}
 			}
 		}
 	}
+	// Belt and braces: if anything still clashes, nothing edited survives.
+	for id, base := range s.baseline {
+		if s.binds[id] != base {
+			s.binds[id] = base
+			n++
+		}
+	}
 	return n
+}
+
+// labelTaken reports whether another column already reads this way.
+func (s *settingsState) labelTaken(self model.Status, name string) bool {
+	want := strings.ToLower(strings.TrimSpace(name))
+	for _, st := range model.ColumnOrder {
+		if st == self {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(s.labels[st])) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// duplicateLabels reports column labels used by more than one status. Two
+// columns reading the same word is not merely ugly: the meta-bar status picker
+// keys its choices by label, so the duplicate shadows one status and picking it
+// writes the other one to the ticket.
+func (s *settingsState) duplicateLabels() map[string]int {
+	byLabel := map[string]int{}
+	for _, st := range model.ColumnOrder {
+		byLabel[strings.ToLower(strings.TrimSpace(s.labels[st]))]++
+	}
+	out := map[string]int{}
+	for label, n := range byLabel {
+		if n > 1 {
+			out[label] = n
+		}
+	}
+	return out
 }
 
 // atDefault reports whether the focused row still holds its built-in value, so
@@ -229,13 +276,40 @@ func (m *Model) closeSettings() {
 // a default still reaches anyone who never overrode it.
 func (m *Model) saveSettings() {
 	s := &m.settings
-	var cfg store.Config
-	for _, st := range model.ColumnOrder {
-		if s.labels[st] != defaultStatusDisplay[st] {
-			cfg.Columns = append(cfg.Columns,
-				store.ColumnConfig{Status: string(st), Label: s.labels[st]})
+	// Defensive: closeSettings already refuses to leave a conflict behind, and
+	// a conflicted config would be silently refused on load — so a "saved"
+	// notice over one would be a lie.
+	if s.conflictCount() > 0 {
+		m.notice = "not saved — resolve the key conflicts first"
+		return
+	}
+
+	// Start from what is on disk so fields this page doesn't expose survive.
+	// The short labels in the count strip are hand-edited only; rebuilding the
+	// config from the working copy alone silently dropped them.
+	cfg := store.LoadConfig()
+	shorts := map[string]string{}
+	for _, cc := range cfg.Columns {
+		if st, err := model.ParseStatus(cc.Status); err == nil && cc.Short != "" {
+			shorts[string(st)] = cc.Short
 		}
 	}
+
+	cfg.Columns = nil
+	for _, st := range model.ColumnOrder {
+		label := ""
+		if s.labels[st] != defaultStatusDisplay[st] {
+			label = s.labels[st]
+		}
+		short := shorts[string(st)]
+		if label == "" && short == "" {
+			continue
+		}
+		cfg.Columns = append(cfg.Columns,
+			store.ColumnConfig{Status: string(st), Label: label, Short: short})
+	}
+
+	cfg.Keys = nil
 	for _, a := range bindActions {
 		if a.locked || s.binds[a.id] == a.def {
 			continue
@@ -245,13 +319,19 @@ func (m *Model) saveSettings() {
 		}
 		cfg.Keys[a.id] = s.binds[a.id]
 	}
+
 	if err := store.SaveConfig(cfg); err != nil {
-		m.err = err
+		// m.err is set all over this file but rendered nowhere, so a failed
+		// save would otherwise report itself as a success.
+		m.notice = "could not save settings: " + err.Error()
 		return
 	}
-	ApplyConfig(cfg)
+	if refused := ApplyConfig(cfg); len(refused) > 0 {
+		m.notice = fmt.Sprintf("settings saved — %d binding(s) refused on load", len(refused))
+	} else {
+		m.notice = "settings saved"
+	}
 	s.dirty = false
-	m.notice = "settings saved"
 }
 
 // statusChoices lists the statuses the meta-bar picker offers, labelled as they
@@ -269,6 +349,12 @@ func statusChoices() ([]string, map[string]model.Status) {
 			continue
 		}
 		label := statusDisplay[status]
+		// A label two columns share would otherwise overwrite the earlier
+		// status here, so picking the first "Done" could store DONE when the
+		// user meant TODO. Disambiguate rather than lose one.
+		if _, clash := byLabel[label]; clash {
+			label = fmt.Sprintf("%s (%s)", label, status)
+		}
 		labels = append(labels, label)
 		byLabel[label] = status
 	}
@@ -313,10 +399,18 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if a := s.currentAction(); a != nil {
-			s.binds[a.id] = k
-			s.dirty = true
-			s.notice = fmt.Sprintf("%s → %s", a.label, k)
-			s.warned = false
+			// Reserved keys are refused here rather than shown as a conflict:
+			// the clash is with a binding this list doesn't show (an arrow that
+			// is also `h`, ctrl+c, a column-jump digit), so a red row would
+			// point at nothing the user could resolve.
+			if reservedKeys()[k] {
+				s.notice = k + " is reserved — it's how you get around"
+			} else {
+				s.binds[a.id] = k
+				s.dirty = true
+				s.notice = fmt.Sprintf("%s → %s", a.label, k)
+				s.warned = false
+			}
 		}
 		s.capturing = false
 		return m, nil
@@ -329,12 +423,16 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			s.notice = "cancelled"
 		case "enter":
 			st := model.ColumnOrder[s.idx]
-			if name := strings.TrimSpace(s.buf); name != "" {
+			name := strings.TrimSpace(s.buf)
+			switch {
+			case name == "":
+				s.notice = "a column needs a name — left unchanged"
+			case s.labelTaken(st, name):
+				s.notice = name + " is already another column — left unchanged"
+			default:
 				s.labels[st] = name
 				s.dirty = true
 				s.notice = "renamed to " + name
-			} else {
-				s.notice = "a column needs a name — left unchanged"
 			}
 			s.editing, s.buf = false, ""
 		case "backspace":
@@ -342,7 +440,10 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				s.buf = string(r[:len(r)-1])
 			}
 		default:
-			if len(k) == 1 {
+			// Rune-aware, so "é" and CJK type as readily as ASCII. Anything
+			// bubbletea reports as a named chord ("ctrl+a", "shift+tab") is
+			// more than one rune and is ignored.
+			if len([]rune(k)) == 1 {
 				s.buf += k
 			}
 		}
@@ -374,7 +475,9 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch {
 	case k == "esc":
-		if s.section == sectionShortcuts && s.conflictCount() > 0 {
+		// Checked from every section: a conflict made in Shortcuts and then
+		// escaped from Columns used to close and write itself to disk.
+		if s.conflictCount() > 0 {
 			if !s.warned {
 				s.warned = true
 				return m, nil
@@ -490,6 +593,9 @@ func (m *Model) viewSettings() string {
 	height := m.settingsHeight()
 	origin := m.popupOrigin(width, height)
 
+	backdrop := m.popupBackdrop(m.popupReturnView)
+	m.resetZones() // drop the backdrop's zones; the popup covers them
+
 	header, tabSpans := s.header()
 	footer := s.footer(inner)
 	divider := " " + strings.Repeat("─", inner-2) + " "
@@ -569,7 +675,7 @@ func (m *Model) viewSettings() string {
 
 	content := lipgloss.NewStyle().PaddingLeft(1).Render(strings.Join(rows, "\n"))
 	popup := renderPanel("Settings", content, width, height, green, true)
-	return m.centerOverPopup(popup, m.popupBackdrop(m.popupReturnView), width, height)
+	return overlayAt(backdrop, popup, origin.x, origin.y)
 }
 
 type tabSpan struct{ x, w int }

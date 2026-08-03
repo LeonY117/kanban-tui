@@ -45,6 +45,11 @@ type Config struct {
 
 func configPath() string { return filepath.Join(defaultRoot(), configFile) }
 
+// ConfigPath is where preferences are read from and written to for the board
+// this process is talking to. It moves with KANBAN_FILE, so callers must ask
+// rather than assume ~/.kanban.
+func ConfigPath() string { return configPath() }
+
 // LoadConfig reads config.json, falling back to a zero Config when it is
 // missing or unreadable. Like pins, these are display preferences and must
 // never stand between the user and their boards, so a typo in the file costs

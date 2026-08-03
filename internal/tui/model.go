@@ -1242,12 +1242,14 @@ func (m *Model) editMetaField() (tea.Model, tea.Cmd) {
 
 func (m *Model) updateDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.editTitle.Focused() {
-		switch msg.String() {
-		case "esc", "enter":
+		switch {
+		case msg.String() == "esc", msg.String() == "enter":
 			m.editTitle.Blur()
 			m.saveEdit()
 			return m, nil
-		case "tab":
+		// Goes through the binding rather than a literal "tab": the picker key
+		// is rebindable, and a hard-coded alias here stayed live after a rebind.
+		case key.Matches(msg, keys.BoardPicker):
 			m.editTitle.Blur()
 			m.saveEdit()
 			return m.enterPicker()
@@ -1288,7 +1290,7 @@ func (m *Model) updateDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.saveEdit()
 			return m, nil
 		}
-		if msg.String() == "tab" {
+		if key.Matches(msg, keys.BoardPicker) {
 			m.editDesc.Blur()
 			m.saveEdit()
 			return m.enterPicker()

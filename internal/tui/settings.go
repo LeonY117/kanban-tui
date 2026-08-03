@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -103,6 +104,7 @@ type settingsState struct {
 	notice  string
 	warned  bool // esc was pressed once while conflicted
 	dirty   bool // something changed and is worth writing on close
+	undone  int  // clashing edits rolled back on the way out, reported after saving
 }
 
 func newSettingsState() settingsState {
@@ -233,6 +235,15 @@ func (s *settingsState) atDefault() bool {
 	return false
 }
 
+// labelStatus is the column the cursor is on, for tests and callers that need
+// it without reaching into ColumnOrder.
+func (s *settingsState) labelStatus() model.Status {
+	if s.idx < 0 || s.idx >= len(model.ColumnOrder) {
+		return ""
+	}
+	return model.ColumnOrder[s.idx]
+}
+
 func (s *settingsState) rowCount() int {
 	switch s.section {
 	case sectionShortcuts:
@@ -269,6 +280,7 @@ func (m *Model) enterSettings() (tea.Model, tea.Cmd) {
 	m.settings.idx = 0
 	m.settings.notice = ""
 	m.settings.warned = false
+	m.settings.undone = 0
 	m.settings.confirm = ""
 	m.settings.dirty = false
 	m.popupReturnView = m.view
@@ -353,11 +365,17 @@ func (m *Model) saveSettings() bool {
 		s.notice = m.notice
 		return false
 	}
-	if refused := ApplyConfig(saved); len(refused) > 0 {
+	switch refused := ApplyConfig(saved); {
+	case len(refused) > 0:
 		m.notice = fmt.Sprintf("settings saved — %d binding(s) refused on load", len(refused))
-	} else {
+	case s.undone > 0:
+		// Saying only "settings saved" here would let someone leave believing an
+		// edit took when it had just been rolled back.
+		m.notice = fmt.Sprintf("settings saved — undid %d clashing change(s)", s.undone)
+	default:
 		m.notice = "settings saved"
 	}
+	s.undone = 0
 	// A concurrent writer may have changed an untouched known row. Reflect the
 	// config that is now live so reopening this Model cannot show stale values.
 	for _, a := range bindActions {
@@ -481,9 +499,14 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// the clash is with a binding this list doesn't show (an arrow that
 			// is also `h`, ctrl+c, a column-jump digit), so a red row would
 			// point at nothing the user could resolve.
-			if reservedKeys()[k] {
+			switch {
+			case msg.Type == tea.KeyRunes && (msg.Paste || len(msg.Runes) != 1):
+				// Pasted text is one KeyRunes message carrying every rune, so
+				// binding it would produce a key no keypress can ever match.
+				s.notice = "that looks like pasted text — press a key instead"
+			case reservedKeys()[k]:
 				s.notice = k + " is reserved — it's how you get around"
-			} else {
+			default:
 				s.binds[a.id] = k
 				s.markBindingChanged(a.id)
 				s.notice = fmt.Sprintf("%s → %s", a.label, k)
@@ -518,11 +541,12 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				s.buf = string(r[:len(r)-1])
 			}
 		default:
-			// Rune-aware, so "é" and CJK type as readily as ASCII. Anything
-			// bubbletea reports as a named chord ("ctrl+a", "shift+tab") is
-			// more than one rune and is ignored.
-			if len([]rune(k)) == 1 {
-				s.buf += k
+			// Rune-aware, so "é" and CJK type as readily as ASCII. A paste is a
+			// single KeyRunes message carrying every rune, and this is a text
+			// field, so take all of them. Anything bubbletea reports as a named
+			// chord ("ctrl+a", "shift+tab") is not KeyRunes and is ignored.
+			if msg.Type == tea.KeyRunes {
+				s.buf += string(msg.Runes)
 			}
 		}
 		return m, nil
@@ -554,6 +578,8 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch {
+	case key.Matches(msg, keys.Quit):
+		return m, tea.Quit
 	case k == "esc":
 		// Checked from every section: a conflict made in Shortcuts and then
 		// escaped from Columns used to close and write itself to disk.
@@ -562,8 +588,7 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				s.warned = true
 				return m, nil
 			}
-			n := s.revertConflicts()
-			m.notice = fmt.Sprintf("undid %d conflicting change(s)", n)
+			s.undone = s.revertConflicts()
 		}
 		m.closeSettings()
 
@@ -693,7 +718,7 @@ func (m *Model) viewSettings() string {
 	case sectionColumns:
 		body, rowIdx, cursorRow = s.columnRows(inner)
 	case sectionAbout:
-		body = s.aboutRows(inner)
+		body = m.aboutRows(inner)
 		rowIdx = make([]int, len(body))
 		for i := range rowIdx {
 			rowIdx[i] = -1
@@ -867,13 +892,37 @@ func (s *settingsState) columnRows(w int) ([]string, []int, int) {
 	return rows, idxs, cursorRow
 }
 
-func (s *settingsState) aboutRows(w int) []string {
+// aboutRows names the files this process is actually using. They move with
+// KANBAN_FILE and with --sprint, so hard-coding ~/.kanban pointed people at the
+// wrong board on every sprint — and naming the files is all this tab is for.
+func (m *Model) aboutRows(w int) []string {
 	dim := lipgloss.NewStyle().Foreground(dimGray)
 	return []string{
 		groupHeader("Files", w),
-		padBetween(" "+dim.Render("  config"), "~/.kanban/config.json ", w),
-		padBetween(" "+dim.Render("  board"), "~/.kanban/board.json ", w),
+		padBetween(" "+dim.Render("  config"), fitPath(store.ConfigPath(), w-11)+" ", w),
+		padBetween(" "+dim.Render("  board"), fitPath(m.store.BoardPath(), w-11)+" ", w),
 	}
+}
+
+// fitPath shortens a path to width cells, from the LEFT — the filename and the
+// directory holding it are what identify a board, so a path that has to lose
+// something loses its root rather than its tail.
+func fitPath(p string, width int) string {
+	p = tildePath(p)
+	if width < 4 || lipgloss.Width(p) <= width {
+		return p
+	}
+	r := []rune(p)
+	return "…" + string(r[len(r)-(width-1):])
+}
+
+// tildePath shortens a path under the user's home for display.
+func tildePath(p string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" || !strings.HasPrefix(p, home+string(os.PathSeparator)) {
+		return p
+	}
+	return "~" + p[len(home):]
 }
 
 func (s *settingsState) footer(w int) []string {

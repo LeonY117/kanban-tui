@@ -16,17 +16,21 @@ func settingsModel(t *testing.T) *Model {
 	return m
 }
 
+// press feeds keys to the settings handler. Named keys become their real
+// tea.KeyType — a left arrow is KeyLeft, never KeyRunes carrying "left", and
+// the difference matters now that capture rejects multi-rune messages as paste.
 func press(m *Model, keys ...string) {
+	named := map[string]tea.KeyType{
+		"enter": tea.KeyEnter, "esc": tea.KeyEsc, "tab": tea.KeyTab,
+		"shift+tab": tea.KeyShiftTab, "backspace": tea.KeyBackspace,
+		"up": tea.KeyUp, "down": tea.KeyDown,
+		"left": tea.KeyLeft, "right": tea.KeyRight,
+		"ctrl+c": tea.KeyCtrlC,
+	}
 	for _, k := range keys {
-		var msg tea.KeyMsg
-		switch k {
-		case "enter", "esc", "tab", "backspace", "up", "down":
-			msg = tea.KeyMsg{Type: map[string]tea.KeyType{
-				"enter": tea.KeyEnter, "esc": tea.KeyEsc, "tab": tea.KeyTab,
-				"backspace": tea.KeyBackspace, "up": tea.KeyUp, "down": tea.KeyDown,
-			}[k]}
-		default:
-			msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
+		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
+		if t, ok := named[k]; ok {
+			msg = tea.KeyMsg{Type: t}
 		}
 		m.updateSettings(msg)
 	}

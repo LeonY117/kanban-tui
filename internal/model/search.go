@@ -161,10 +161,12 @@ func containsFold(haystack, needleLower string) bool {
 }
 
 // TagCount is one tag offered as a completion, with the number of tickets
-// selecting it would leave on screen.
+// selecting it would leave on screen. Counts breaks that same total down by
+// column, so a picker can show where the work sits and still sum to Count.
 type TagCount struct {
-	Tag   string
-	Count int
+	Tag    string
+	Count  int
+	Counts map[Status]int
 }
 
 // TagCandidates returns the distinct tags among tickets containing prefix
@@ -205,7 +207,12 @@ func TagCandidates(tickets []Ticket, prefix string) []TagCount {
 	out := make([]TagCount, 0, len(display))
 	for _, tag := range display {
 		q := Query{terms: []queryTerm{{text: strings.ToLower(tag), tagged: true}}}
-		out = append(out, TagCount{Tag: tag, Count: len(q.MatchAll(tickets))})
+		matches := q.MatchAll(tickets)
+		byStatus := make(map[Status]int, len(ColumnOrder))
+		for _, t := range matches {
+			byStatus[t.Status]++
+		}
+		out = append(out, TagCount{Tag: tag, Count: len(matches), Counts: byStatus})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Count != out[j].Count {

@@ -156,7 +156,7 @@ func TestHelpTextUsesReboundKeysOnEveryView(t *testing.T) {
 		"card.archive":      "y",
 		"board.unarchive":   "i",
 		"board.archiveView": "Z",
-		"board.picker":      "t",
+		"board.picker":      "w",
 		"card.moveLeft":     "<",
 		"card.moveRight":    ">",
 		"card.move":         "g",
@@ -170,7 +170,7 @@ func TestHelpTextUsesReboundKeysOnEveryView(t *testing.T) {
 
 	m := &Model{view: pickerView, pickerShowArchived: true}
 	for _, want := range []string{
-		"n rename", "b pin", "U/D reorder", "y archive", "i unarchive", "Z hide archived", "esc/t close",
+		"n rename", "b pin", "U/D reorder", "y archive", "i unarchive", "Z hide archived", "esc/w close",
 	} {
 		if got := m.helpText(); !strings.Contains(got, want) {
 			t.Errorf("picker help %q does not contain %q", got, want)

@@ -19,6 +19,12 @@ type tagPickerState struct {
 	tags  []model.TagCount
 	idx   int
 	start int // first row rendered; the window slides to keep idx visible
+
+	// Opened from the board picker, which is the only way in. esc goes back
+	// there rather than to the board, and the picker's own return view is left
+	// alone — popupReturnView holds one value, so overwriting it here would
+	// strand the picker with nowhere to close to.
+	fromPicker bool
 }
 
 // tagPickerMaxRows caps the popup so a board with forty tags doesn't produce a
@@ -40,7 +46,10 @@ func (m *Model) enterTagPicker() (tea.Model, tea.Cmd) {
 		}
 	}
 
-	m.popupReturnView = m.view
+	m.tags.fromPicker = m.view == pickerView
+	if !m.tags.fromPicker {
+		m.popupReturnView = m.view
+	}
 	m.view = tagView
 	return m, nil
 }
@@ -60,7 +69,7 @@ func (m *Model) updateTagPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
 	case key.Matches(msg, keys.Esc), key.Matches(msg, keys.TagPicker):
-		m.restorePopupView(tagView)
+		m.closeTagPicker(false)
 	case key.Matches(msg, keys.Up):
 		m.moveTagPickerCursor(-1)
 	case key.Matches(msg, keys.Down):
@@ -95,9 +104,21 @@ func (m *Model) tagPickerActivate() (tea.Model, tea.Cmd) {
 	m.setQuery(query)
 	m.search.input.SetValue(query)
 	m.search.open = false
-	m.restorePopupView(tagView)
+	m.closeTagPicker(true)
 	m.refreshSearchSelection()
 	return m, nil
+}
+
+// closeTagPicker leaves the popup. esc steps back to the board picker it was
+// opened from; picking a tag goes all the way out, because the point of
+// picking is to look at the board it just filtered.
+func (m *Model) closeTagPicker(applied bool) {
+	if m.tags.fromPicker && !applied {
+		m.view = pickerView
+		return
+	}
+	m.tags.fromPicker = false
+	m.restorePopupView(tagView)
 }
 
 // tagPickerWindow is the slice of rows on screen, sliding to keep the cursor
@@ -139,9 +160,16 @@ func (m *Model) viewTagPicker() string {
 		title += " · all boards"
 	}
 
+	// Every row carries the same counts block, so the popup has to be wide
+	// enough for the longest name plus that block — sizing off the name alone
+	// truncated names down to an ellipsis.
+	countsWidth := 0
+	if len(m.tags.tags) > 0 {
+		countsWidth = lipgloss.Width(formatCounts(m.tags.tags[0].Counts))
+	}
 	width := lipgloss.Width(title) + 8
 	for _, t := range m.tags.tags {
-		if w := lipgloss.Width(model.QuoteTag(t.Tag)) + 14; w > width {
+		if w := lipgloss.Width(model.QuoteTag(t.Tag)) + countsWidth + 8; w > width {
 			width = w
 		}
 	}
@@ -201,8 +229,11 @@ func (m *Model) renderTagPopup(title string, width, height, start, rows int, ori
 	return renderPanel(title, content, width, height, green, true)
 }
 
-// renderTagRow lays out one tag with its count pushed to the right edge, so
-// the counts form a column the eye can scan rather than trailing each name.
+// renderTagRow lays a tag out exactly as the board picker lays a board out:
+// name on the left in the default foreground, per-column counts right-aligned
+// in the column colours. The two lists are siblings reached by the same key,
+// so they read as one thing rather than two — and the breakdown says where a
+// tag's work actually sits, which a single dim number never did.
 func (m *Model) renderTagRow(t model.TagCount, width int, selected, current bool) string {
 	marker := "  "
 	if selected {
@@ -210,22 +241,21 @@ func (m *Model) renderTagRow(t model.TagCount, width int, selected, current bool
 	}
 
 	name := model.QuoteTag(t.Tag)
-	count := fmt.Sprintf("%d", t.Count)
-	suffix := ""
+	nameStyle := lipgloss.NewStyle()
 	if current {
-		suffix = " ·"
+		nameStyle = nameStyle.Foreground(green).Bold(true)
 	}
+	counts := formatCounts(t.Counts)
 
-	gap := width - lipgloss.Width(marker) - lipgloss.Width(name) - lipgloss.Width(count) - lipgloss.Width(suffix)
+	left := marker + nameStyle.Render(name)
+	gap := width - lipgloss.Width(left) - lipgloss.Width(counts)
 	if gap < 1 {
-		room := width - lipgloss.Width(marker) - lipgloss.Width(count) - lipgloss.Width(suffix) - 1
+		room := width - lipgloss.Width(marker) - lipgloss.Width(counts) - 1
 		if room < 1 {
 			room = 1
 		}
-		name = ansi.Truncate(name, room, "…")
+		left = marker + nameStyle.Render(ansi.Truncate(name, room, "…"))
 		gap = 1
 	}
-
-	return marker + tagStyle.Render(name) + strings.Repeat(" ", gap) +
-		dimStyle.Render(count) + selectedMarker.Render(suffix)
+	return left + strings.Repeat(" ", gap) + counts
 }

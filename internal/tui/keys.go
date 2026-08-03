@@ -95,6 +95,6 @@ func defaultKeyMap() keyMap {
 		Pin:         key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pin board")),
 		Rename:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rename board")),
 		Search:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
-		TagPicker:   key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "tags")),
+		TagPicker:   key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "tags")),
 	}
 }

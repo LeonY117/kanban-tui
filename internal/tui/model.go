@@ -671,8 +671,6 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case key.Matches(msg, keys.Search):
 		m.enterSearch()
-	case key.Matches(msg, keys.TagPicker):
-		return m.enterTagPicker()
 	case key.Matches(msg, keys.Add):
 		return m.enterAddPopup()
 	case key.Matches(msg, keys.Zero):
@@ -896,8 +894,6 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.refreshDetailEditors()
 	case key.Matches(msg, keys.Search):
 		m.enterSearch()
-	case key.Matches(msg, keys.TagPicker):
-		return m.enterTagPicker()
 	case key.Matches(msg, keys.Up):
 		if m.cursors[m.focusedCol] > 0 {
 			m.cursors[m.focusedCol]--
@@ -1195,8 +1191,6 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case key.Matches(msg, keys.Search):
 		m.enterSearch()
-	case key.Matches(msg, keys.TagPicker):
-		return m.enterTagPicker()
 	case key.Matches(msg, keys.Add):
 		return m.enterAddPopup()
 	case key.Matches(msg, keys.Zero):
@@ -2615,6 +2609,8 @@ func (m *Model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.pickerUnarchive()
 	case key.Matches(msg, keys.Pin):
 		return m.pickerTogglePin()
+	case key.Matches(msg, keys.TagPicker):
+		return m.enterTagPicker()
 	case key.Matches(msg, keys.Rename):
 		return m.startPickerRename()
 	case key.Matches(msg, keys.MoveUp):
@@ -3214,9 +3210,9 @@ func (m *Model) helpText() string {
 		// search and settings lead: they are the two the board cannot teach you
 		// any other way, and fitHints drops from the end. The rest are either
 		// guessable or already on a card in front of you.
-		hints := fmt.Sprintf("h/l nav | j/k select | %s search | %s tags | %s settings | %s/%s move | %s move | %s add | %s quit",
-			hk("board.search"), hk("board.tags"), hk("board.settings"), hk("card.moveLeft"), hk("card.moveRight"),
-			hk("card.move"), hk("card.add"), "q")
+		hints := fmt.Sprintf("h/l nav | j/k select | %s search | %s settings | %s/%s move | %s move | %s add | %s archive | %s quit",
+			hk("board.search"), hk("board.settings"), hk("card.moveLeft"), hk("card.moveRight"),
+			hk("card.move"), hk("card.add"), hk("card.archive"), "q")
 		if m.searchActive() {
 			// Only the board view frees esc for this — elsewhere it still
 			// means "back", and shadowing that to clear a filter would be a
@@ -3243,12 +3239,12 @@ func (m *Model) helpText() string {
 			return "tab/↑↓ fields | enter apply | esc cancel"
 		}
 		if m.pickerShowArchived {
-			return fmt.Sprintf("j/k select | enter switch | %s rename | %s pin | %s/%s reorder | %s archive | %s unarchive | %s hide archived | esc/%s close",
-				hk("board.rename"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
+			return fmt.Sprintf("j/k select | enter switch | %s tags | %s rename | %s pin | %s/%s reorder | %s archive | %s unarchive | %s hide archived | esc/%s close",
+				hk("board.tags"), hk("board.rename"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
 				hk("card.archive"), hk("board.unarchive"), hk("board.archiveView"), hk("board.picker"))
 		}
-		return fmt.Sprintf("j/k select | enter switch | %s rename | %s pin | %s/%s reorder | %s archive | %s show archived | esc/%s close",
-			hk("board.rename"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
+		return fmt.Sprintf("j/k select | enter switch | %s tags | %s rename | %s pin | %s/%s reorder | %s archive | %s show archived | esc/%s close",
+			hk("board.tags"), hk("board.rename"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
 			hk("card.archive"), hk("board.archiveView"), hk("board.picker"))
 	case archiveView:
 		return fmt.Sprintf("j/k nav | %s unarchive | %s copy id | %s/esc back | q quit",

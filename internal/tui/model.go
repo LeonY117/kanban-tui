@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"sort"
 	"strings"
@@ -23,15 +24,15 @@ import (
 type viewMode int
 
 const (
-	boardView   viewMode = iota
-	splitView            // list + detail side by side
-	columnView           // full-width single column
-	detailView           // full-screen detail editor
-	archiveView          // archive browser (split: list + read-only detail)
-	addView              // floating popup for new ticket
-	pickerView           // floating board picker (main + sprints)
-	moveView             // floating move-ticket picker (column / other board)
-	settingsView         // floating settings popup (PROTOTYPE)
+	boardView    viewMode = iota
+	splitView             // list + detail side by side
+	columnView            // full-width single column
+	detailView            // full-screen detail editor
+	archiveView           // archive browser (split: list + read-only detail)
+	addView               // floating popup for new ticket
+	pickerView            // floating board picker (main + sprints)
+	moveView              // floating move-ticket picker (column / other board)
+	settingsView          // floating settings popup (PROTOTYPE)
 )
 
 // inputMode tracks what the user is typing into.
@@ -44,8 +45,8 @@ const (
 	inputSelect // for status picker
 )
 
-// statusDisplay maps internal status to sentence-case display name.
-var statusDisplay = map[model.Status]string{
+// defaultStatusDisplay maps internal status to sentence-case display name.
+var defaultStatusDisplay = map[model.Status]string{
 	model.StatusBacklog: "Backlog",
 	model.StatusTodo:    "Todo",
 	model.StatusDoing:   "Doing",
@@ -53,13 +54,45 @@ var statusDisplay = map[model.Status]string{
 	model.StatusHold:    "Hold",
 }
 
-// statusShort is the compact label used in the board picker count strip.
-var statusShort = map[model.Status]string{
+// defaultStatusShort is the compact label used in the board picker count strip.
+var defaultStatusShort = map[model.Status]string{
 	model.StatusBacklog: "B",
 	model.StatusTodo:    "T",
 	model.StatusDoing:   "Do",
 	model.StatusDone:    "Dn",
 	model.StatusHold:    "H",
+}
+
+// The labels the TUI actually draws. They start as the defaults and pick up
+// whatever config.json renames, so two people can call one column different
+// things without either board changing on disk.
+var (
+	statusDisplay = maps.Clone(defaultStatusDisplay)
+	statusShort   = maps.Clone(defaultStatusShort)
+)
+
+// ApplyConfig points the display labels and the keymap at the user's config,
+// and reports any key override that had to be refused. Call it before
+// NewModel. Separate from NewModel so tests set preferences explicitly rather
+// than inheriting whatever the machine running them has in config.json.
+func ApplyConfig(cfg store.Config) []string {
+	statusDisplay = maps.Clone(defaultStatusDisplay)
+	statusShort = maps.Clone(defaultStatusShort)
+	for status, label := range cfg.Labels() {
+		statusDisplay[status] = label
+		statusShort[status] = firstRune(label)
+	}
+	for status, label := range cfg.ShortLabels() {
+		statusShort[status] = label
+	}
+	return applyKeyBindings(cfg.Keys)
+}
+
+func firstRune(s string) string {
+	for _, r := range s {
+		return string(r)
+	}
+	return ""
 }
 
 var (
@@ -1173,9 +1206,10 @@ func (m *Model) editMetaField() (tea.Model, tea.Cmd) {
 	}
 	switch m.metaIdx {
 	case 0: // status
-		m.startSelect("Status", []string{"Todo", "Doing", "Done", "Hold"}, func(val string) {
-			status, err := model.ParseStatus(val)
-			if err != nil {
+		labels, byLabel := statusChoices()
+		m.startSelect("Status", labels, func(val string) {
+			status, ok := byLabel[val]
+			if !ok {
 				return
 			}
 			m.store.Update(m.editTicketID, func(ticket *model.Ticket) {
@@ -3001,7 +3035,9 @@ func formatCounts(counts map[model.Status]int) string {
 func (m *Model) helpText() string {
 	switch m.view {
 	case boardView:
-		return "h/l nav | j/k select | H/L move | m move | a add | x archive | ? settings | q quit"
+		return fmt.Sprintf("h/l nav | j/k select | %s/%s move | %s move | %s add | %s archive | %s settings | %s quit",
+			hk("card.moveLeft"), hk("card.moveRight"), hk("card.move"), hk("card.add"),
+			hk("card.archive"), hk("board.settings"), "q")
 	case settingsView:
 		return "j/k select | h/l section | enter change | esc close"
 	case moveView:
@@ -3026,7 +3062,9 @@ func (m *Model) helpText() string {
 		return "j/k nav | u unarchive | c copy id | X/esc back | q quit"
 	case splitView:
 		if m.splitFocus == 0 {
-			return "j/k select | ] edit | H/L move | m move | x archive | - back | ? settings | q quit"
+			return fmt.Sprintf("j/k select | %s edit | %s/%s move | %s move | %s archive | %s back | %s settings | q quit",
+				hk("board.panelNext"), hk("card.moveLeft"), hk("card.moveRight"), hk("card.move"),
+				hk("card.archive"), hk("board.unzoom"), hk("board.settings"))
 		}
 		if m.editDesc.Focused() {
 			return "enter save | shift+enter new line | esc save"
@@ -3041,7 +3079,9 @@ func (m *Model) helpText() string {
 			return "j/k fields | enter/e edit | H/L move | h list | q quit"
 		}
 	case columnView:
-		return "j/k select | H/L move | m move to | x archive | enter detail | - back | a add | ? settings | q quit"
+		return fmt.Sprintf("j/k select | %s/%s move | %s move to | %s archive | enter detail | %s back | %s add | %s settings | q quit",
+			hk("card.moveLeft"), hk("card.moveRight"), hk("card.move"), hk("card.archive"),
+			hk("board.unzoom"), hk("card.add"), hk("board.settings"))
 	case detailView:
 		if m.editDesc.Focused() {
 			return "enter save | shift+enter new line | esc save"

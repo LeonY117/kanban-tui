@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/LeonY117/kanban-tui/internal/model"
+	"github.com/LeonY117/kanban-tui/internal/store"
 )
 
 // PROTOTYPE — for feel only. Nothing here persists to disk yet; the point is
@@ -102,6 +103,7 @@ type settingsState struct {
 	confirm string // pending destructive action, "" when none
 	notice  string
 	warned  bool // esc was pressed once while conflicted
+	dirty   bool // something changed and is worth writing on close
 }
 
 func newSettingsState() settingsState {
@@ -111,7 +113,7 @@ func newSettingsState() settingsState {
 		baseline: map[string]string{},
 	}
 	for _, a := range bindActions {
-		s.binds[a.id] = a.def
+		s.binds[a.id] = hk(a.id)
 	}
 	for _, st := range model.ColumnOrder {
 		s.labels[st] = statusDisplay[st]
@@ -169,7 +171,7 @@ func (s *settingsState) atDefault() bool {
 			return false
 		}
 		st := model.ColumnOrder[s.idx]
-		return s.labels[st] == statusDisplay[st]
+		return s.labels[st] == defaultStatusDisplay[st]
 	}
 	return false
 }
@@ -205,6 +207,7 @@ func (m *Model) enterSettings() (tea.Model, tea.Cmd) {
 	m.settings.notice = ""
 	m.settings.warned = false
 	m.settings.confirm = ""
+	m.settings.dirty = false
 	m.popupReturnView = m.view
 	m.view = settingsView
 	return m, nil
@@ -214,7 +217,62 @@ func (m *Model) closeSettings() {
 	m.settings.capturing = false
 	m.settings.editing = false
 	m.settings.confirm = ""
+	if m.settings.dirty {
+		m.saveSettings()
+	}
 	m.restorePopupView(settingsView)
+}
+
+// saveSettings writes the working copy to config.json and makes it live.
+//
+// Only what differs from the built-in default is stored, so a later change to
+// a default still reaches anyone who never overrode it.
+func (m *Model) saveSettings() {
+	s := &m.settings
+	var cfg store.Config
+	for _, st := range model.ColumnOrder {
+		if s.labels[st] != defaultStatusDisplay[st] {
+			cfg.Columns = append(cfg.Columns,
+				store.ColumnConfig{Status: string(st), Label: s.labels[st]})
+		}
+	}
+	for _, a := range bindActions {
+		if a.locked || s.binds[a.id] == a.def {
+			continue
+		}
+		if cfg.Keys == nil {
+			cfg.Keys = map[string]string{}
+		}
+		cfg.Keys[a.id] = s.binds[a.id]
+	}
+	if err := store.SaveConfig(cfg); err != nil {
+		m.err = err
+		return
+	}
+	ApplyConfig(cfg)
+	s.dirty = false
+	m.notice = "settings saved"
+}
+
+// statusChoices lists the statuses the meta-bar picker offers, labelled as they
+// appear on the board, with a way back from the label the user picked. Backlog
+// is absent, matching the fixed list this replaced.
+//
+// The map back matters: the picker used to round-trip its label through
+// model.ParseStatus, which only works while every label is also a status name.
+// Rename Done to Shipped and picking it would silently do nothing.
+func statusChoices() ([]string, map[string]model.Status) {
+	labels := make([]string, 0, len(model.ColumnOrder))
+	byLabel := make(map[string]model.Status, len(model.ColumnOrder))
+	for _, status := range model.ColumnOrder {
+		if status == model.StatusBacklog {
+			continue
+		}
+		label := statusDisplay[status]
+		labels = append(labels, label)
+		byLabel[label] = status
+	}
+	return labels, byLabel
 }
 
 func (m *Model) setSettingsSection(sec settingsSection) {
@@ -256,6 +314,7 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if a := s.currentAction(); a != nil {
 			s.binds[a.id] = k
+			s.dirty = true
 			s.notice = fmt.Sprintf("%s → %s", a.label, k)
 			s.warned = false
 		}
@@ -272,6 +331,7 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			st := model.ColumnOrder[s.idx]
 			if name := strings.TrimSpace(s.buf); name != "" {
 				s.labels[st] = name
+				s.dirty = true
 				s.notice = "renamed to " + name
 			} else {
 				s.notice = "a column needs a name — left unchanged"
@@ -296,11 +356,13 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				for _, a := range bindActions {
 					s.binds[a.id] = a.def
 				}
+				s.dirty = true
 				s.notice = "all shortcuts back to defaults"
 			case "resetLabels":
 				for _, st := range model.ColumnOrder {
-					s.labels[st] = statusDisplay[st]
+					s.labels[st] = defaultStatusDisplay[st]
 				}
+				s.dirty = true
 				s.notice = "all column names back to defaults"
 			}
 		} else {
@@ -355,15 +417,17 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			s.binds[a.id] = a.def
+			s.dirty = true
 			s.notice = a.label + " back to " + a.def
 		case sectionColumns:
 			st := model.ColumnOrder[s.idx]
-			if s.labels[st] == statusDisplay[st] {
+			if s.labels[st] == defaultStatusDisplay[st] {
 				s.notice = "already default"
 				return m, nil
 			}
-			s.labels[st] = statusDisplay[st]
-			s.notice = "back to " + statusDisplay[st]
+			s.labels[st] = defaultStatusDisplay[st]
+			s.dirty = true
+			s.notice = "back to " + defaultStatusDisplay[st]
 		}
 
 	case k == "R":

@@ -46,9 +46,14 @@ func TestLiveKeyHoldersIncludesFixedBindingsOutsideSettings(t *testing.T) {
 	}
 }
 
-// The property the old single-pass sanitiser claimed and didn't have. Every
-// action must end up bound, to a distinct key, whatever the config asks for.
-func TestSanitizeIsTotalAndInjective(t *testing.T) {
+// The property the old single-pass sanitiser claimed and didn't have. No two
+// actions may share a key, whatever the config asks for.
+//
+// Totality is now conditional rather than absolute: an action may end up with
+// no key, but only when an override claimed its default by name. Anything else
+// losing its key is a bug, and the caller is told about the ones that do —
+// both cmd/tui.go and the settings notice name them.
+func TestSanitizeIsInjectiveAndOnlyDropsDisplacedDefaults(t *testing.T) {
 	cases := []map[string]string{
 		{},
 		{"card.add": "e", "card.edit": "e"},    // both want one key
@@ -64,11 +69,21 @@ func TestSanitizeIsTotalAndInjective(t *testing.T) {
 	for i, overrides := range cases {
 		resolved, _ := sanitizeBindings(overrides)
 
+		claimed := map[string]bool{}
+		for _, k := range resolved {
+			claimed[k] = true
+		}
+
 		seen := map[string]string{}
 		for _, a := range bindActions {
 			k, ok := resolved[a.id]
 			if !ok || k == "" {
-				t.Errorf("case %d: %s ended up unbound", i, a.id)
+				// Acceptable only because something else was given this
+				// action's default key outright.
+				if !claimed[a.def] {
+					t.Errorf("case %d: %s ended up unbound with its default %q still free",
+						i, a.id, a.def)
+				}
 				continue
 			}
 			if prev, dup := seen[k]; dup {

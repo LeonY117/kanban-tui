@@ -197,7 +197,7 @@ func (m *Model) commitMove(targetBoard string, status model.Status) {
 				m.focusedCol = i
 			}
 		}
-		for i, t := range m.board.ByStatus(status) {
+		for i, t := range m.visibleTickets(status) {
 			if t.ID == m.moveTicketID {
 				m.cursors[m.focusedCol] = i
 			}

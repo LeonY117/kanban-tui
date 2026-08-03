@@ -63,6 +63,16 @@ var (
 	tagStyle = lipgloss.NewStyle().
 			Foreground(midGray)
 
+	// The tag completion `tab` would take. Reverse rather than a color so it
+	// reads on any theme, and unpadded so the footer's width arithmetic —
+	// which measures rendered parts against a one-line budget — stays honest.
+	searchTagStyle = lipgloss.NewStyle().
+			Reverse(true)
+
+	// The board a card was borrowed from, shown only under a global search.
+	foreignBoardStyle = lipgloss.NewStyle().
+				Foreground(dimGray)
+
 	// Assignee indicator
 	assigneeStyle = lipgloss.NewStyle().
 			Foreground(cyan)

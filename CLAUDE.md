@@ -29,6 +29,8 @@ Not reachable from `--help`, so it lives here:
 - Pinned sprints sit above a divider in the picker; `p` toggles a pin, `J`/`K` reorder the pinned block. Main is implicitly pinned and holds the top slot. **Archiving a pinned sprint is refused** — unpin first.
 - `r` in the picker renames a sprint and/or its ticket-id prefix. A prefix change rewrites board **and** archive short ids keeping their numbers (`KA7` → `KB7`), refused per-id if another board already issued one. Both are refused on archived sprints.
 - A missing `--sprint` prompts `[y/N]` on TUI launch but hard-errors on CLI subcommands — no silent creation, no hanging prompts for agents.
+- `/` filters the board in place, live. Terms are ANDed; a bare term matches title, description, short id, tags or assignee, `#tag` matches tags only, a leading `-` negates, and `"` groups. Matching is case-insensitive **substring**, so `#cli` also selects `#client` — the completion counts say so. `ctrl+g` widens to every active board, whose cards arrive badged and read-only; `enter` follows one home. Session-only, cleared on board switch. The active filter shows in green between the board name and its id prefix.
+- `t` in the picker opens the board's tags as a list, bookended by **all tickets** and **no tags** (`-#`). Picking one writes the query you could have typed, so there is one filter with one meaning; picking replaces rather than ANDs. Any exit key leaves for the board, not back to the picker.
 
 ## Where work lives
 

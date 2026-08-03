@@ -300,20 +300,30 @@ func (m *Model) cardContent(t model.Ticket, selected bool, width int, accent lip
 		}
 	}
 
-	return append(lines, cardMetaLine(t, width, m.layout == layoutLarge, selected, accent))
+	return append(lines, m.cardMetaLine(t, width, m.layout == layoutLarge, selected, accent))
 }
 
 // cardMetaLine builds a card's bottom line: short id, tags, assignee, and — in
 // the large layout — when it last changed. Pieces that don't fit are dropped,
 // rightmost first. The selected ticket's id takes the column's accent so the
 // id you'd type into the CLI is the one that stands out.
-func cardMetaLine(t model.Ticket, width int, withDate, selected bool, accent lipgloss.Color) string {
+//
+// A card borrowed by a global search wears its board as a path prefix on that
+// id. Prefixing rather than appending keeps it out of the drop-rightmost rule:
+// losing the badge would leave a foreign card looking local, which is the one
+// piece of this line that changes what the card means.
+func (m *Model) cardMetaLine(t model.Ticket, width int, withDate, selected bool, accent lipgloss.Color) string {
 	idStyle := dimStyle
 	if selected {
 		idStyle = lipgloss.NewStyle().Foreground(accent).Bold(true)
 	}
-	parts := []string{idStyle.Render(t.ShortID)}
-	used := lipgloss.Width(t.ShortID)
+	id := t.ShortID
+	badge := ""
+	if owner, ok := m.ticketOwner(t.ID); ok {
+		badge = boardDisplayName(owner) + "/"
+	}
+	parts := []string{foreignBoardStyle.Render(badge) + idStyle.Render(id)}
+	used := lipgloss.Width(badge) + lipgloss.Width(id)
 
 	add := func(text, styled string) {
 		if used+2+lipgloss.Width(text) <= width {

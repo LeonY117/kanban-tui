@@ -46,6 +46,7 @@ func bindingTargets(km *keyMap) map[string]*key.Binding {
 		"board.panelNext":   &km.PanelNext,
 		"board.panelPrev":   &km.PanelPrev,
 		"board.settings":    &km.Help,
+		"board.search":      &km.Search,
 	}
 }
 

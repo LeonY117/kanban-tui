@@ -65,6 +65,7 @@ var bindActions = []bindAction{
 	{id: "board.panelNext", group: "Board", label: "next panel", def: "]"},
 	{id: "board.panelPrev", group: "Board", label: "previous panel", def: "["},
 	{id: "board.settings", group: "Board", label: "settings", def: "?"},
+	{id: "board.search", group: "Board", label: "search", def: "/"},
 }
 
 var bindActionsByID = func() map[string]bindAction {

@@ -200,6 +200,7 @@ type Model struct {
 	moveTargetBoard  string
 
 	settings settingsState
+	search   searchState
 
 	// Source view for the active popup or picker — restored on close, also
 	// rendered as the backdrop behind the popup.
@@ -316,15 +317,35 @@ func NewModel(s *store.Store, sprintName string) (*Model, error) {
 		board:       board,
 		sprintName:  sprintName,
 		input:       ti,
+		search:      newSearchState(),
 		focusedCol:  1, // default to Todo
 		lastModTime: modTime,
 		archived:    archived,
 	}, nil
 }
 
-// guardMutate returns true if the mutation should proceed. When the current
-// sprint is archived, it sets a footer notice and returns false.
+// guardMutate returns true if the mutation should proceed. It refuses on an
+// archived sprint, and on a card a global search borrowed from another board:
+// this Model holds one store, and that card's writes belong to a different
+// one. enter follows it home, where everything works normally.
 func (m *Model) guardMutate() bool {
+	if !m.guardBoardMutate() {
+		return false
+	}
+	if t := m.selectedTicket(); t != nil {
+		if owner, ok := m.ticketOwner(t.ID); ok {
+			m.notice = fmt.Sprintf("%s lives on %s — enter to open it there", t.ShortID, boardDisplayName(owner))
+			return false
+		}
+	}
+	return true
+}
+
+// guardBoardMutate is guardMutate without the borrowed-card check, for
+// mutations aimed at the board rather than at the selection. Adding a card
+// writes to the board you are standing on whatever the cursor happens to be
+// resting on.
+func (m *Model) guardBoardMutate() bool {
 	if m.archived {
 		m.notice = fmt.Sprintf("sprint %q is archived — `kanban sprints unarchive %s` to edit", m.sprintName, m.sprintName)
 		return false
@@ -343,10 +364,19 @@ func (m *Model) footerLine() string {
 		badge = lipgloss.JoinHorizontal(lipgloss.Top, badge, archivedTag)
 	}
 
+	if m.search.open {
+		return m.searchFooter(badge)
+	}
+
 	var rightText string
-	if m.notice != "" {
+	switch {
+	case m.notice != "":
 		rightText = m.notice
-	} else {
+	case m.searchActive():
+		// The chip leads so fitHints, which drops from the end, can never trim
+		// away the explanation for why the board looks half empty.
+		rightText = fitHints(m.searchChip()+" | "+m.helpText(), m.width-lipgloss.Width(badge)-2)
+	default:
 		rightText = fitHints(m.helpText(), m.width-lipgloss.Width(badge)-2)
 	}
 	help := helpStyle.Render(rightText)
@@ -422,6 +452,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.inputMode != inputNone {
 			return m.updateInput(msg)
 		}
+		// The search input sits over the footer of whichever view is behind
+		// it, so it takes keys ahead of that view rather than being one.
+		if m.search.open {
+			return m.updateSearch(msg)
+		}
 
 		switch m.view {
 		case boardView:
@@ -476,11 +511,14 @@ func (m *Model) reload() {
 		return
 	}
 	m.board = board
+	// Under a global search the other boards are on screen too, so they go
+	// stale on the same beat this one does.
+	m.loadForeign()
 }
 
 func (m *Model) selectedTicket() *model.Ticket {
 	status := model.ColumnOrder[m.focusedCol]
-	tickets := m.board.ByStatus(status)
+	tickets := m.visibleTickets(status)
 	idx := m.cursors[m.focusedCol]
 	if idx >= len(tickets) {
 		return nil
@@ -549,7 +587,7 @@ func (m *Model) moveCursor(dir int) {
 		return
 	}
 	status := model.ColumnOrder[m.focusedCol]
-	count := len(m.board.ByStatus(status))
+	count := len(m.visibleTickets(status))
 	if m.cursors[m.focusedCol] < count-1 {
 		m.cursors[m.focusedCol]++
 	}
@@ -557,7 +595,7 @@ func (m *Model) moveCursor(dir int) {
 
 func (m *Model) clampCursors() {
 	for i, status := range model.ColumnOrder {
-		count := len(m.board.ByStatus(status))
+		count := len(m.visibleTickets(status))
 		if m.cursors[i] >= count && count > 0 {
 			m.cursors[i] = count - 1
 		}
@@ -582,8 +620,17 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Down):
 		m.moveCursor(1)
 	case key.Matches(msg, keys.Enter), key.Matches(msg, keys.Zoom):
+		if m.jumpToForeign() {
+			return m, nil
+		}
 		m.enterSplit()
 		return m, nil
+	case key.Matches(msg, keys.Esc):
+		if m.searchActive() {
+			m.clearSearch()
+		}
+	case key.Matches(msg, keys.Search):
+		m.enterSearch()
 	case key.Matches(msg, keys.Add):
 		return m.enterAddPopup()
 	case key.Matches(msg, keys.Zero):
@@ -792,8 +839,14 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Zoom):
 		m.view = columnView
 	case key.Matches(msg, keys.PanelNext), key.Matches(msg, keys.Enter), key.Matches(msg, keys.Right):
+		if m.jumpToForeign() {
+			m.refreshDetailEditors()
+			return m, nil
+		}
 		m.splitFocus = 1
 		m.refreshDetailEditors() // start on meta, nothing focused
+	case key.Matches(msg, keys.Search):
+		m.enterSearch()
 	case key.Matches(msg, keys.Up):
 		if m.cursors[m.focusedCol] > 0 {
 			m.cursors[m.focusedCol]--
@@ -801,7 +854,7 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case key.Matches(msg, keys.Down):
 		status := model.ColumnOrder[m.focusedCol]
-		count := len(m.board.ByStatus(status))
+		count := len(m.visibleTickets(status))
 		if m.cursors[m.focusedCol] < count-1 {
 			m.cursors[m.focusedCol]++
 			m.refreshDetailEditors()
@@ -1078,14 +1131,19 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case key.Matches(msg, keys.Down):
 		status := model.ColumnOrder[m.focusedCol]
-		count := len(m.board.ByStatus(status))
+		count := len(m.visibleTickets(status))
 		if m.cursors[m.focusedCol] < count-1 {
 			m.cursors[m.focusedCol]++
 		}
 	case key.Matches(msg, keys.Enter):
+		if m.jumpToForeign() {
+			return m, nil
+		}
 		if m.selectedTicket() != nil {
 			return m.enterDetail()
 		}
+	case key.Matches(msg, keys.Search):
+		m.enterSearch()
 	case key.Matches(msg, keys.Add):
 		return m.enterAddPopup()
 	case key.Matches(msg, keys.Zero):
@@ -1513,7 +1571,7 @@ func (m *Model) moveTicket(dir int) {
 	})
 	m.focusedCol = colIdx
 	m.reload()
-	newColTickets := m.board.ByStatus(newStatus)
+	newColTickets := m.visibleTickets(newStatus)
 	for i, nt := range newColTickets {
 		if nt.ID == ticketID {
 			m.cursors[colIdx] = i
@@ -1531,7 +1589,7 @@ func (m *Model) moveTicketInColumn(dir int) {
 	if t == nil {
 		return
 	}
-	colTickets := m.board.ByStatus(model.ColumnOrder[m.focusedCol])
+	colTickets := m.visibleTickets(model.ColumnOrder[m.focusedCol])
 	cursor := m.cursors[m.focusedCol]
 	newCursor := cursor + dir
 	if newCursor < 0 || newCursor >= len(colTickets) {
@@ -1937,7 +1995,7 @@ const (
 )
 
 func (m *Model) enterAddPopup() (tea.Model, tea.Cmd) {
-	if !m.guardMutate() {
+	if !m.guardBoardMutate() {
 		return m, nil
 	}
 	ti := newTitleInput("")
@@ -2122,15 +2180,29 @@ func (m *Model) submitAdd() {
 	assign := strings.TrimSpace(m.addAssign.Value())
 	status := model.ColumnOrder[m.focusedCol]
 
-	if _, err := m.store.Add(title, desc, status, tags, assign, "tui"); err != nil {
+	added, err := m.store.Add(title, desc, status, tags, assign, "tui")
+	if err != nil {
 		m.err = err
 		return
 	}
 	m.reload()
-	// Store.Add appends, so the new ticket is last within its status column.
-	m.cursors[m.focusedCol] = len(m.board.ByStatus(status)) - 1
-	m.clampCursors()
 	m.closeAddPopup()
+
+	// Follow the new card by identity rather than by "last in the column":
+	// under a filter those are different rows, and if the filter hides it
+	// there is no row to land on at all. Saved but invisible looks exactly
+	// like a failed save, so say so instead of moving the cursor somewhere
+	// arbitrary.
+	if added == nil {
+		m.clampCursors()
+		return
+	}
+	if m.searchActive() && !m.search.parsed.Match(*added) {
+		m.notice = fmt.Sprintf("%s saved — the search is hiding it", added.ShortID)
+		m.clampCursors()
+		return
+	}
+	m.focusTicket(added.ID)
 }
 
 func (m *Model) viewAdd() string {
@@ -2812,15 +2884,9 @@ func (m *Model) pickerUnarchive() (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) switchBoard(sprintName string) error {
-	var newStore *store.Store
-	if sprintName == "" {
-		newStore = store.New("")
-	} else {
-		s, err := store.NewSprint(sprintName)
-		if err != nil {
-			return err
-		}
-		newStore = s
+	newStore, err := boardStore(sprintName)
+	if err != nil {
+		return err
 	}
 
 	board, err := newStore.Load()
@@ -2835,6 +2901,11 @@ func (m *Model) switchBoard(sprintName string) error {
 	m.focusedCol = 1
 	m.cursors = [5]int{}
 	m.scrollStart = [5]int{}
+	// A filter belongs to the board it was typed on. Carrying it across would
+	// land you on a new board showing three of its cards with no visible
+	// reason. jumpToForeign is the deliberate exception and re-applies its own
+	// query after calling this.
+	m.clearSearch()
 	m.clampCursors()
 
 	if info, err := os.Stat(newStore.BoardPath()); err == nil {
@@ -3062,9 +3133,19 @@ func formatCounts(counts map[model.Status]int) string {
 func (m *Model) helpText() string {
 	switch m.view {
 	case boardView:
-		return fmt.Sprintf("h/l nav | j/k select | %s/%s move | %s move | %s add | %s archive | %s settings | %s quit",
-			hk("card.moveLeft"), hk("card.moveRight"), hk("card.move"), hk("card.add"),
-			hk("card.archive"), hk("board.settings"), "q")
+		// search and settings lead: they are the two the board cannot teach you
+		// any other way, and fitHints drops from the end. The rest are either
+		// guessable or already on a card in front of you.
+		hints := fmt.Sprintf("h/l nav | j/k select | %s search | %s settings | %s/%s move | %s move | %s add | %s archive | %s quit",
+			hk("board.search"), hk("board.settings"), hk("card.moveLeft"), hk("card.moveRight"),
+			hk("card.move"), hk("card.add"), hk("card.archive"), "q")
+		if m.searchActive() {
+			// Only the board view frees esc for this — elsewhere it still
+			// means "back", and shadowing that to clear a filter would be a
+			// worse trade than walking out to the board first.
+			return "esc clear | " + hints
+		}
+		return hints
 	case settingsView:
 		return "j/k select | h/l section | enter change | esc close"
 	case moveView:
@@ -3094,8 +3175,8 @@ func (m *Model) helpText() string {
 			hk("board.unarchive"), hk("card.copy"), hk("board.archiveView"))
 	case splitView:
 		if m.splitFocus == 0 {
-			return fmt.Sprintf("j/k select | %s edit | %s/%s move | %s move | %s archive | %s back | %s settings | q quit",
-				hk("board.panelNext"), hk("card.moveLeft"), hk("card.moveRight"), hk("card.move"),
+			return fmt.Sprintf("j/k select | %s edit | %s search | %s/%s move | %s move | %s archive | %s back | %s settings | q quit",
+				hk("board.panelNext"), hk("board.search"), hk("card.moveLeft"), hk("card.moveRight"), hk("card.move"),
 				hk("card.archive"), hk("board.unzoom"), hk("board.settings"))
 		}
 		if m.editDesc.Focused() {
@@ -3113,8 +3194,8 @@ func (m *Model) helpText() string {
 				hk("card.edit"), hk("card.moveLeft"), hk("card.moveRight"))
 		}
 	case columnView:
-		return fmt.Sprintf("j/k select | %s/%s move | %s move to | %s archive | enter detail | %s back | %s add | %s settings | q quit",
-			hk("card.moveLeft"), hk("card.moveRight"), hk("card.move"), hk("card.archive"),
+		return fmt.Sprintf("j/k select | %s search | %s/%s move | %s move to | %s archive | enter detail | %s back | %s add | %s settings | q quit",
+			hk("board.search"), hk("card.moveLeft"), hk("card.moveRight"), hk("card.move"), hk("card.archive"),
 			hk("board.unzoom"), hk("card.add"), hk("board.settings"))
 	case detailView:
 		if m.editDesc.Focused() {
@@ -3270,7 +3351,7 @@ func (m *Model) viewBoard() string {
 // renderColumn renders a single column panel. origin is the panel's top-left
 // cell on screen, used to register mouse zones.
 func (m *Model) renderColumn(colIdx int, status model.Status, width, height int, focused bool, origin point) string {
-	tickets := m.board.ByStatus(status)
+	tickets := m.visibleTickets(status)
 	title := fmt.Sprintf("[%d] %s (%d)", colIdx, statusDisplay[status], len(tickets))
 
 	color := softWhite
@@ -3304,10 +3385,18 @@ func (m *Model) renderColumn(colIdx int, status model.Status, width, height int,
 
 // renderTicketLine renders a single ticket in a column.
 func (m *Model) renderTicketLine(t model.Ticket, selected bool, width int, accentColor lipgloss.Color) string {
+	// The condensed layout has only the title line, so a borrowed card's board
+	// has to share it — the badge is what stops a foreign card reading as one
+	// of this board's own.
+	badge := ""
+	if owner, ok := m.ticketOwner(t.ID); ok {
+		badge = boardDisplayName(owner) + "/"
+	}
+
 	title := t.Title
-	maxTitle := width - 1
+	maxTitle := width - 1 - len(badge)
 	if selected {
-		maxTitle = width - 3
+		maxTitle = width - 3 - len(badge)
 	}
 	if t.AssignedTo != "" && selected {
 		maxTitle -= 2
@@ -3321,7 +3410,8 @@ func (m *Model) renderTicketLine(t model.Ticket, selected bool, width int, accen
 
 	if selected {
 		marker := lipgloss.NewStyle().Foreground(accentColor).Bold(true).Render(" * ")
-		titleRendered := lipgloss.NewStyle().Bold(true).Foreground(white).Render(title)
+		titleRendered := foreignBoardStyle.Render(badge) +
+			lipgloss.NewStyle().Bold(true).Foreground(white).Render(title)
 		line := marker + titleRendered
 		if t.AssignedTo != "" {
 			line += " " + assigneeStyle.Render("●")
@@ -3329,7 +3419,8 @@ func (m *Model) renderTicketLine(t model.Ticket, selected bool, width int, accen
 		return line
 	}
 
-	return lipgloss.NewStyle().Foreground(softWhite).PaddingLeft(1).Render(title)
+	return lipgloss.NewStyle().PaddingLeft(1).Render(
+		foreignBoardStyle.Render(badge) + lipgloss.NewStyle().Foreground(softWhite).Render(title))
 }
 
 // viewBoardRows renders the board as stacked full-width rows — one per status.
@@ -3387,7 +3478,7 @@ func (m *Model) viewBoardRows() string {
 // renderRow draws one status as a full-width panel with its tickets as a
 // vertical list (one ticket per line, same shape as renderColumn content).
 func (m *Model) renderRow(colIdx int, status model.Status, width, height int, focused bool, origin point) string {
-	tickets := m.board.ByStatus(status)
+	tickets := m.visibleTickets(status)
 	title := fmt.Sprintf("[%d] %s (%d)", colIdx, statusDisplay[status], len(tickets))
 
 	color := softWhite
@@ -3456,7 +3547,7 @@ func (m *Model) viewSplit() string {
 }
 
 func (m *Model) renderSplitList(status model.Status, width, height int, focused bool, borderColor lipgloss.Color, origin point) string {
-	tickets := m.board.ByStatus(status)
+	tickets := m.visibleTickets(status)
 	title := fmt.Sprintf("[%d] %s (%d)", m.focusedCol, statusDisplay[status], len(tickets))
 
 	innerWidth := width - 2
@@ -3567,7 +3658,7 @@ func (m *Model) renderDescBody(desc string, width, height int) string {
 // viewColumn renders the expanded single-column view.
 func (m *Model) viewColumn() string {
 	status := model.ColumnOrder[m.focusedCol]
-	tickets := m.board.ByStatus(status)
+	tickets := m.visibleTickets(status)
 	availHeight := m.height - 1
 	color := columnColor(status)
 

@@ -398,10 +398,14 @@ func (s *settingsState) validateMergedBindings(bindings map[string]string) error
 	return nil
 }
 
-func (m *Model) setSettingsSavedNotice(refused []string) {
+func (m *Model) setSettingsSavedNotice(refused, unbound []string) {
 	switch {
 	case len(refused) > 0:
 		m.notice = fmt.Sprintf("settings saved — %d binding(s) refused on load", len(refused))
+	case len(unbound) > 0:
+		// An action whose default key an override claimed has none left. Say
+		// so here: the alternative is finding out by pressing it.
+		m.notice = fmt.Sprintf("settings saved — %s left unbound", strings.Join(unbound, ", "))
 	case m.settings.undone > 0:
 		// Saying only "settings saved" here would let someone leave believing an
 		// edit took when it had just been rolled back.

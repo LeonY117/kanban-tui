@@ -73,10 +73,11 @@ var (
 )
 
 // ApplyConfig points the display labels and the keymap at the user's config,
-// and reports any key override that had to be refused. Call it before
+// and reports any key override that had to be refused, plus any action left
+// with no key because an override claimed its default. Call it before
 // NewModel. Separate from NewModel so tests set preferences explicitly rather
 // than inheriting whatever the machine running them has in config.json.
-func ApplyConfig(cfg store.Config) []string {
+func ApplyConfig(cfg store.Config) (refused, unbound []string) {
 	statusDisplay = maps.Clone(defaultStatusDisplay)
 	statusShort = maps.Clone(defaultStatusShort)
 	for status, label := range cfg.Labels() {
@@ -1789,7 +1790,10 @@ func (m *Model) copyFocused() {
 	case copyDescription:
 		value = t.Description
 	default:
-		value = t.ShortID
+		// Qualified for a borrowed card, exactly as every surface renders it.
+		// A bare DE1 does not resolve from the board you are standing on, and
+		// nothing in the clipboard would have said which board it came from.
+		value = m.boardBadge(t.ID) + t.ShortID
 	}
 	m.copyToClipboard(value, kind)
 }

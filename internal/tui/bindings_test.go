@@ -50,19 +50,21 @@ func TestSanitizeRefusesUnknownIdsAndBlanks(t *testing.T) {
 	}
 }
 
-// A hand-edited file can ask for a key another action already holds. The
-// override loses; the action keeps its own default, which is still free
-// precisely because it was reserved for it.
-func TestSanitizeDropsAnOverrideThatCollidesWithADefault(t *testing.T) {
+// A hand-edited file can ask for a key another action holds by default. The
+// override wins and the displaced action is left unbound: a key named in the
+// config is an explicit choice, and a default is not. The alternative order
+// lets any default this tool gains later take a key back off a config that
+// already claimed it (Leon, 2026-08-03).
+func TestAnOverrideBeatsAnotherActionsDefault(t *testing.T) {
 	resolved, refused := sanitizeBindings(map[string]string{"card.archive": "a"}) // "a" is card.add
-	if !slices.Contains(refused, "card.archive") {
-		t.Errorf("refused = %v, want card.archive", refused)
+	if slices.Contains(refused, "card.archive") {
+		t.Errorf("refused = %v, want the override honoured", refused)
 	}
-	if resolved["card.archive"] != "x" {
-		t.Errorf("card.archive = %q, want its default x", resolved["card.archive"])
+	if resolved["card.archive"] != "a" {
+		t.Errorf("card.archive = %q, want the key it asked for", resolved["card.archive"])
 	}
-	if resolved["card.add"] != "a" {
-		t.Errorf("card.add = %q, want to keep a", resolved["card.add"])
+	if got, bound := resolved["card.add"]; bound {
+		t.Errorf("card.add = %q, want it unbound rather than taking the key back", got)
 	}
 }
 
@@ -148,7 +150,7 @@ func TestApplyConfigRebindsTheLiveKeymap(t *testing.T) {
 
 func TestHelpTextUsesReboundKeysOnEveryView(t *testing.T) {
 	restoreBindings(t)
-	refused := ApplyConfig(store.Config{Keys: map[string]string{
+	refused, _ := ApplyConfig(store.Config{Keys: map[string]string{
 		"board.rename":      "n",
 		"board.pin":         "b",
 		"card.reorderUp":    "U",
@@ -231,5 +233,40 @@ func TestStatusChoicesMapARenamedLabelBackToItsStatus(t *testing.T) {
 	}
 	if _, err := model.ParseStatus("Shipped"); err == nil {
 		t.Error("ParseStatus(\"Shipped\") succeeded — this test no longer guards the round-trip")
+	}
+}
+
+func TestAnOverrideBeatsANewDefault(t *testing.T) {
+	// A default added in a later release must not take a key the config has
+	// already claimed. board.tags gaining `t` reverted an existing t binding
+	// and told the user about it at startup, which is a config silently
+	// changing meaning on upgrade.
+	resolved, refused := sanitizeBindings(map[string]string{"board.picker": "t"})
+
+	if got := resolved["board.picker"]; got != "t" {
+		t.Errorf("board.picker = %q, want the override honoured", got)
+	}
+	if got, bound := resolved["board.tags"]; bound {
+		t.Errorf("board.tags = %q, want it left unbound rather than displacing the override", got)
+	}
+	for _, r := range refused {
+		if r == "board.picker" {
+			t.Error("the override was refused")
+		}
+	}
+}
+
+func TestUnboundActionDoesNotKeepItsDefaultKey(t *testing.T) {
+	// The keymap is rebuilt from the defaults, so an action left unbound has
+	// to be actively cleared — otherwise it keeps the very key the override
+	// was just given, and both fire.
+	t.Cleanup(func() { applyKeyBindings(nil) })
+	applyKeyBindings(map[string]string{"board.picker": "t"})
+
+	if keys.TagPicker.Enabled() && len(keys.TagPicker.Keys()) > 0 {
+		t.Errorf("board.tags still bound to %v after its default was taken", keys.TagPicker.Keys())
+	}
+	if got := keys.BoardPicker.Keys(); len(got) != 1 || got[0] != "t" {
+		t.Errorf("board.picker = %v, want t", got)
 	}
 }

@@ -1079,3 +1079,29 @@ func TestEnterFollowsABorrowedCardHomeFromTheDetailPane(t *testing.T) {
 		t.Errorf("board = %q, want the card's own board — the notice told the user to press this key", m.sprintName)
 	}
 }
+
+func TestCopyingABorrowedIDNamesItsBoard(t *testing.T) {
+	// A bare DE1 does not resolve from the board you are standing on, and the
+	// clipboard said nothing about where it came from.
+	m, _ := boardWith(t, "auth local|TODO")
+	withSprint(t, "demo", "auth remote|TODO")
+
+	typeSearch(m, "auth")
+	searchKeys(m, "ctrl+g", "enter")
+	m.cursors[1] = 1
+	sel := m.selectedTicket()
+	if sel == nil || sel.Title != "auth remote" {
+		t.Fatalf("setup: selected %v, want the borrowed card", sel)
+	}
+
+	if got := m.boardBadge(sel.ID) + sel.ShortID; got != "demo/"+sel.ShortID {
+		t.Errorf("copied %q, want it qualified by the board it lives on", got)
+	}
+	// A local card keeps the bare id — the qualification exists to disambiguate,
+	// not to decorate.
+	m.cursors[1] = 0
+	local := m.selectedTicket()
+	if got := m.boardBadge(local.ID) + local.ShortID; got != local.ShortID {
+		t.Errorf("copied %q for a local card, want the bare id", got)
+	}
+}

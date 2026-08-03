@@ -165,16 +165,20 @@ func assignBindings(valid map[string]string) (map[string]string, string) {
 		taken[k] = "(reserved)"
 	}
 
-	// Actions with no surviving override take their default first. Defaults are
-	// distinct, so this pass can't fail, and it reserves each such default
-	// against the overrides handed out below.
+	// The locked navigation floor is not negotiable, so it is reserved with the
+	// reserved keys rather than competing for anything.
 	for _, a := range bindActions {
-		if _, overridden := valid[a.id]; overridden && !a.locked {
-			continue
+		if a.locked {
+			resolved[a.id] = a.def
+			taken[a.def] = a.id
 		}
-		resolved[a.id] = a.def
-		taken[a.def] = a.id
 	}
+
+	// Overrides are handed out before defaults. A key you chose explicitly
+	// beats a default you never asked for — under the other order, every
+	// default this tool gains later can take a key back off a config that had
+	// already claimed it, which is how adding `t` for the tag list silently
+	// reverted an existing `t` binding to something else.
 	for _, a := range bindActions {
 		want, overridden := valid[a.id]
 		if !overridden || a.locked {
@@ -186,12 +190,29 @@ func assignBindings(valid map[string]string) (map[string]string, string) {
 		resolved[a.id] = want
 		taken[want] = a.id
 	}
+
+	// Defaults then fill the gaps. An action whose default an override has
+	// already taken is left unbound: the config asked for that key by name,
+	// and the alternative is displacing it right back.
+	for _, a := range bindActions {
+		if _, done := resolved[a.id]; done {
+			continue
+		}
+		if _, clash := taken[a.def]; clash {
+			continue
+		}
+		resolved[a.id] = a.def
+		taken[a.def] = a.id
+	}
 	return resolved, ""
 }
 
 // applyKeyBindings rebuilds the live keymap from defaults plus the sanitised
-// overrides, and reports the ids whose override was refused.
-func applyKeyBindings(overrides map[string]string) []string {
+// overrides. It reports the ids whose override was refused, and separately the
+// ids left with no key at all because an override claimed their default —
+// those actions are gone from the TUI until the config gives them one, which
+// is not something to discover by pressing the key and getting nothing.
+func applyKeyBindings(overrides map[string]string) (refused, unbound []string) {
 	resolved, refused := sanitizeBindings(overrides)
 
 	keys = defaultKeyMap()
@@ -202,15 +223,31 @@ func applyKeyBindings(overrides map[string]string) []string {
 		if a.locked {
 			continue
 		}
-		k := resolved[a.id]
-		if k == "" || k == a.def {
+		t, ok := targets[a.id]
+		if !ok {
 			continue
 		}
-		if t, ok := targets[a.id]; ok {
-			*t = key.NewBinding(key.WithKeys(k), key.WithHelp(k, a.label))
+		// Absent from resolved means an override took this action's default
+		// key, so it has none. It has to be actively unbound: the keymap
+		// starts from the defaults, so leaving it alone would hand it back the
+		// very key the override was given.
+		k, bound := resolved[a.id]
+		if !bound || k == "" {
+			*t = key.NewBinding(key.WithKeys(), key.WithHelp("", a.label))
+			continue
+		}
+		if k == a.def {
+			continue
+		}
+		*t = key.NewBinding(key.WithKeys(k), key.WithHelp(k, a.label))
+	}
+	for _, a := range bindActions {
+		if _, bound := resolved[a.id]; !bound {
+			unbound = append(unbound, a.id)
 		}
 	}
-	return refused
+	sort.Strings(unbound)
+	return refused, unbound
 }
 
 // hk is the key an action currently answers to, for help lines.

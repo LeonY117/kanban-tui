@@ -29,12 +29,6 @@ type tagPickerState struct {
 	rows  []tagRow
 	idx   int
 	start int // first row rendered; the window slides to keep idx visible
-
-	// Opened from the board picker, which is the only way in. esc goes back
-	// there rather than to the board, and the picker's own return view is left
-	// alone — popupReturnView holds one value, so overwriting it here would
-	// strand the picker with nowhere to close to.
-	fromPicker bool
 }
 
 // tagPickerMaxRows caps the popup so a board with forty tags doesn't produce a
@@ -55,8 +49,10 @@ func (m *Model) enterTagPicker() (tea.Model, tea.Cmd) {
 		}
 	}
 
-	m.tags.fromPicker = m.view == pickerView
-	if !m.tags.fromPicker {
+	// A tag picker nested over the board picker must keep the board picker's
+	// return view. popupReturnView holds one value, so overwriting it here would
+	// leave no board to restore when the tag picker exits.
+	if m.view != pickerView {
 		m.popupReturnView = m.view
 	}
 	m.view = tagView
@@ -147,7 +143,6 @@ func (m *Model) tagPickerActivate() (tea.Model, tea.Cmd) {
 // not. The point of the list is the board it filters, so every exit goes there
 // rather than back through the board picker it was opened from.
 func (m *Model) closeTagPicker() {
-	m.tags.fromPicker = false
 	m.restorePopupView(tagView)
 }
 

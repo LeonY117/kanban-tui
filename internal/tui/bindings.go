@@ -220,6 +220,10 @@ func applyKeyBindings(overrides map[string]string) (refused, unbound []string) {
 	targets := bindingTargets(&keys)
 
 	for _, a := range bindActions {
+		k, bound := resolved[a.id]
+		if !bound {
+			unbound = append(unbound, a.id)
+		}
 		if a.locked {
 			continue
 		}
@@ -231,8 +235,7 @@ func applyKeyBindings(overrides map[string]string) (refused, unbound []string) {
 		// key, so it has none. It has to be actively unbound: the keymap
 		// starts from the defaults, so leaving it alone would hand it back the
 		// very key the override was given.
-		k, bound := resolved[a.id]
-		if !bound || k == "" {
+		if !bound {
 			*t = key.NewBinding(key.WithKeys(), key.WithHelp("", a.label))
 			continue
 		}
@@ -240,11 +243,6 @@ func applyKeyBindings(overrides map[string]string) (refused, unbound []string) {
 			continue
 		}
 		*t = key.NewBinding(key.WithKeys(k), key.WithHelp(k, a.label))
-	}
-	for _, a := range bindActions {
-		if _, bound := resolved[a.id]; !bound {
-			unbound = append(unbound, a.id)
-		}
 	}
 	sort.Strings(unbound)
 	return refused, unbound

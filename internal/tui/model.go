@@ -423,20 +423,21 @@ func (m *Model) footerLine() string {
 		rightText = fitHints(m.helpText(), budget)
 	}
 	help := helpStyle.Render(rightText)
-	return clampLine(lipgloss.JoinHorizontal(lipgloss.Center, badge, help), m.width)
+	return m.renderFooter(badge, help)
 }
 
-// clampLine is the floor under the footer: whatever the pieces above negotiate,
-// the line never leaves the terminal.
+// renderFooter joins the footer pieces and ensures the line never leaves the
+// terminal, whatever space the pieces negotiated among themselves.
 //
 // It matters more than a trimmed hint would suggest. lipgloss pads every board
 // row out to the widest line in the frame, so a footer one cell too wide does
 // not wrap on its own — it widens the entire board and wraps all of it.
-func clampLine(line string, width int) string {
-	if width < 1 || lipgloss.Width(line) <= width {
+func (m *Model) renderFooter(parts ...string) string {
+	line := lipgloss.JoinHorizontal(lipgloss.Center, parts...)
+	if m.width < 1 || lipgloss.Width(line) <= m.width {
 		return line
 	}
-	return ansi.Truncate(line, width, "…")
+	return ansi.Truncate(line, m.width, "…")
 }
 
 // fitHints drops whole hints off the end of a help line until it fits, keeping

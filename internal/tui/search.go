@@ -471,7 +471,7 @@ func (m *Model) searchFooter(badge string) string {
 	if strip := m.completionStrip(budget - lipgloss.Width(floor) - 2); strip != "" {
 		right = strip + "  " + fitHints(hints, budget-lipgloss.Width(strip)-2)
 	}
-	return clampLine(lipgloss.JoinHorizontal(lipgloss.Center, badge, input, helpStyle.Render(right)), m.width)
+	return m.renderFooter(badge, input, helpStyle.Render(right))
 }
 
 // completionStrip lists the tag completions that fit, marking the one tab

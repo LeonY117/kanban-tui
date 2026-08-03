@@ -2260,10 +2260,9 @@ func (m *Model) submitAdd() {
 	// like a failed save, so say so instead of moving the cursor somewhere
 	// arbitrary.
 	hidden := added != nil && m.searchActive() && !m.search.parsed.Match(*added)
-	switch {
-	case added == nil, hidden:
+	if added == nil || hidden {
 		m.clampCursors()
-	default:
+	} else {
 		m.focusTicket(added.ID)
 	}
 	m.closeAddPopup()
@@ -3936,7 +3935,7 @@ func (m *Model) renderCompactMeta(t *model.Ticket, maxWidth int, navigable bool)
 		}
 		parts = append(parts, rendered)
 	}
-	parts = append(parts, foreignBoardStyle.Render(m.boardBadge(t.ID))+dim.Render(t.ShortID))
+	parts = append(parts, m.renderTicketID(*t, dim))
 
 	return strings.Join(parts, "  ")
 }
@@ -3988,7 +3987,7 @@ func (m *Model) renderMetaBar(t *model.Ticket) string {
 		parts = append(parts, rendered)
 	}
 
-	parts = append(parts, foreignBoardStyle.Render(m.boardBadge(t.ID))+lipgloss.NewStyle().Foreground(midGray).Render(t.ShortID))
+	parts = append(parts, m.renderTicketID(*t, dim))
 	parts = append(parts, lipgloss.NewStyle().Foreground(midGray).Render(t.CreatedAt.Format("2006-01-02 15:04")))
 
 	return strings.Join(parts, "  ")

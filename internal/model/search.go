@@ -45,31 +45,31 @@ type Token struct {
 // caller tells a trailing space that is part of a term from one that ended it.
 func Tokenize(raw string) (tokens []Token, openQuote bool) {
 	var cur strings.Builder
-	start, started := -1, false
+	start := -1
 
 	flush := func() {
-		if !started {
+		if start < 0 {
 			return
 		}
 		text := cur.String()
 		tagged := strings.HasPrefix(text, "#")
 		tokens = append(tokens, Token{Start: start, Text: strings.TrimPrefix(text, "#"), Tagged: tagged})
 		cur.Reset()
-		start, started = -1, false
+		start = -1
 	}
 
 	for i, r := range raw {
 		switch {
 		case r == '"':
 			openQuote = !openQuote
-			if !started {
-				start, started = i, true
+			if start < 0 {
+				start = i
 			}
 		case unicode.IsSpace(r) && !openQuote:
 			flush()
 		default:
-			if !started {
-				start, started = i, true
+			if start < 0 {
+				start = i
 			}
 			cur.WriteRune(r)
 		}

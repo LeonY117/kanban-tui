@@ -317,13 +317,9 @@ func (m *Model) cardMetaLine(t model.Ticket, width int, withDate, selected bool,
 	if selected {
 		idStyle = lipgloss.NewStyle().Foreground(accent).Bold(true)
 	}
-	id := t.ShortID
-	badge := ""
-	if owner, ok := m.ticketOwner(t.ID); ok {
-		badge = boardDisplayName(owner) + "/"
-	}
-	parts := []string{foreignBoardStyle.Render(badge) + idStyle.Render(id)}
-	used := lipgloss.Width(badge) + lipgloss.Width(id)
+	renderedID := m.renderTicketID(t, idStyle)
+	parts := []string{renderedID}
+	used := lipgloss.Width(renderedID)
 
 	add := func(text, styled string) {
 		if used+2+lipgloss.Width(text) <= width {

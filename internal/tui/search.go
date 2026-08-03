@@ -48,7 +48,6 @@ func newSearchState() searchState {
 	return searchState{input: ti}
 }
 
-// searchActive reports whether anything is narrowing or widening the board.
 func (m *Model) searchActive() bool {
 	return !m.search.parsed.Empty() || m.search.global
 }
@@ -101,6 +100,10 @@ func (m *Model) boardBadge(id string) string {
 		return boardDisplayName(owner) + "/"
 	}
 	return ""
+}
+
+func (m *Model) renderTicketID(t model.Ticket, style lipgloss.Style) string {
+	return foreignBoardStyle.Render(m.boardBadge(t.ID)) + style.Render(t.ShortID)
 }
 
 // searchPool is every card the current scope can return, across all columns.
@@ -170,8 +173,7 @@ func (m *Model) cancelSearch() {
 	if m.search.prevTicket != "" {
 		m.focusTicket(m.search.prevTicket)
 	}
-	m.clampCursors()
-	m.refreshDetailIfOpen()
+	m.refreshSearchSelection()
 }
 
 // clearSearch drops the filter and the scope together. Scope is part of the
@@ -185,8 +187,7 @@ func (m *Model) clearSearch() {
 	m.search.tagIdx = 0
 	m.search.global = false
 	m.loadForeign()
-	m.clampCursors()
-	m.refreshDetailIfOpen()
+	m.refreshSearchSelection()
 }
 
 // refreshDetailIfOpen re-seeds the detail editors from whatever the cursor is
@@ -202,18 +203,21 @@ func (m *Model) refreshDetailIfOpen() {
 	}
 }
 
+func (m *Model) refreshSearchSelection() {
+	m.clampCursors()
+	m.refreshDetailIfOpen()
+}
+
 func (m *Model) setQuery(q string) {
 	m.search.query = q
 	m.search.parsed = model.ParseQuery(q)
 }
 
-// toggleSearchScope flips between this board and every board.
 func (m *Model) toggleSearchScope() {
 	m.search.global = !m.search.global
 	m.loadForeign()
 	m.search.tagIdx = 0
-	m.clampCursors()
-	m.refreshDetailIfOpen()
+	m.refreshSearchSelection()
 }
 
 // scopeToggleLabel names where ctrl+g would take the search, not where it is —
@@ -298,8 +302,6 @@ func (m *Model) jumpToForeign() bool {
 	return true
 }
 
-// focusTicket puts the cursor on a card by id, if the filter leaves it on
-// screen at all.
 func (m *Model) focusTicket(id string) {
 	for col, status := range model.ColumnOrder {
 		for i, t := range m.visibleTickets(status) {
@@ -357,7 +359,6 @@ func (m *Model) tagCandidates() []model.TagCount {
 	return model.TagCandidates(context.MatchAll(m.searchPool()), prefix)
 }
 
-// acceptTagCompletion writes the highlighted candidate into the query.
 func (m *Model) acceptTagCompletion() bool {
 	_, before, ok := m.pendingTag()
 	if !ok {
@@ -385,7 +386,6 @@ func (m *Model) moveTagCursor(dir int) {
 
 // ─── Keys ────────────────────────────────────────────────────────────
 
-// updateSearch owns the keyboard while the input is open.
 func (m *Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEsc:
@@ -422,8 +422,7 @@ func (m *Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) syncQuery() {
 	m.setQuery(m.search.input.Value())
 	m.search.tagIdx = 0
-	m.clampCursors()
-	m.refreshDetailIfOpen()
+	m.refreshSearchSelection()
 }
 
 // ─── Footer ──────────────────────────────────────────────────────────
@@ -432,14 +431,7 @@ func (m *Model) syncQuery() {
 // terminal, bounded: too narrow and a two-term query scrolls out of sight,
 // too wide and the match count it exists to explain gets pushed off the end.
 func searchInputWidth(total int) int {
-	w := total / 3
-	if w < 12 {
-		w = 12
-	}
-	if w > 40 {
-		w = 40
-	}
-	return w
+	return min(max(total/3, 12), 40)
 }
 
 // searchFooter replaces the hint line while the input is open: the query, then
@@ -451,13 +443,14 @@ func (m *Model) searchFooter(badge string) string {
 
 	budget := m.width - lipgloss.Width(badge) - lipgloss.Width(input) - 2
 	shown, total := m.searchCounts()
-	hints := fmt.Sprintf("%d/%d | ^g %s | tab tag | esc cancel", shown, total, m.scopeToggleLabel())
+	count := fmt.Sprintf("%d/%d", shown, total)
+	hints := fmt.Sprintf("%s | ^g %s | tab tag | esc cancel", count, m.scopeToggleLabel())
 
 	// Completions get whatever is left once the count and the way out are
 	// safe — those two are the line's floor, and fitHints protects the last
 	// hint by construction. Giving the strip a fixed share instead silently
 	// dropped candidates while hint text it outranks sat next to it.
-	floor := fmt.Sprintf("%d/%d | esc cancel", shown, total)
+	floor := count + " | esc cancel"
 	right := fitHints(hints, budget)
 	if strip := m.completionStrip(budget - lipgloss.Width(floor) - 2); strip != "" {
 		right = strip + "  " + fitHints(hints, budget-lipgloss.Width(strip)-2)

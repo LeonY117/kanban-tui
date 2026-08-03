@@ -377,6 +377,15 @@ func (m *Model) guardBoardMutate() bool {
 
 func (m *Model) footerLine() string {
 	badge := sprintBadgeStyle.Render(boardDisplayName(m.sprintName))
+	// The active filter rides next to the board's name, in green, because it
+	// changes what the board in front of you means. It sits inside the badge
+	// rather than in the hint text so it is never the thing that gets trimmed
+	// away — a narrowed board that looks like an empty one is the failure
+	// worth spending a permanent slot on.
+	if label := m.filterBadge(); label != "" {
+		badge = lipgloss.JoinHorizontal(lipgloss.Top, badge,
+			lipgloss.NewStyle().Foreground(green).Bold(true).Render(label))
+	}
 	// A hint at what ids new tickets here will carry — not part of the
 	// board's name, so it appears here and nowhere else.
 	badge = lipgloss.JoinHorizontal(lipgloss.Top, badge,
@@ -403,7 +412,7 @@ func (m *Model) footerLine() string {
 		// hint: fitHints protects only the last hint, so a long enough query
 		// could push out the very thing that explains why the board looks
 		// half empty.
-		chip := m.searchChip()
+		chip := m.searchCountLabel()
 		rightText = chip + " | " + fitHints(m.helpText(), budget-lipgloss.Width(chip)-3)
 	default:
 		rightText = fitHints(m.helpText(), budget)
@@ -3223,6 +3232,12 @@ func (m *Model) helpText() string {
 	case settingsView:
 		return "j/k select | h/l section | enter change | esc close"
 	case tagView:
+		// Name where esc lands rather than saying "close": it steps back to
+		// the board list, and a hint that reads as "leave entirely" makes a
+		// second reflexive press look like the first one overshot.
+		if m.tags.fromPicker {
+			return fmt.Sprintf("j/k select | enter filter by tag | esc boards | %s close", hk("board.picker"))
+		}
 		return "j/k select | enter filter by tag | esc close"
 	case moveView:
 		switch m.moveStage {

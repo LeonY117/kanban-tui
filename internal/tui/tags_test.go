@@ -24,18 +24,18 @@ func TestTagPickerListsEveryTagWithItsCount(t *testing.T) {
 		t.Fatalf("view = %v, want the tag popup", m.view)
 	}
 	got := map[string]int{}
-	for _, c := range m.tags.tags {
-		got[c.Tag] = c.Count
+	for _, r := range tagRowsOnly(m) {
+		got[r.label] = totalOf(r)
 	}
 	// A done card's tag is still a tag — the bug PR #5 shipped was building
 	// this list from open cards only.
-	want := map[string]int{"cli": 2, "ui": 1, "release": 1}
+	want := map[string]int{"#cli": 2, "#ui": 1, "#release": 1}
 	if len(got) != len(want) {
 		t.Fatalf("tags = %v, want %v", got, want)
 	}
 	for tag, n := range want {
 		if got[tag] != n {
-			t.Errorf("#%s = %d, want %d", tag, got[tag], n)
+			t.Errorf("%s = %d, want %d", tag, got[tag], n)
 		}
 	}
 }
@@ -45,18 +45,12 @@ func TestTagPickerCountIsWhatSelectingItShows(t *testing.T) {
 
 	openTags(m)
 	offered := 0
-	for _, c := range m.tags.tags {
-		if c.Tag == "cli" {
-			offered = c.Count
+	for _, r := range m.tags.rows {
+		if r.label == "#cli" {
+			offered = totalOf(r)
 		}
 	}
-
-	m.tags.idx = 0
-	for i, c := range m.tags.tags {
-		if c.Tag == "cli" {
-			m.tags.idx = i
-		}
-	}
+	selectTagRow(t, m, "#cli")
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
 	shown, _ := m.searchCounts()
@@ -72,11 +66,7 @@ func TestTagPickerAppliesTheSameFilterAsTyping(t *testing.T) {
 	m, _ := boardWith(t, "a|TODO|cli", "b|TODO|ui")
 
 	openTags(m)
-	for i, c := range m.tags.tags {
-		if c.Tag == "cli" {
-			m.tags.idx = i
-		}
-	}
+	selectTagRow(t, m, "#cli")
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
 	if m.view != boardView {
@@ -99,11 +89,7 @@ func TestTagPickerQuotesAMultiWordTag(t *testing.T) {
 	m, _ := boardWith(t, "a|TODO|needs review", "b|TODO|cli")
 
 	openTags(m)
-	for i, c := range m.tags.tags {
-		if c.Tag == "needs review" {
-			m.tags.idx = i
-		}
-	}
+	selectTagRow(t, m, `#"needs review"`)
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
 	if m.search.query != `#"needs review"` {
@@ -140,7 +126,7 @@ func TestTagPickerOpensOnTheActiveTag(t *testing.T) {
 	searchKeys(m, "enter")
 	openTags(m)
 
-	if got := m.tags.tags[m.tags.idx].Tag; got != "ui" {
+	if got := m.tags.rows[m.tags.idx].label; got != "#ui" {
 		t.Errorf("cursor on %q, want the tag already filtering the board", got)
 	}
 }
@@ -182,11 +168,12 @@ func TestTagPickerEmptyBoardSaysSo(t *testing.T) {
 	m, _ := boardWith(t, "a|TODO", "b|TODO")
 	openTags(m)
 
-	if len(m.tags.tags) != 0 {
-		t.Fatalf("tags = %v, want none", m.tags.tags)
+	if got := tagRowsOnly(m); len(got) != 0 {
+		t.Fatalf("tags = %v, want none", got)
 	}
-	if view := m.View(); !strings.Contains(view, "no tags") {
-		t.Error("the empty picker gives no explanation")
+	// The bookends still stand: everything, and the everything that is untagged.
+	if view := m.View(); !strings.Contains(view, "all tickets") || !strings.Contains(view, "no tags") {
+		t.Error("the empty picker lost its bookends")
 	}
 }
 
@@ -198,22 +185,22 @@ func TestTagPickerScrollsPastTheWindow(t *testing.T) {
 	m, _ := boardWith(t, specs...)
 	openTags(m)
 
-	if len(m.tags.tags) != 14 {
-		t.Fatalf("tags = %d, want 14", len(m.tags.tags))
+	if got := len(tagRowsOnly(m)); got != 14 {
+		t.Fatalf("tags = %d, want 14", got)
 	}
-	// Walk to the last tag; the window has to follow.
-	for i := 0; i < 13; i++ {
+	// Walk to the last row; the window has to follow.
+	for i := 0; i < len(m.tags.rows); i++ {
 		m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	}
-	if m.tags.idx != 13 {
-		t.Fatalf("cursor at %d, want the last tag", m.tags.idx)
+	if want := len(m.tags.rows) - 1; m.tags.idx != want {
+		t.Fatalf("cursor at %d, want the last row %d", m.tags.idx, want)
 	}
 	start, rows := m.tagPickerWindow()
 	if m.tags.idx < start || m.tags.idx >= start+rows {
 		t.Errorf("cursor %d outside the window [%d,%d)", m.tags.idx, start, start+rows)
 	}
-	if view := m.View(); !strings.Contains(view, "card n") && !strings.Contains(view, "#n") {
-		t.Error("the last tag is not on screen after scrolling to it")
+	if view := m.View(); !strings.Contains(view, "no tags") {
+		t.Error("the last row is not on screen after scrolling to it")
 	}
 }
 
@@ -247,22 +234,18 @@ func TestTagRowsCarryPerColumnCounts(t *testing.T) {
 	m, _ := boardWith(t, "a|TODO|cli", "b|DOING|cli", "c|DONE|cli")
 
 	openTags(m)
-	if len(m.tags.tags) != 1 {
-		t.Fatalf("tags = %v, want just cli", m.tags.tags)
+	rows := tagRowsOnly(m)
+	if len(rows) != 1 {
+		t.Fatalf("tags = %v, want just cli", rows)
 	}
-	got := m.tags.tags[0]
-
-	sum := 0
-	for _, n := range got.Counts {
-		sum += n
-	}
-	if sum != got.Count {
-		t.Errorf("per-column counts sum to %d, total says %d", sum, got.Count)
-	}
+	got := rows[0]
 	for _, s := range []model.Status{model.StatusTodo, model.StatusDoing, model.StatusDone} {
-		if got.Counts[s] != 1 {
-			t.Errorf("%s = %d, want 1", s, got.Counts[s])
+		if got.counts[s] != 1 {
+			t.Errorf("%s = %d, want 1", s, got.counts[s])
 		}
+	}
+	if totalOf(got) != 3 {
+		t.Errorf("counts sum to %d, want 3", totalOf(got))
 	}
 }
 
@@ -274,5 +257,132 @@ func TestTagNamesAreNotTruncatedByTheCountsBlock(t *testing.T) {
 	openTags(m)
 	if view := m.View(); !strings.Contains(view, "#n") {
 		t.Error("the tag name was truncated away by the counts block")
+	}
+}
+
+// tagRowsOnly drops the two bookends, leaving the real tags.
+func tagRowsOnly(m *Model) []tagRow {
+	var out []tagRow
+	for _, r := range m.tags.rows {
+		if r.query != "" && r.query != model.Untagged {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func totalOf(r tagRow) int {
+	n := 0
+	for _, c := range r.counts {
+		n += c
+	}
+	return n
+}
+
+func selectTagRow(t *testing.T, m *Model, label string) {
+	t.Helper()
+	for i, r := range m.tags.rows {
+		if r.label == label {
+			m.tags.idx = i
+			return
+		}
+	}
+	t.Fatalf("no row labelled %q in %v", label, m.tags.rows)
+}
+
+func TestTagListIsBookendedByAllAndNone(t *testing.T) {
+	m, _ := boardWith(t, "a|TODO|cli", "b|DOING|cli", "c|TODO", "d|DONE")
+
+	openTags(m)
+
+	first, last := m.tags.rows[0], m.tags.rows[len(m.tags.rows)-1]
+	if first.label != "all tickets" || first.query != "" {
+		t.Errorf("first row = %+v, want all tickets clearing the filter", first)
+	}
+	if last.label != "no tags" || last.query != model.Untagged {
+		t.Errorf("last row = %+v, want no tags selecting the untagged", last)
+	}
+	if got := totalOf(first); got != 4 {
+		t.Errorf("all tickets counts %d, want every card", got)
+	}
+	if got := totalOf(last); got != 2 {
+		t.Errorf("no tags counts %d, want the two untagged cards", got)
+	}
+}
+
+func TestPickingNoTagsFiltersToUntagged(t *testing.T) {
+	m, _ := boardWith(t, "tagged one|TODO|cli", "bare one|TODO", "bare two|TODO")
+
+	openTags(m)
+	selectTagRow(t, m, "no tags")
+	offered := totalOf(m.tags.rows[m.tags.idx])
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	got := titlesOf(m.visibleTickets(model.StatusTodo))
+	if len(got) != 2 || got[0] != "bare one" || got[1] != "bare two" {
+		t.Errorf("Todo = %v, want only the untagged cards", got)
+	}
+	shown, _ := m.searchCounts()
+	if shown != offered {
+		t.Errorf("the row offered %d cards, selecting it showed %d", offered, shown)
+	}
+}
+
+func TestPickingAllTicketsClearsTheFilter(t *testing.T) {
+	m, _ := boardWith(t, "a|TODO|cli", "b|TODO")
+
+	openTags(m)
+	selectTagRow(t, m, "#cli")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.searchActive() {
+		t.Fatal("setup: expected a filter")
+	}
+
+	openTags(m)
+	selectTagRow(t, m, "all tickets")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.searchActive() {
+		t.Error("all tickets left a filter standing")
+	}
+	if got := titlesOf(m.visibleTickets(model.StatusTodo)); len(got) != 2 {
+		t.Errorf("Todo = %v, want the whole column back", got)
+	}
+}
+
+func TestFilterRidesInTheFooterBadge(t *testing.T) {
+	m, _ := boardWith(t, "a|TODO|cli", "b|TODO")
+
+	openTags(m)
+	selectTagRow(t, m, "#cli")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if got := m.filterBadge(); !strings.Contains(got, "#cli") {
+		t.Errorf("badge = %q, want the tag beside the board name", got)
+	}
+	// The badge sits between the board name and the id prefix, and survives
+	// however narrow the terminal gets — it is never fed to fitHints.
+	m.width = 52
+	footer := m.footerLine()
+	if !strings.Contains(footer, "#cli") {
+		t.Errorf("footer at 52 cols lost the filter: %q", footer)
+	}
+	name := strings.Index(footer, "main")
+	tag := strings.Index(footer, "#cli")
+	prefix := strings.LastIndex(footer, "[")
+	if !(name < tag && tag < prefix) {
+		t.Errorf("footer order wrong (name %d, filter %d, prefix %d): %q", name, tag, prefix, footer)
+	}
+}
+
+func TestNoTagsReadsAsWordsInTheBadge(t *testing.T) {
+	m, _ := boardWith(t, "a|TODO|cli", "b|TODO")
+
+	openTags(m)
+	selectTagRow(t, m, "no tags")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if got := m.filterBadge(); !strings.Contains(got, "no tags") {
+		t.Errorf("badge = %q, want it to read as words rather than -#", got)
 	}
 }

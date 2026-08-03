@@ -222,3 +222,47 @@ func TestTagsHoldingAQuoteAreNotOffered(t *testing.T) {
 		}
 	}
 }
+
+func TestNegationExcludes(t *testing.T) {
+	tagged := ticket("a", "", "1", "", "cli")
+	bare := ticket("auth work", "", "2", "")
+
+	if ParseQuery("-#cli").Match(tagged) {
+		t.Error("-#cli matched a card tagged cli")
+	}
+	if !ParseQuery("-#cli").Match(bare) {
+		t.Error("-#cli excluded a card that isn't tagged cli")
+	}
+	if ParseQuery("-auth").Match(bare) {
+		t.Error("-auth matched a card whose title contains auth")
+	}
+}
+
+func TestUntaggedQuery(t *testing.T) {
+	// Absence has no substring, so this is the only way to ask for it.
+	tagged := ticket("a", "", "1", "", "cli")
+	bare := ticket("b", "", "2", "")
+
+	q := ParseQuery(Untagged)
+	if q.Empty() {
+		t.Fatal("-# parsed to nothing; it has to be a real term")
+	}
+	if q.Match(tagged) {
+		t.Error("-# matched a tagged card")
+	}
+	if !q.Match(bare) {
+		t.Error("-# did not match an untagged card")
+	}
+	// And its unnegated twin is still the completion prefix, filtering nothing.
+	if !ParseQuery("#").Empty() {
+		t.Error("a lone # became a term")
+	}
+}
+
+func TestQuotedTermKeepsALeadingDash(t *testing.T) {
+	// Quoting makes the dash literal, so a card can still be found by text
+	// that starts with one.
+	if !ParseQuery(`"-draft"`).Match(ticket("-draft spec", "", "1", "")) {
+		t.Error("a quoted leading dash was read as negation")
+	}
+}

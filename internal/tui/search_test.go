@@ -112,9 +112,13 @@ func TestFilterOutlivesTheInput(t *testing.T) {
 	if got := titlesOf(m.visibleTickets(model.StatusTodo)); len(got) != 1 {
 		t.Errorf("Todo = %v, want the filter still applied", got)
 	}
-	// And the footer says why the board looks half empty.
-	if chip := m.searchChip(); !strings.Contains(chip, "auth") || !strings.Contains(chip, "1 of 2") {
-		t.Errorf("chip = %q, want the query and the count", chip)
+	// And the footer says why the board looks half empty: the query rides in
+	// the badge beside the board name, the count on the right.
+	if badge := m.filterBadge(); !strings.Contains(badge, "auth") {
+		t.Errorf("badge = %q, want the query beside the board name", badge)
+	}
+	if got := m.searchCountLabel(); got != "1 of 2" {
+		t.Errorf("count = %q, want 1 of 2", got)
 	}
 }
 

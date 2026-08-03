@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // ─── State ───────────────────────────────────────────────────────────
@@ -503,17 +504,43 @@ func (m *Model) completionStrip(budget int) string {
 	return strip
 }
 
-// searchChip is the footer's reminder that the board is filtered once the
-// input has closed. Without it a narrowed board is indistinguishable from a
-// board that lost its cards.
-func (m *Model) searchChip() string {
-	var parts []string
-	if m.search.query != "" {
-		parts = append(parts, "/"+m.search.query)
+// filterBadge is the active filter as it reads beside the board's name: the
+// tag for a single-tag query, the query itself otherwise, and nothing at all
+// when the board is showing everything.
+//
+// It is capped rather than wrapped or scrolled — the badge shares one line
+// with the board name and the id prefix, and a long query is still recognisable
+// from its first few terms.
+func (m *Model) filterBadge() string {
+	// The archive browser's list is not filtered by any of this, so a filter
+	// shown against it would caption the wrong panel — the same reason the
+	// count stays off that footer too.
+	if !m.searchActive() || m.view == archiveView {
+		return ""
+	}
+	label := m.search.query
+	if label == model.Untagged {
+		label = "no tags"
+	}
+	if label == "" {
+		// Scope alone, with no query — the board is wider, not narrower.
+		return "all boards "
+	}
+	const maxFilterBadge = 24
+	if lipgloss.Width(label) > maxFilterBadge {
+		label = ansi.Truncate(label, maxFilterBadge, "…")
 	}
 	if m.search.global {
-		parts = append(parts, "all boards")
+		label += " · all boards"
 	}
+	// The board name is already padded on both sides; one trailing space here
+	// separates the filter from the id prefix that follows it.
+	return label + " "
+}
+
+// searchCountLabel is the footer's "how much of the board is this" — the
+// query itself lives beside the board name, so this carries only the count.
+func (m *Model) searchCountLabel() string {
 	shown, total := m.searchCounts()
-	return fmt.Sprintf("%s  %d of %d", strings.Join(parts, " · "), shown, total)
+	return fmt.Sprintf("%d of %d", shown, total)
 }

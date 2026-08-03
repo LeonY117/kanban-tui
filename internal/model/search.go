@@ -20,16 +20,18 @@ type Query struct {
 }
 
 type queryTerm struct {
-	text   string // lowercased; never empty
-	tagged bool   // written with a leading #
+	text    string // lowercased; empty only for the bare tagged term
+	tagged  bool   // written with a leading #
+	negated bool   // written with a leading -
 }
 
 // Token is one term of a raw query, with where it starts in the input so a
 // caller can rewrite just that term.
 type Token struct {
-	Start  int    // byte offset of the term in the raw string
-	Text   string // the term, quotes removed and the leading # stripped
-	Tagged bool   // written with a leading #
+	Start   int    // byte offset of the term in the raw string
+	Text    string // the term, quotes removed and the leading -/# stripped
+	Tagged  bool   // written with a leading #
+	Negated bool   // written with a leading -
 }
 
 // Tokenize splits raw input into terms on whitespace, except inside double
@@ -46,16 +48,24 @@ type Token struct {
 func Tokenize(raw string) (tokens []Token, openQuote bool) {
 	var cur strings.Builder
 	start := -1
+	quoted := false // this term opened with a quote, so a leading - is literal
 
 	flush := func() {
 		if start < 0 {
 			return
 		}
 		text := cur.String()
+		negated := !quoted && strings.HasPrefix(text, "-")
+		if negated {
+			text = strings.TrimPrefix(text, "-")
+		}
 		tagged := strings.HasPrefix(text, "#")
-		tokens = append(tokens, Token{Start: start, Text: strings.TrimPrefix(text, "#"), Tagged: tagged})
+		tokens = append(tokens, Token{
+			Start: start, Text: strings.TrimPrefix(text, "#"), Tagged: tagged, Negated: negated,
+		})
 		cur.Reset()
 		start = -1
+		quoted = false
 	}
 
 	for i, r := range raw {
@@ -63,7 +73,7 @@ func Tokenize(raw string) (tokens []Token, openQuote bool) {
 		case r == '"':
 			openQuote = !openQuote
 			if start < 0 {
-				start = i
+				start, quoted = i, true
 			}
 		case unicode.IsSpace(r) && !openQuote:
 			flush()
@@ -88,13 +98,21 @@ func ParseQuery(raw string) Query {
 	var q Query
 	tokens, _ := Tokenize(raw)
 	for _, t := range tokens {
-		if t.Text == "" {
+		// A bare "#" is the prefix that opens tag completion, so it filters
+		// nothing. Negated it is a real question — "which cards have no tags
+		// at all" — and the only way to ask it, since absence has no substring.
+		if t.Text == "" && !(t.Tagged && t.Negated) {
 			continue
 		}
-		q.terms = append(q.terms, queryTerm{text: strings.ToLower(t.Text), tagged: t.Tagged})
+		q.terms = append(q.terms, queryTerm{
+			text: strings.ToLower(t.Text), tagged: t.Tagged, negated: t.Negated,
+		})
 	}
 	return q
 }
+
+// Untagged is the query for cards carrying no tags.
+const Untagged = "-#"
 
 // QuoteTag renders a tag as a query term, quoting it when it holds whitespace.
 func QuoteTag(tag string) string {
@@ -132,6 +150,15 @@ func (q Query) MatchAll(tickets []Ticket) []Ticket {
 }
 
 func (term queryTerm) match(t Ticket) bool {
+	return term.matches(t) != term.negated
+}
+
+func (term queryTerm) matches(t Ticket) bool {
+	// An empty tagged term asks "carries any tag"; negation turns that into
+	// "carries none", which is what the tag list's last row selects.
+	if term.tagged && term.text == "" {
+		return len(t.Tags) > 0
+	}
 	if term.matchesTag(t.Tags) {
 		return true
 	}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/LeonY117/kanban-tui/internal/model"
 	"github.com/LeonY117/kanban-tui/internal/store"
 	"github.com/spf13/cobra"
 )
@@ -15,7 +16,21 @@ var st *store.Store
 var rootCmd = &cobra.Command{
 	Use:   "kanban",
 	Short: "Terminal kanban board for humans and AI agents",
-	Long:  "A terminal-based kanban board and task tracker. Run without subcommands to launch the TUI.",
+	Long: `A terminal kanban board and task tracker. Run without a subcommand to launch the TUI.
+
+A ticket carries a status (BACKLOG, TODO, DOING, DONE, HOLD), title, description, tags and an
+assignee. Tickets live on boards: the main board plus any number of named sprint boards, each
+reached with --sprint <name>. Ids are short and per-board — 42 on main, KA7 on a sprint.
+
+  kanban list --json                                     read the board
+  kanban show <id> --json                                read one ticket
+  kanban add "Title" --tag <tag> --desc "context"        create
+  kanban update <id> --status DOING --assigned-to <who>  change fields
+  kanban move <id> <board>                               send to another board
+  kanban archive <id>                                    archive one, or all DONE if bare
+
+Boards are JSON under ~/.kanban, or beside KANBAN_FILE when that is set. Writes take a lock,
+so concurrent callers are safe.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		sprint, _ := cmd.Flags().GetString("sprint")
 		return runTUI(sprint)
@@ -24,9 +39,19 @@ var rootCmd = &cobra.Command{
 
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
+}
+
+// statusValues lists the valid --status values straight from the model, so the
+// four commands that take one can't drift from ParseStatus or from each other.
+func statusValues() string {
+	names := make([]string, len(model.AllStatuses))
+	for i, s := range model.AllStatuses {
+		names[i] = string(s)
+	}
+	return strings.Join(names, ", ")
 }
 
 // promptYN returns true only on "y"/"yes" (case-insensitive). EOF, empty, and
@@ -87,6 +112,12 @@ func resolveStore(cmd *cobra.Command) error {
 }
 
 func init() {
+	// Execute() already prints the error. Without these, cobra prints it a
+	// second time and dumps the full usage block after it — three screens of
+	// noise around one line an agent needs to read.
+	rootCmd.SilenceErrors = true
+	rootCmd.SilenceUsage = true
+
 	rootCmd.PersistentFlags().String("sprint", "", "Use a named sprint board instead of the main board")
 
 	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {

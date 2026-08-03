@@ -11,87 +11,30 @@ go build -o ~/.local/bin/kanban .   # install to PATH
 ./kanban list     # CLI mode
 ```
 
-## CLI reference (for agents)
+## CLI
 
-```bash
-# Create a ticket
-kanban add "Title here" --desc "Details" --tag backend --status TODO --assigned-to claude
+`kanban --help` documents the tool — data model, every command and flag, storage layout — and
+each subcommand carries its own `--help`. Keep it that way: a fact about *how the tool
+behaves* belongs in the cobra help text, not here.
 
-# Update a ticket (use short ID: 42 on main, KA7 on a sprint; the prefix is
-# implied on its own board, so `--sprint kanban update 7` works too)
-kanban update <id> --status DOING --assigned-to claude
+The inverse also holds. Workflow conventions — who claims what, title style, when a sprint is
+worth making — are the caller's policy, not the tool's. They stay in the consuming project's
+instruction file so they can be versioned and varied per project; don't compile them into the
+binary's help text.
 
-# List tickets (use --json for structured output)
-kanban list --json
-kanban list --status DOING
-kanban list --assigned-to claude
+## TUI behaviour
 
-# Show ticket detail
-kanban show <id> --json
+Not reachable from `--help`, so it lives here:
 
-# Move a ticket to another board (source = --sprint or main; "main" targets the
-# main board). Keeps its short id unless the destination already issued it;
-# --status picks the landing column, default keeps the current one.
-kanban --sprint onsite move ON3 reorder-revamp --status BACKLOG
-kanban move 42 Demo_Apr
+- Pinned sprints sit above a divider in the picker; `p` toggles a pin, `J`/`K` reorder the pinned block. Main is implicitly pinned and holds the top slot. **Archiving a pinned sprint is refused** — unpin first.
+- `r` in the picker renames a sprint and/or its ticket-id prefix. A prefix change rewrites board **and** archive short ids keeping their numbers (`KA7` → `KB7`), refused per-id if another board already issued one. Both are refused on archived sprints.
+- A missing `--sprint` prompts `[y/N]` on TUI launch but hard-errors on CLI subcommands — no silent creation, no hanging prompts for agents.
 
-# Archive a single ticket (any status)
-kanban archive <id>
+## Where work lives
 
-# Archive all done tickets
-kanban archive
-kanban archive --before 2026-04-07
-```
-
-## Sprint boards
-
-A sprint board is an isolated second board (its own tickets, archive, and lock), stored at `~/.kanban/sprints/<name>/`. The main board is untouched.
-
-```bash
-# Launch the TUI on a sprint (prompts y/N if the sprint doesn't exist yet)
-kanban --sprint Demo_Apr
-
-# Any CLI command can be scoped to a sprint
-kanban --sprint Demo_Apr list --json
-kanban --sprint Demo_Apr add "Fix login bug" --tag backend
-
-# Sprint management
-kanban sprints                       # list active sprints + ticket counts
-kanban sprints --archived            # list only archived sprints
-kanban sprints --all                 # list both, archived rows tagged
-kanban sprints new Demo_Apr          # create a sprint without launching TUI
-kanban sprints new Demo_Apr --prefix DA   # …with an explicit ticket-id prefix
-kanban sprints rm Demo_Apr           # delete a sprint (prompts; --force skips)
-kanban sprints archive Demo_Apr      # hide from defaults; freeze writes (reads still work)
-kanban sprints unarchive Demo_Apr    # restore
-kanban sprints pin Demo_Apr          # sort above the rest in the picker / sprints list
-kanban sprints unpin Demo_Apr        # release back to mtime order
-kanban sprints rename Demo_Apr Demo_May   # rename the board; ticket ids untouched
-kanban sprints prefix Demo_May DM         # retag ids: DA7 → DM7, board + archive
-```
-
-Notes:
-- Sprint names: `[A-Za-z0-9_-]`, 1–64 chars.
-- Pinned sprints sort above the rest (in pin order) everywhere boards are listed; in the TUI picker they sit above a divider, `p` toggles a pin and `J`/`K` reorder the pinned block. Main is implicitly pinned and holds the top slot. **Archiving a pinned sprint is refused** — unpin first.
-- `r` in the picker renames a sprint and/or its ticket-id prefix (same as `sprints rename` + `sprints prefix`). A prefix change rewrites board **and** archive short ids keeping their numbers (`KA7` → `KB7`), and is refused per-id if another board already issued one of them. Both are refused on archived sprints.
-- On **CLI subcommands**, a missing sprint hard-errors (no silent creation, no hanging prompts for agents).
-- On **TUI launch**, a missing sprint prompts `[y/N]` before creating. Answering no aborts cleanly.
-- `--sprint` composes with `KANBAN_FILE`: sprints live at `$(dirname $KANBAN_FILE)/sprints/<name>/` when the env var is set, so both main and sprint boards share the same root.
-
-## Agent workflow
-
-1. At start of session: `kanban list --json` to see current board state
-2. Before starting work: `kanban update <id> --status DOING --assigned-to <name>`
-3. When done: `kanban update <id> --status DONE`
-4. If creating new work: `kanban add "Title" --tag <tag>`
-
-**When working *in this repo***: Leon's kanban-tool work lives on the `kanban` sprint, not the main board. Default to `kanban --sprint kanban list --json` when asked about "open tickets" / "what should I pick up" from inside `~/dev/projects/kanban`. The main board is for personal/Kepler/work tickets, unrelated to this codebase.
-
-## Statuses
-
-TODO → DOING → DONE (or HOLD)
-
-Note: BACKLOG status exists in data but is hidden from TUI.
+Leon's kanban-tool tickets are on the `kanban` sprint, not the main board. Default to
+`kanban --sprint kanban list --json` when asked about "open tickets" / "what should I pick up"
+from inside this repo. The main board is personal/Kepler/work tickets, unrelated to this code.
 
 ## Architecture
 
@@ -114,8 +57,8 @@ Note: BACKLOG status exists in data but is hidden from TUI.
 
 ## Skills distribution
 
-Skills are symlinked from this repo into other projects:
+`skills/` holds `populate-kanban` and `kanban-summary`, symlinked into consuming projects:
 ```bash
-ln -sf ~/dev/projects/kanban/skills/*.md <project>/.claude/skills/
+ln -sf ~/dev/projects/tools/kanban/skills/*.md <project>/.claude/skills/
 ```
-Currently set up for: `~/dev/projects/openclaw-surgeon/`
+No project currently links them (the previous consumer, openclaw-surgeon, is gone).

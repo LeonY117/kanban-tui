@@ -12,7 +12,13 @@ import (
 var sprintsCmd = &cobra.Command{
 	Use:   "sprints",
 	Short: "Manage sprint boards",
-	Long:  "Without a subcommand, lists sprints and their ticket counts. By default only active sprints are shown; use --archived or --all to include archived sprints.",
+	Long: `Without a subcommand, lists sprints and their ticket counts. Only active sprints are shown
+by default; --archived or --all include the archived ones.
+
+A sprint is a fully separate board — its own tickets, short-id prefix, archive and lock,
+stored under <root>/sprints/<name>/. --sprint <name> scopes any command to it and leaves the
+main board untouched. Archiving a sprint hides it from default listings and freezes writes;
+reads still work.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		sprints, err := store.ListSprints()
 		if err != nil {

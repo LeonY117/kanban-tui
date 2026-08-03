@@ -78,5 +78,5 @@ func targetStore(name string) (*store.Store, string, error) {
 }
 
 func init() {
-	moveCmd.Flags().String("status", "", "Land in this status (default: keep the ticket's current status)")
+	moveCmd.Flags().String("status", "", fmt.Sprintf("Land in this status: %s (default: keep the ticket's current status)", statusValues()))
 }

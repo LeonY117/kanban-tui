@@ -1,6 +1,9 @@
 package model
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func ticket(title, desc, shortID, assignee string, tags ...string) Ticket {
 	return Ticket{
@@ -156,5 +159,66 @@ func TestTagCandidatesCountDoneCards(t *testing.T) {
 	got := TagCandidates([]Ticket{done}, "")
 	if len(got) != 1 || got[0].Tag != "release" || got[0].Count != 1 {
 		t.Errorf("candidates = %+v, want release with 1 — a done card's tag still exists", got)
+	}
+}
+
+func TestQuotedTagIsOneTerm(t *testing.T) {
+	// Without quoting, `#needs review` is a tag term plus an unrelated bare
+	// one, so completing a multi-word tag produced a query that meant
+	// something other than what its count promised.
+	target := ticket("a", "", "1", "", "needs review")
+	// Tagged "needs", with "review" only in the title: it satisfies the two
+	// independent terms the unquoted form parses into, but does not carry the
+	// tag the user picked from the completion list.
+	loose := ticket("review the deck", "", "2", "", "needs")
+
+	q := ParseQuery(`#"needs review"`)
+	if !q.Match(target) {
+		t.Error("the quoted tag did not match the card carrying it")
+	}
+	if q.Match(loose) {
+		t.Error("the quoted tag matched a card that merely has both words")
+	}
+
+	if !ParseQuery("#needs review").Match(loose) {
+		t.Error("setup: unquoted, the two words match independently — that is the drift quoting exists to close")
+	}
+}
+
+func TestUnterminatedQuoteRunsToTheEnd(t *testing.T) {
+	// The query is reparsed on every keystroke, so the half-typed state is the
+	// common one and has to keep narrowing.
+	if !ParseQuery(`#"needs rev`).Match(ticket("a", "", "1", "", "needs review")) {
+		t.Error("a half-typed quoted tag stopped matching")
+	}
+}
+
+func TestQuotedBareTermMatchesAPhrase(t *testing.T) {
+	if !ParseQuery(`"board search"`).Match(ticket("Board search with tags", "", "1", "")) {
+		t.Error("a quoted bare term did not match the phrase")
+	}
+	if ParseQuery(`"board search"`).Match(ticket("search the board", "", "2", "")) {
+		t.Error("a quoted bare term matched words that are not adjacent")
+	}
+}
+
+func TestQuoteTagQuotesOnlyWhenNeeded(t *testing.T) {
+	if got := QuoteTag("cli"); got != "#cli" {
+		t.Errorf("QuoteTag(cli) = %q, want #cli", got)
+	}
+	if got := QuoteTag("needs review"); got != `#"needs review"` {
+		t.Errorf("QuoteTag(needs review) = %q, want it quoted", got)
+	}
+}
+
+func TestTagsHoldingAQuoteAreNotOffered(t *testing.T) {
+	// Quoting is the escape and there is no escape for the escape, so such a
+	// tag cannot be written as a term at all. Offering it would promise a
+	// count the resulting query cannot deliver.
+	pool := []Ticket{ticket("a", "", "1", "", `say "hi"`), ticket("b", "", "2", "", "cli")}
+	for _, c := range TagCandidates(pool, "") {
+		if strings.Contains(c.Tag, `"`) {
+			t.Errorf("offered an unwritable tag: %q", c.Tag)
+		}
 	}
 }

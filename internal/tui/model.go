@@ -332,11 +332,31 @@ func (m *Model) guardMutate() bool {
 	if !m.guardBoardMutate() {
 		return false
 	}
+	// The borrowed-card check reads the board cursor, which only speaks for
+	// the mutation in views that cursor drives. The archive browser has its
+	// own cursor over its own entries, and those are always this board's — so
+	// consulting the board selection there refuses an unarchive over a card
+	// that isn't even on screen.
+	if m.view == archiveView {
+		return true
+	}
 	if t := m.selectedTicket(); t != nil {
 		if owner, ok := m.ticketOwner(t.ID); ok {
 			m.notice = fmt.Sprintf("%s lives on %s — enter to open it there", t.ShortID, boardDisplayName(owner))
 			return false
 		}
+	}
+	return true
+}
+
+// guardZoom refuses the zoom ladder while a search is active. A filtered board
+// is a narrower surface on purpose (Leon, 2026-08-03): keeping the zoom ladder
+// out of it means one less view that has to reason about borrowed cards, and
+// esc is one keystroke away.
+func (m *Model) guardZoom() bool {
+	if m.searchActive() {
+		m.notice = "zoom is off while searching — esc clears the filter"
+		return false
 	}
 	return true
 }
@@ -368,16 +388,23 @@ func (m *Model) footerLine() string {
 		return m.searchFooter(badge)
 	}
 
+	budget := m.width - lipgloss.Width(badge) - 2
 	var rightText string
 	switch {
 	case m.notice != "":
 		rightText = m.notice
-	case m.searchActive():
-		// The chip leads so fitHints, which drops from the end, can never trim
-		// away the explanation for why the board looks half empty.
-		rightText = fitHints(m.searchChip()+" | "+m.helpText(), m.width-lipgloss.Width(badge)-2)
+	// The archive browser has its own list, which no filter touches. Showing
+	// the board's chip there would caption the wrong panel with the wrong
+	// count, and it would crowd out the archive's own way back.
+	case m.searchActive() && m.view != archiveView:
+		// The chip is rendered outside fitHints rather than as its leading
+		// hint: fitHints protects only the last hint, so a long enough query
+		// could push out the very thing that explains why the board looks
+		// half empty.
+		chip := m.searchChip()
+		rightText = chip + " | " + fitHints(m.helpText(), budget-lipgloss.Width(chip)-3)
 	default:
-		rightText = fitHints(m.helpText(), m.width-lipgloss.Width(badge)-2)
+		rightText = fitHints(m.helpText(), budget)
 	}
 	help := helpStyle.Render(rightText)
 	return lipgloss.JoinHorizontal(lipgloss.Center, badge, help)
@@ -619,8 +646,17 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveCursor(-1)
 	case key.Matches(msg, keys.Down):
 		m.moveCursor(1)
-	case key.Matches(msg, keys.Enter), key.Matches(msg, keys.Zoom):
+	case key.Matches(msg, keys.Enter):
+		// enter is the only key that follows a borrowed card home. Overloading
+		// zoom or panel-navigation with it made those keys do something their
+		// own help line doesn't describe.
 		if m.jumpToForeign() {
+			return m, nil
+		}
+		m.enterSplit()
+		return m, nil
+	case key.Matches(msg, keys.Zoom):
+		if !m.guardZoom() {
 			return m, nil
 		}
 		m.enterSplit()
@@ -837,14 +873,21 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Unzoom), key.Matches(msg, keys.Esc):
 		m.view = boardView
 	case key.Matches(msg, keys.Zoom):
+		if !m.guardZoom() {
+			return m, nil
+		}
 		m.view = columnView
-	case key.Matches(msg, keys.PanelNext), key.Matches(msg, keys.Enter), key.Matches(msg, keys.Right):
+	case key.Matches(msg, keys.Enter):
 		if m.jumpToForeign() {
-			m.refreshDetailEditors()
 			return m, nil
 		}
 		m.splitFocus = 1
 		m.refreshDetailEditors() // start on meta, nothing focused
+	case key.Matches(msg, keys.PanelNext), key.Matches(msg, keys.Right):
+		// A borrowed card opens read-only here; every write path is refused by
+		// guardMutate and names the board to press enter for.
+		m.splitFocus = 1
+		m.refreshDetailEditors()
 	case key.Matches(msg, keys.Search):
 		m.enterSearch()
 	case key.Matches(msg, keys.Up):
@@ -1595,23 +1638,42 @@ func (m *Model) moveTicketInColumn(dir int) {
 	if newCursor < 0 || newCursor >= len(colTickets) {
 		return
 	}
-	neighbourID := colTickets[newCursor].ID
+	neighbour := colTickets[newCursor]
 
-	m.store.WithLock(func() error {
+	// Reordering is a rewrite of this board's ticket order, so it stops where
+	// this board does. A borrowed neighbour cannot be swapped with — say so
+	// rather than no-oping, which used to look identical to a successful move
+	// because the cursor advanced either way.
+	if owner, ok := m.ticketOwner(neighbour.ID); ok {
+		m.notice = fmt.Sprintf("%s lives on %s — reordering stops at this board", neighbour.ShortID, boardDisplayName(owner))
+		return
+	}
+
+	moved := false
+	if err := m.store.WithLock(func() error {
 		board, err := m.store.Load()
 		if err != nil {
 			return err
 		}
 		_, i := board.FindByID(t.ID)
-		_, j := board.FindByID(neighbourID)
+		_, j := board.FindByID(neighbour.ID)
 		if i < 0 || j < 0 {
 			return nil
 		}
 		board.Tickets[i], board.Tickets[j] = board.Tickets[j], board.Tickets[i]
-		return m.store.Save(board)
-	})
-	m.cursors[m.focusedCol] = newCursor
+		if err := m.store.Save(board); err != nil {
+			return err
+		}
+		moved = true
+		return nil
+	}); err != nil {
+		m.notice = err.Error()
+	}
 	m.reload()
+	// Only follow the card if it actually went somewhere.
+	if moved {
+		m.cursors[m.focusedCol] = newCursor
+	}
 	m.clampCursors()
 }
 
@@ -2186,23 +2248,28 @@ func (m *Model) submitAdd() {
 		return
 	}
 	m.reload()
-	m.closeAddPopup()
 
+	// Move the cursor before closing the popup, never after: closeAddPopup
+	// re-seeds the detail editors from wherever the cursor is, so closing
+	// first binds them to the card that was selected before the add and the
+	// next save in the detail pane renames that one instead.
+	//
 	// Follow the new card by identity rather than by "last in the column":
 	// under a filter those are different rows, and if the filter hides it
 	// there is no row to land on at all. Saved but invisible looks exactly
 	// like a failed save, so say so instead of moving the cursor somewhere
 	// arbitrary.
-	if added == nil {
+	hidden := added != nil && m.searchActive() && !m.search.parsed.Match(*added)
+	switch {
+	case added == nil, hidden:
 		m.clampCursors()
-		return
+	default:
+		m.focusTicket(added.ID)
 	}
-	if m.searchActive() && !m.search.parsed.Match(*added) {
+	m.closeAddPopup()
+	if hidden {
 		m.notice = fmt.Sprintf("%s saved — the search is hiding it", added.ShortID)
-		m.clampCursors()
-		return
 	}
-	m.focusTicket(added.ID)
 }
 
 func (m *Model) viewAdd() string {
@@ -3388,15 +3455,12 @@ func (m *Model) renderTicketLine(t model.Ticket, selected bool, width int, accen
 	// The condensed layout has only the title line, so a borrowed card's board
 	// has to share it — the badge is what stops a foreign card reading as one
 	// of this board's own.
-	badge := ""
-	if owner, ok := m.ticketOwner(t.ID); ok {
-		badge = boardDisplayName(owner) + "/"
-	}
+	badge := m.boardBadge(t.ID)
 
 	title := t.Title
-	maxTitle := width - 1 - len(badge)
+	maxTitle := width - 1 - lipgloss.Width(badge)
 	if selected {
-		maxTitle = width - 3 - len(badge)
+		maxTitle = width - 3 - lipgloss.Width(badge)
 	}
 	if t.AssignedTo != "" && selected {
 		maxTitle -= 2
@@ -3404,8 +3468,11 @@ func (m *Model) renderTicketLine(t model.Ticket, selected bool, width int, accen
 	if maxTitle < 3 {
 		maxTitle = 3
 	}
-	if len(title) > maxTitle {
-		title = title[:maxTitle-1] + "…"
+	// Measure and cut by display width, not bytes: a byte slice through a
+	// multi-byte rune renders as a replacement character, and the badge makes
+	// the cut land in new places.
+	if lipgloss.Width(title) > maxTitle {
+		title = ansi.Truncate(title, maxTitle, "…")
 	}
 
 	if selected {
@@ -3712,7 +3779,13 @@ func (m *Model) viewColumn() string {
 			suffix += " " + "● " + t.AssignedTo
 		}
 
-		maxTitle := innerWidth - 3 - len([]rune(suffix))
+		// This view builds its own rows rather than going through
+		// renderTicketLine or cardMetaLine, so it needs the borrowed-card
+		// badge of its own — without it a foreign card here is
+		// indistinguishable from one of this board's.
+		badge := m.boardBadge(t.ID)
+
+		maxTitle := innerWidth - 3 - len([]rune(suffix)) - len([]rune(badge))
 		if maxTitle < 3 {
 			maxTitle = 3
 		}
@@ -3720,7 +3793,7 @@ func (m *Model) viewColumn() string {
 			titleText = string([]rune(titleText)[:maxTitle-1]) + "…"
 		}
 
-		line := marker + tStyle.Render(titleText)
+		line := marker + foreignBoardStyle.Render(badge) + tStyle.Render(titleText)
 		if len(t.Tags) > 0 {
 			line += tagStyle.Render(" #" + strings.Join(t.Tags, " #"))
 		}
@@ -3863,7 +3936,7 @@ func (m *Model) renderCompactMeta(t *model.Ticket, maxWidth int, navigable bool)
 		}
 		parts = append(parts, rendered)
 	}
-	parts = append(parts, dim.Render(t.ShortID))
+	parts = append(parts, foreignBoardStyle.Render(m.boardBadge(t.ID))+dim.Render(t.ShortID))
 
 	return strings.Join(parts, "  ")
 }
@@ -3915,7 +3988,7 @@ func (m *Model) renderMetaBar(t *model.Ticket) string {
 		parts = append(parts, rendered)
 	}
 
-	parts = append(parts, lipgloss.NewStyle().Foreground(midGray).Render(t.ShortID))
+	parts = append(parts, foreignBoardStyle.Render(m.boardBadge(t.ID))+lipgloss.NewStyle().Foreground(midGray).Render(t.ShortID))
 	parts = append(parts, lipgloss.NewStyle().Foreground(midGray).Render(t.CreatedAt.Format("2006-01-02 15:04")))
 
 	return strings.Join(parts, "  ")

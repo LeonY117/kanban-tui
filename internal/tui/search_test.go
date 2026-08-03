@@ -655,3 +655,236 @@ func TestFooterNeverOverflowsTheTerminal(t *testing.T) {
 		}
 	}
 }
+
+// ─── Regressions found by the ship review ────────────────────────────
+
+func TestArchiveUnarchiveIgnoresTheBoardSelection(t *testing.T) {
+	// The archive browser has its own cursor over its own entries, which are
+	// always local. Consulting the board selection refused an unarchive over
+	// a card that was not even on screen.
+	m, s := boardWith(t, "auth local|TODO", "old thing|TODO")
+	withSprint(t, "demo", "auth remote|TODO")
+
+	board, _ := s.Load()
+	var oldID string
+	for _, tk := range board.Tickets {
+		if tk.Title == "old thing" {
+			oldID = tk.ID
+		}
+	}
+	if err := s.ArchiveByID(oldID); err != nil {
+		t.Fatal(err)
+	}
+	m.reload()
+
+	typeSearch(m, "auth")
+	searchKeys(m, "ctrl+g", "enter")
+	m.cursors[1] = 1 // a borrowed card sits under the board cursor
+	if _, ok := m.ticketOwner(m.selectedTicket().ID); !ok {
+		t.Fatal("setup: expected a borrowed card under the cursor")
+	}
+
+	m.enterArchive()
+	for i, e := range m.archiveEntries {
+		if !e.isHeader {
+			m.archiveCursor = i
+			break
+		}
+	}
+	m.unarchiveSelected()
+
+	arch, err := s.LoadArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(arch.Tickets) != 0 {
+		t.Errorf("unarchive was refused over an unrelated selection: %q", m.notice)
+	}
+}
+
+func TestReorderRefusesABorrowedNeighbour(t *testing.T) {
+	// The swap rewrites this board's ticket order, so it stops where the board
+	// does. Silently no-oping while still advancing the cursor looked exactly
+	// like a successful move.
+	m, s := boardWith(t, "auth local|TODO")
+	withSprint(t, "demo", "auth remote|TODO")
+
+	typeSearch(m, "auth")
+	searchKeys(m, "ctrl+g", "enter")
+	m.cursors[1] = 0
+
+	m.moveTicketInColumn(1)
+
+	if m.cursors[1] != 0 {
+		t.Errorf("cursor advanced to %d though nothing moved", m.cursors[1])
+	}
+	if !strings.Contains(m.notice, "demo") {
+		t.Errorf("notice = %q, want it to name the board reordering stops at", m.notice)
+	}
+	after, _ := s.Load()
+	if got := titlesOf(after.ByStatus(model.StatusTodo)); len(got) != 1 || got[0] != "auth local" {
+		t.Errorf("board order = %v, want it untouched", got)
+	}
+}
+
+// editorsBoundTo names the ticket a save from the detail pane would write to.
+func editorsBoundTo(t *testing.T, m *Model, s *store.Store) string {
+	t.Helper()
+	board, err := s.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tk := range board.Tickets {
+		if tk.ID == m.editTicketID {
+			return tk.Title
+		}
+	}
+	return "<none>"
+}
+
+func TestAddFromSplitDetailLeavesEditorsOnTheNewCard(t *testing.T) {
+	// closeAddPopup re-seeds the editors from the cursor, so it has to run
+	// after the cursor moves, not before.
+	m, s := boardWith(t, "alpha one|TODO")
+	m.enterSplit()
+	m.splitFocus = 1
+	m.refreshDetailEditors()
+
+	m.enterAddPopup()
+	m.addTitle.SetValue("beta two")
+	m.submitAdd()
+
+	sel := m.selectedTicket()
+	if sel == nil || sel.Title != "beta two" {
+		t.Fatalf("selected %v, want the new card", sel)
+	}
+	if got := editorsBoundTo(t, m, s); got != "beta two" {
+		t.Errorf("pane shows %q but a save would write to %q", sel.Title, got)
+	}
+}
+
+func TestFilteringInSplitViewRebindsTheEditors(t *testing.T) {
+	// Narrowing a column slides a different card under a stationary cursor.
+	// The pane renders from selectedTicket, so a stale editTicketID is
+	// invisible until the write lands on the card that scrolled away.
+	m, s := boardWith(t, "alpha one|TODO", "beta two|TODO")
+	m.enterSplit()
+	m.refreshDetailEditors()
+
+	typeSearch(m, "beta")
+	searchKeys(m, "enter")
+
+	sel := m.selectedTicket()
+	if sel == nil || sel.Title != "beta two" {
+		t.Fatalf("selected %v, want the only match", sel)
+	}
+	if got := editorsBoundTo(t, m, s); got != "beta two" {
+		t.Errorf("pane shows %q but a save would write to %q", sel.Title, got)
+	}
+}
+
+func TestCancellingRestoresTheSelectedCard(t *testing.T) {
+	m, _ := boardWith(t, "alpha one|TODO", "beta two|TODO", "gamma three|TODO")
+	m.cursors[1] = 2 // on "gamma three"
+
+	typeSearch(m, "alpha") // narrows to one card and clamps the cursor
+	searchKeys(m, "esc")
+
+	if sel := m.selectedTicket(); sel == nil || sel.Title != "gamma three" {
+		t.Errorf("selected %v, want the card the cursor was on before search opened", sel)
+	}
+}
+
+func TestOnlyEnterFollowsABorrowedCardHome(t *testing.T) {
+	m, _ := boardWith(t, "auth local|TODO")
+	withSprint(t, "demo", "auth remote|TODO")
+
+	typeSearch(m, "auth")
+	searchKeys(m, "ctrl+g", "enter")
+	m.cursors[1] = 1
+
+	// Zoom is off while a search is active, and must not jump either way.
+	searchKeys(m, "+")
+	if m.sprintName != "" {
+		t.Errorf("zoom followed the card to %q; only enter should", m.sprintName)
+	}
+	if !strings.Contains(m.notice, "zoom is off") {
+		t.Errorf("notice = %q, want zoom to say why it did nothing", m.notice)
+	}
+
+	searchKeys(m, "enter")
+	if m.sprintName != "demo" {
+		t.Errorf("enter did not follow the card home: on %q", m.sprintName)
+	}
+}
+
+func TestArchiveBrowserKeepsItsOwnFooter(t *testing.T) {
+	m, _ := boardWith(t, "auth refresh|TODO")
+
+	typeSearch(m, "auth")
+	searchKeys(m, "enter")
+	m.enterArchive()
+	m.width = 70
+
+	footer := m.footerLine()
+	if strings.Contains(footer, "1 of 1") {
+		t.Error("the board's match count is captioning the archive list")
+	}
+	if !strings.Contains(footer, "back") {
+		t.Errorf("archive footer lost its way out: %q", footer)
+	}
+}
+
+func TestFilterChipSurvivesALongQuery(t *testing.T) {
+	m, _ := boardWith(t, "auth refresh|TODO")
+	m.width = 60
+
+	typeSearch(m, "a very long search query indeed")
+	searchKeys(m, "enter")
+
+	footer := m.footerLine()
+	if !strings.Contains(footer, "0 of 1") {
+		t.Errorf("the chip was trimmed away, leaving no reason for the empty board: %q", footer)
+	}
+}
+
+func TestCompletingAMultiWordTagQuotesIt(t *testing.T) {
+	m, _ := boardWith(t, "a|TODO|needs review", "b|TODO|cli")
+
+	typeSearch(m, "#nee")
+	if strip := m.completionStrip(60); !strings.Contains(strip, `#"needs review"`) {
+		t.Errorf("strip = %q, want the quoted form the completion will write", strip)
+	}
+	searchKeys(m, "tab")
+
+	if got := m.search.input.Value(); got != `#"needs review" ` {
+		t.Errorf("input = %q, want the tag quoted so it stays one term", got)
+	}
+	if got := titlesOf(m.visibleTickets(model.StatusTodo)); len(got) != 1 || got[0] != "a" {
+		t.Errorf("Todo = %v, want only the card carrying the tag", got)
+	}
+}
+
+func TestCompletionOffersInsideAnOpenQuote(t *testing.T) {
+	// A space inside an open quote is part of the tag, not the end of a term,
+	// so the candidate list has to survive it.
+	m, _ := boardWith(t, "a|TODO|needs review")
+
+	typeSearch(m, `#"needs r`)
+	if cands := m.tagCandidates(); len(cands) != 1 || cands[0].Tag != "needs review" {
+		t.Errorf("candidates = %+v, want the multi-word tag still offered mid-quote", cands)
+	}
+}
+
+func TestCompletedTagStopsOfferingItself(t *testing.T) {
+	// tab appends a trailing space, which ends the term — otherwise the strip
+	// would keep offering a completion that is already in place.
+	m, _ := boardWith(t, "a|TODO|cli")
+
+	typeSearch(m, "#cl")
+	searchKeys(m, "tab")
+
+	if cands := m.tagCandidates(); cands != nil {
+		t.Errorf("candidates = %+v, want none once the term is finished", cands)
+	}
+}

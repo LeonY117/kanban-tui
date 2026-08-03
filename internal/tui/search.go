@@ -29,6 +29,7 @@ type searchState struct {
 	// What to put back when the input is cancelled rather than committed.
 	prevQuery  string
 	prevGlobal bool
+	prevTicket string // id of the card the cursor was on, restored by esc
 
 	tagIdx int // highlighted tag completion
 
@@ -91,6 +92,17 @@ func (m *Model) ticketOwner(id string) (string, bool) {
 	return name, ok
 }
 
+// boardBadge is the `demo/` prefix a borrowed card wears, empty for local
+// ones. Every surface that prints a short id prints this in front of it —
+// a borrowed card that reads as local is one keystroke from a refusal
+// naming a board the view never mentioned.
+func (m *Model) boardBadge(id string) string {
+	if owner, ok := m.ticketOwner(id); ok {
+		return boardDisplayName(owner) + "/"
+	}
+	return ""
+}
+
 // searchPool is every card the current scope can return, across all columns.
 func (m *Model) searchPool() []model.Ticket {
 	pool := make([]model.Ticket, 0, len(m.board.Tickets)+len(m.search.foreign))
@@ -118,6 +130,13 @@ func (m *Model) searchCounts() (shown, total int) {
 func (m *Model) enterSearch() {
 	m.search.prevQuery = m.search.query
 	m.search.prevGlobal = m.search.global
+	// Remember the card, not the index: typing narrows the column and clamps
+	// the cursor, so an index saved here means something else by the time esc
+	// puts it back.
+	m.search.prevTicket = ""
+	if t := m.selectedTicket(); t != nil {
+		m.search.prevTicket = t.ID
+	}
 	m.search.input.SetValue(m.search.query)
 	m.search.input.CursorEnd()
 	m.search.input.Focus()
@@ -136,7 +155,10 @@ func (m *Model) commitSearch() {
 	}
 }
 
-// cancelSearch puts the board back exactly as it was before the input opened.
+// cancelSearch puts the board back as it was before the input opened — query,
+// scope and the card under the cursor. Restoring the query alone is not enough:
+// live filtering clamps the cursor while you type, so the board would come back
+// with a different card selected despite nothing having been committed.
 func (m *Model) cancelSearch() {
 	m.search.open = false
 	m.search.input.Blur()
@@ -145,7 +167,11 @@ func (m *Model) cancelSearch() {
 		m.search.global = m.search.prevGlobal
 		m.loadForeign()
 	}
+	if m.search.prevTicket != "" {
+		m.focusTicket(m.search.prevTicket)
+	}
 	m.clampCursors()
+	m.refreshDetailIfOpen()
 }
 
 // clearSearch drops the filter and the scope together. Scope is part of the
@@ -160,6 +186,20 @@ func (m *Model) clearSearch() {
 	m.search.global = false
 	m.loadForeign()
 	m.clampCursors()
+	m.refreshDetailIfOpen()
+}
+
+// refreshDetailIfOpen re-seeds the detail editors from whatever the cursor is
+// on now. Every cursor mover in the split and detail views does this; the
+// filter is one too, because narrowing a column slides a different card under
+// a stationary cursor. Skipping it leaves editTicketID on the card that
+// scrolled away, and the next save renames a ticket that is no longer on
+// screen — the pane itself renders from selectedTicket, so nothing looks wrong
+// until the write lands.
+func (m *Model) refreshDetailIfOpen() {
+	if m.view == splitView || m.view == detailView {
+		m.refreshDetailEditors()
+	}
 }
 
 func (m *Model) setQuery(q string) {
@@ -173,6 +213,7 @@ func (m *Model) toggleSearchScope() {
 	m.loadForeign()
 	m.search.tagIdx = 0
 	m.clampCursors()
+	m.refreshDetailIfOpen()
 }
 
 // scopeToggleLabel names where ctrl+g would take the search, not where it is —
@@ -252,6 +293,7 @@ func (m *Model) jumpToForeign() bool {
 	m.setQuery(query)
 	m.search.input.SetValue(query)
 	m.focusTicket(id)
+	m.refreshDetailIfOpen()
 	m.notice = "on " + boardDisplayName(owner)
 	return true
 }
@@ -284,12 +326,20 @@ func (m *Model) pendingTag() (prefix string, before string, ok bool) {
 	if m.search.input.Position() != len([]rune(value)) {
 		return "", "", false
 	}
-	cut := strings.LastIndexFunc(value, unicode.IsSpace) + 1
-	last := value[cut:]
-	if !strings.HasPrefix(last, "#") {
+	tokens, openQuote := model.Tokenize(value)
+	if len(tokens) == 0 {
 		return "", "", false
 	}
-	return strings.TrimPrefix(last, "#"), value[:cut], true
+	// A trailing space ended the last term, so it is no longer being typed —
+	// unless a quote is still open, where the space is part of the tag.
+	if !openQuote && strings.LastIndexFunc(value, unicode.IsSpace) == len(value)-1 {
+		return "", "", false
+	}
+	last := tokens[len(tokens)-1]
+	if !last.Tagged {
+		return "", "", false
+	}
+	return last.Text, value[:last.Start], true
 }
 
 // tagCandidates are the completions for the tag being typed, counted against
@@ -317,7 +367,7 @@ func (m *Model) acceptTagCompletion() bool {
 	if len(cands) == 0 {
 		return false
 	}
-	m.search.input.SetValue(before + "#" + cands[clampIndex(m.search.tagIdx, len(cands))].Tag + " ")
+	m.search.input.SetValue(before + model.QuoteTag(cands[clampIndex(m.search.tagIdx, len(cands))].Tag) + " ")
 	m.search.input.CursorEnd()
 	m.syncQuery()
 	return true
@@ -373,6 +423,7 @@ func (m *Model) syncQuery() {
 	m.setQuery(m.search.input.Value())
 	m.search.tagIdx = 0
 	m.clampCursors()
+	m.refreshDetailIfOpen()
 }
 
 // ─── Footer ──────────────────────────────────────────────────────────
@@ -427,7 +478,9 @@ func (m *Model) completionStrip(budget int) string {
 		var parts []string
 		used, last := 0, start-1
 		for i := start; i < len(cands); i++ {
-			text := fmt.Sprintf("#%s %d", cands[i].Tag, cands[i].Count)
+			// Render the term tab would write, quotes and all, so the strip and
+			// the input can't disagree about what a candidate is called.
+			text := fmt.Sprintf("%s %d", model.QuoteTag(cands[i].Tag), cands[i].Count)
 			cost := lipgloss.Width(text)
 			if len(parts) > 0 {
 				cost += 2

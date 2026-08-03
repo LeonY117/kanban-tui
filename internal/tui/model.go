@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"sort"
 	"strings"
@@ -23,14 +24,15 @@ import (
 type viewMode int
 
 const (
-	boardView   viewMode = iota
-	splitView            // list + detail side by side
-	columnView           // full-width single column
-	detailView           // full-screen detail editor
-	archiveView          // archive browser (split: list + read-only detail)
-	addView              // floating popup for new ticket
-	pickerView           // floating board picker (main + sprints)
-	moveView             // floating move-ticket picker (column / other board)
+	boardView    viewMode = iota
+	splitView             // list + detail side by side
+	columnView            // full-width single column
+	detailView            // full-screen detail editor
+	archiveView           // archive browser (split: list + read-only detail)
+	addView               // floating popup for new ticket
+	pickerView            // floating board picker (main + sprints)
+	moveView              // floating move-ticket picker (column / other board)
+	settingsView          // floating settings popup
 )
 
 // inputMode tracks what the user is typing into.
@@ -43,8 +45,8 @@ const (
 	inputSelect // for status picker
 )
 
-// statusDisplay maps internal status to sentence-case display name.
-var statusDisplay = map[model.Status]string{
+// defaultStatusDisplay maps internal status to sentence-case display name.
+var defaultStatusDisplay = map[model.Status]string{
 	model.StatusBacklog: "Backlog",
 	model.StatusTodo:    "Todo",
 	model.StatusDoing:   "Doing",
@@ -52,13 +54,49 @@ var statusDisplay = map[model.Status]string{
 	model.StatusHold:    "Hold",
 }
 
-// statusShort is the compact label used in the board picker count strip.
-var statusShort = map[model.Status]string{
+// defaultStatusShort is the compact label used in the board picker count strip.
+var defaultStatusShort = map[model.Status]string{
 	model.StatusBacklog: "B",
 	model.StatusTodo:    "T",
 	model.StatusDoing:   "Do",
 	model.StatusDone:    "Dn",
 	model.StatusHold:    "H",
+}
+
+// The labels the TUI actually draws. They start as the defaults and pick up
+// whatever config.json renames, so two people can call one column different
+// things without either board changing on disk.
+var (
+	statusDisplay = maps.Clone(defaultStatusDisplay)
+	statusShort   = maps.Clone(defaultStatusShort)
+)
+
+// ApplyConfig points the display labels and the keymap at the user's config,
+// and reports any key override that had to be refused. Call it before
+// NewModel. Separate from NewModel so tests set preferences explicitly rather
+// than inheriting whatever the machine running them has in config.json.
+func ApplyConfig(cfg store.Config) []string {
+	statusDisplay = maps.Clone(defaultStatusDisplay)
+	statusShort = maps.Clone(defaultStatusShort)
+	for status, label := range cfg.Labels() {
+		statusDisplay[status] = label
+		// Two renamed columns sharing an initial share a short code, so the
+		// picker's count strip can read "3W ... 4W". Accepted deliberately
+		// (Leon, 2026-08-03): the strip is a glance, not a control, and
+		// statusLabelsShort in config.json is the way out if it ever matters.
+		statusShort[status] = firstRune(label)
+	}
+	for status, label := range cfg.ShortLabels() {
+		statusShort[status] = label
+	}
+	return applyKeyBindings(cfg.Keys)
+}
+
+func firstRune(s string) string {
+	for _, r := range s {
+		return string(r)
+	}
+	return ""
 }
 
 var (
@@ -160,6 +198,8 @@ type Model struct {
 	moveTicketID     string
 	moveTicketStatus model.Status
 	moveTargetBoard  string
+
+	settings settingsState
 
 	// Source view for the active popup or picker — restored on close, also
 	// rendered as the backdrop behind the popup.
@@ -318,7 +358,7 @@ func (m *Model) footerLine() string {
 //
 // Bubble Tea truncates a rendered line to the terminal width with no ellipsis,
 // so an over-long footer loses its tail silently. The picker's footer is the
-// only place its keys are documented, and the tail is where "esc/tab close"
+// only place its keys are documented, and the tail is where the close hint
 // lives, so losing it strands the user in a popup with no visible way out.
 func fitHints(text string, width int) string {
 	if width < 1 || lipgloss.Width(text) <= width {
@@ -400,6 +440,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updatePicker(msg)
 		case moveView:
 			return m.updateMove(msg)
+		case settingsView:
+			return m.updateSettings(msg)
 		}
 	}
 	return m, nil
@@ -570,6 +612,8 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.rowLayout = !m.rowLayout
 	case key.Matches(msg, keys.Move):
 		return m.enterMovePopup()
+	case key.Matches(msg, keys.Help):
+		return m.enterSettings()
 	case key.Matches(msg, keys.Copy):
 		m.copyFocused()
 	case key.Matches(msg, keys.ArchiveView):
@@ -796,6 +840,8 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.refreshDetailEditors()
 	case key.Matches(msg, keys.Move):
 		return m.enterMovePopup()
+	case key.Matches(msg, keys.Help):
+		return m.enterSettings()
 	case key.Matches(msg, keys.Copy):
 		m.copyFocused()
 	case key.Matches(msg, keys.Layout):
@@ -857,6 +903,8 @@ func (m *Model) updateSplitDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.editMetaField()
 	case key.Matches(msg, keys.Move):
 		return m.enterMovePopup()
+	case key.Matches(msg, keys.Help):
+		return m.enterSettings()
 	case key.Matches(msg, keys.Copy):
 		m.copyFocused()
 	case key.Matches(msg, keys.Delete):
@@ -1062,6 +1110,8 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.archiveTicket()
 	case key.Matches(msg, keys.Move):
 		return m.enterMovePopup()
+	case key.Matches(msg, keys.Help):
+		return m.enterSettings()
 	case key.Matches(msg, keys.Copy):
 		m.copyFocused()
 	}
@@ -1126,6 +1176,8 @@ func (m *Model) updateDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.editMetaField()
 	case key.Matches(msg, keys.Move):
 		return m.enterMovePopup()
+	case key.Matches(msg, keys.Help):
+		return m.enterSettings()
 	case key.Matches(msg, keys.Copy):
 		m.copyFocused()
 	case key.Matches(msg, keys.Delete):
@@ -1158,9 +1210,10 @@ func (m *Model) editMetaField() (tea.Model, tea.Cmd) {
 	}
 	switch m.metaIdx {
 	case 0: // status
-		m.startSelect("Status", []string{"Todo", "Doing", "Done", "Hold"}, func(val string) {
-			status, err := model.ParseStatus(val)
-			if err != nil {
+		labels, byLabel := statusChoices()
+		m.startSelect("Status", labels, func(val string) {
+			status, ok := byLabel[val]
+			if !ok {
 				return
 			}
 			m.store.Update(m.editTicketID, func(ticket *model.Ticket) {
@@ -1193,12 +1246,14 @@ func (m *Model) editMetaField() (tea.Model, tea.Cmd) {
 
 func (m *Model) updateDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.editTitle.Focused() {
-		switch msg.String() {
-		case "esc", "enter":
+		switch {
+		case msg.String() == "esc", msg.String() == "enter":
 			m.editTitle.Blur()
 			m.saveEdit()
 			return m, nil
-		case "tab":
+		// Goes through the binding rather than a literal "tab": the picker key
+		// is rebindable, and a hard-coded alias here stayed live after a rebind.
+		case key.Matches(msg, keys.BoardPicker):
 			m.editTitle.Blur()
 			m.saveEdit()
 			return m.enterPicker()
@@ -1239,7 +1294,7 @@ func (m *Model) updateDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.saveEdit()
 			return m, nil
 		}
-		if msg.String() == "tab" {
+		if key.Matches(msg, keys.BoardPicker) {
 			m.editDesc.Blur()
 			m.saveEdit()
 			return m.enterPicker()
@@ -1385,10 +1440,31 @@ func (m *Model) updateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// viewSelect draws the meta-bar option strip.
+//
+// Options are user-supplied once columns can be renamed, so the strip has to
+// fit the terminal rather than assume four short words: it lays out on one
+// line, and bubbletea clips an over-long line with no ellipsis, which would
+// leave the user able to arrow onto an option they cannot read. Labels share
+// the space left after the prompt, shrinking together so the row stays legible
+// before it stays complete.
 func (m *Model) viewSelect() string {
+	prompt := helpStyle.Render(m.selectLabel + ":")
+	// Measure the decoration rather than assuming it: helpStyle carries
+	// Padding(0, 1), so every rendered part costs two cells beyond its text.
+	overhead := lipgloss.Width(helpStyle.Render("   "))
+	budget := m.width - lipgloss.Width(prompt)
+	perOption := 0
+	if n := len(m.selectOptions); n > 0 {
+		perOption = budget/n - overhead
+	}
+
 	var parts []string
-	parts = append(parts, helpStyle.Render(m.selectLabel+":"))
+	parts = append(parts, prompt)
 	for i, opt := range m.selectOptions {
+		if perOption > 0 && lipgloss.Width(opt) > perOption {
+			opt = ansi.Truncate(opt, perOption, "…")
+		}
 		if i == m.selectIdx {
 			parts = append(parts, selectedMarker.Render(" * "+opt))
 		} else {
@@ -2119,6 +2195,8 @@ func (m *Model) renderView(v viewMode) string {
 		return m.viewPicker()
 	case moveView:
 		return m.viewMove()
+	case settingsView:
+		return m.viewSettings()
 	default:
 		return m.viewBoard()
 	}
@@ -2127,7 +2205,7 @@ func (m *Model) renderView(v viewMode) string {
 // popupBackdrop renders the source view as the backdrop behind a popup, but
 // avoids recursing into popup views themselves.
 func (m *Model) popupBackdrop(source viewMode) string {
-	if source == addView || source == pickerView || source == moveView {
+	if source == addView || source == pickerView || source == moveView || source == settingsView {
 		return m.viewBoard()
 	}
 	return m.renderView(source)
@@ -2984,7 +3062,11 @@ func formatCounts(counts map[model.Status]int) string {
 func (m *Model) helpText() string {
 	switch m.view {
 	case boardView:
-		return "h/l nav | j/k select | v size | H/L move | m move | c copy id | a add | x archive | q quit"
+		return fmt.Sprintf("h/l nav | j/k select | %s/%s move | %s move | %s add | %s archive | %s settings | %s quit",
+			hk("card.moveLeft"), hk("card.moveRight"), hk("card.move"), hk("card.add"),
+			hk("card.archive"), hk("board.settings"), "q")
+	case settingsView:
+		return "j/k select | h/l section | enter change | esc close"
 	case moveView:
 		switch m.moveStage {
 		case moveStageColumn:
@@ -3000,14 +3082,21 @@ func (m *Model) helpText() string {
 			return "tab/↑↓ fields | enter apply | esc cancel"
 		}
 		if m.pickerShowArchived {
-			return "j/k select | enter switch | r rename | p pin | J/K reorder | x archive | u unarchive | X hide archived | esc/tab close"
+			return fmt.Sprintf("j/k select | enter switch | %s rename | %s pin | %s/%s reorder | %s archive | %s unarchive | %s hide archived | esc/%s close",
+				hk("board.rename"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
+				hk("card.archive"), hk("board.unarchive"), hk("board.archiveView"), hk("board.picker"))
 		}
-		return "j/k select | enter switch | r rename | p pin | J/K reorder | x archive | X show archived | esc/tab close"
+		return fmt.Sprintf("j/k select | enter switch | %s rename | %s pin | %s/%s reorder | %s archive | %s show archived | esc/%s close",
+			hk("board.rename"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
+			hk("card.archive"), hk("board.archiveView"), hk("board.picker"))
 	case archiveView:
-		return "j/k nav | u unarchive | c copy id | X/esc back | q quit"
+		return fmt.Sprintf("j/k nav | %s unarchive | %s copy id | %s/esc back | q quit",
+			hk("board.unarchive"), hk("card.copy"), hk("board.archiveView"))
 	case splitView:
 		if m.splitFocus == 0 {
-			return "j/k select | ] edit | + zoom | H/L move | m move | c copy id | x archive | - back | q quit"
+			return fmt.Sprintf("j/k select | %s edit | %s/%s move | %s move | %s archive | %s back | %s settings | q quit",
+				hk("board.panelNext"), hk("card.moveLeft"), hk("card.moveRight"), hk("card.move"),
+				hk("card.archive"), hk("board.unzoom"), hk("board.settings"))
 		}
 		if m.editDesc.Focused() {
 			return "enter save | shift+enter new line | esc save"
@@ -3017,12 +3106,16 @@ func (m *Model) helpText() string {
 		}
 		switch m.editField {
 		case 0:
-			return "h/l meta | j/k fields | enter edit | H/L move | m move to | x archive | q quit"
+			return fmt.Sprintf("h/l meta | j/k fields | enter edit | %s/%s move | %s move to | %s archive | q quit",
+				hk("card.moveLeft"), hk("card.moveRight"), hk("card.move"), hk("card.archive"))
 		case 1, 2:
-			return "j/k fields | enter/e edit | H/L move | h list | q quit"
+			return fmt.Sprintf("j/k fields | enter/%s edit | %s/%s move | h list | q quit",
+				hk("card.edit"), hk("card.moveLeft"), hk("card.moveRight"))
 		}
 	case columnView:
-		return "j/k select | H/L move | m move to | x archive | enter detail | - back | a add | q quit"
+		return fmt.Sprintf("j/k select | %s/%s move | %s move to | %s archive | enter detail | %s back | %s add | %s settings | q quit",
+			hk("card.moveLeft"), hk("card.moveRight"), hk("card.move"), hk("card.archive"),
+			hk("board.unzoom"), hk("card.add"), hk("board.settings"))
 	case detailView:
 		if m.editDesc.Focused() {
 			return "enter save | shift+enter new line | esc save"
@@ -3032,9 +3125,10 @@ func (m *Model) helpText() string {
 		}
 		switch m.editField {
 		case 0:
-			return "h/l meta | j/k fields | enter edit | H/L move | m move to | d delete | - back | q quit"
+			return fmt.Sprintf("h/l meta | j/k fields | enter edit | %s/%s move | %s move to | %s delete | %s back | q quit",
+				hk("card.moveLeft"), hk("card.moveRight"), hk("card.move"), hk("card.delete"), hk("board.unzoom"))
 		case 1, 2:
-			return "j/k fields | enter/e edit | esc back | q quit"
+			return fmt.Sprintf("j/k fields | enter/%s edit | esc back | q quit", hk("card.edit"))
 		}
 	}
 	return ""

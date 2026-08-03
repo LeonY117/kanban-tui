@@ -80,6 +80,10 @@ func ApplyConfig(cfg store.Config) []string {
 	statusShort = maps.Clone(defaultStatusShort)
 	for status, label := range cfg.Labels() {
 		statusDisplay[status] = label
+		// Two renamed columns sharing an initial share a short code, so the
+		// picker's count strip can read "3W ... 4W". Accepted deliberately
+		// (Leon, 2026-08-03): the strip is a glance, not a control, and
+		// statusLabelsShort in config.json is the way out if it ever matters.
 		statusShort[status] = firstRune(label)
 	}
 	for status, label := range cfg.ShortLabels() {
@@ -1436,10 +1440,31 @@ func (m *Model) updateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// viewSelect draws the meta-bar option strip.
+//
+// Options are user-supplied once columns can be renamed, so the strip has to
+// fit the terminal rather than assume four short words: it lays out on one
+// line, and bubbletea clips an over-long line with no ellipsis, which would
+// leave the user able to arrow onto an option they cannot read. Labels share
+// the space left after the prompt, shrinking together so the row stays legible
+// before it stays complete.
 func (m *Model) viewSelect() string {
+	prompt := helpStyle.Render(m.selectLabel + ":")
+	// Measure the decoration rather than assuming it: helpStyle carries
+	// Padding(0, 1), so every rendered part costs two cells beyond its text.
+	overhead := lipgloss.Width(helpStyle.Render("   "))
+	budget := m.width - lipgloss.Width(prompt)
+	perOption := 0
+	if n := len(m.selectOptions); n > 0 {
+		perOption = budget/n - overhead
+	}
+
 	var parts []string
-	parts = append(parts, helpStyle.Render(m.selectLabel+":"))
+	parts = append(parts, prompt)
 	for i, opt := range m.selectOptions {
+		if perOption > 0 && lipgloss.Width(opt) > perOption {
+			opt = ansi.Truncate(opt, perOption, "…")
+		}
 		if i == m.selectIdx {
 			parts = append(parts, selectedMarker.Render(" * "+opt))
 		} else {

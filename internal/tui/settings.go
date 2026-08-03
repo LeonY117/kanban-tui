@@ -546,7 +546,17 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// field, so take all of them. Anything bubbletea reports as a named
 			// chord ("ctrl+a", "shift+tab") is not KeyRunes and is ignored.
 			if msg.Type == tea.KeyRunes {
-				s.buf += string(msg.Runes)
+				room := maxColumnLabel - len([]rune(s.buf))
+				if room <= 0 {
+					s.notice = fmt.Sprintf("a column name stops at %d characters", maxColumnLabel)
+					return m, nil
+				}
+				add := msg.Runes
+				if len(add) > room {
+					add = add[:room]
+					s.notice = fmt.Sprintf("trimmed to %d characters", maxColumnLabel)
+				}
+				s.buf += string(add)
 			}
 		}
 		return m, nil
@@ -678,6 +688,15 @@ func (m *Model) settingsActivate() (tea.Model, tea.Cmd) {
 // ─── Render ──────────────────────────────────────────────────────────
 
 const settingsWidth = 56
+
+// maxColumnLabel bounds a column name. The ticket status picker lays every
+// label out on one unbounded horizontal line, so a few descriptive renames
+// pushed later options past the right edge of an 80-column terminal, where
+// bubbletea clips them with no ellipsis — you could arrow onto an option you
+// could not read. Capping at the point of naming is the cheapest place to stop
+// that. A hand-edited config.json can still exceed it; that is not clamped,
+// because silently rewriting what someone typed into a file is worse.
+const maxColumnLabel = 16
 
 // settingsHeight keeps the popup a constant share of the viewport, so
 // switching sections doesn't make it grow and shrink under the cursor.

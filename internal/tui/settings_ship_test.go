@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/LeonY117/kanban-tui/internal/store"
@@ -107,5 +109,65 @@ func TestPastedTextLandsInAColumnName(t *testing.T) {
 
 	if got := m.settings.labels[m.settings.labelStatus()]; got != "Waiting" {
 		t.Errorf("HOLD label = %q, want the pasted Waiting", got)
+	}
+}
+
+// The ticket status picker lays every label on one unbounded line, so a few
+// descriptive renames used to push later options off an 80-column terminal.
+func TestColumnNameIsCappedAtTheKeyboard(t *testing.T) {
+	restoreBindings(t)
+	m := settingsModel(t)
+	m.settings.section = sectionColumns
+	m.settings.idx = 4 // HOLD
+	press(m, "enter", "backspace", "backspace", "backspace", "backspace")
+
+	for _, r := range "Waiting on the customer to come back to us" {
+		press(m, string(r))
+	}
+	press(m, "enter")
+
+	got := m.settings.labels[m.settings.labelStatus()]
+	if len([]rune(got)) != maxColumnLabel {
+		t.Errorf("label = %q (%d runes), want it capped at %d",
+			got, len([]rune(got)), maxColumnLabel)
+	}
+	if !strings.Contains(m.settings.notice, "renamed to") {
+		t.Errorf("notice = %q, want the rename to have gone through", m.settings.notice)
+	}
+}
+
+// A paste longer than the cap is trimmed rather than refused.
+func TestPastedColumnNameIsTrimmedToTheCap(t *testing.T) {
+	restoreBindings(t)
+	m := settingsModel(t)
+	m.settings.section = sectionColumns
+	m.settings.idx = 4
+	press(m, "enter", "backspace", "backspace", "backspace", "backspace")
+	m.updateSettings(tea.KeyMsg{
+		Type: tea.KeyRunes, Runes: []rune("an extremely long column name"), Paste: true,
+	})
+	if n := len([]rune(m.settings.buf)); n != maxColumnLabel {
+		t.Errorf("buffer holds %d runes, want %d", n, maxColumnLabel)
+	}
+}
+
+// The option strip lays every label on one line, so once labels are
+// user-supplied it has to fit the terminal rather than assume four short words.
+func TestStatusPickerFitsEveryTerminalWidth(t *testing.T) {
+	restoreBindings(t)
+	for _, label := range []string{strings.Repeat("W", maxColumnLabel), "Todo"} {
+		ApplyConfig(store.Config{Columns: []store.ColumnConfig{
+			{Status: "TODO", Label: label}, {Status: "DOING", Label: label},
+			{Status: "DONE", Label: label}, {Status: "HOLD", Label: label},
+		}})
+		for _, w := range []int{40, 60, 80, 100, 120} {
+			m := testModel(t, "a card")
+			m.width, m.height, m.ready = w, 30, true
+			labels, _ := statusChoices()
+			m.startSelect("Status", labels, func(string) {})
+			if got := lipgloss.Width(m.viewSelect()); got > w {
+				t.Errorf("label %q at terminal %d: strip is %d cells", label, w, got)
+			}
+		}
 	}
 }

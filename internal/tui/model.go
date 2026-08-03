@@ -33,6 +33,7 @@ const (
 	pickerView            // floating board picker (main + sprints)
 	moveView              // floating move-ticket picker (column / other board)
 	settingsView          // floating settings popup
+	tagView               // floating tag picker, feeds the search
 )
 
 // inputMode tracks what the user is typing into.
@@ -201,6 +202,7 @@ type Model struct {
 
 	settings settingsState
 	search   searchState
+	tags     tagPickerState
 
 	// Source view for the active popup or picker — restored on close, also
 	// rendered as the backdrop behind the popup.
@@ -504,6 +506,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateMove(msg)
 		case settingsView:
 			return m.updateSettings(msg)
+		case tagView:
+			return m.updateTagPicker(msg)
 		}
 	}
 	return m, nil
@@ -667,6 +671,8 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case key.Matches(msg, keys.Search):
 		m.enterSearch()
+	case key.Matches(msg, keys.TagPicker):
+		return m.enterTagPicker()
 	case key.Matches(msg, keys.Add):
 		return m.enterAddPopup()
 	case key.Matches(msg, keys.Zero):
@@ -890,6 +896,8 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.refreshDetailEditors()
 	case key.Matches(msg, keys.Search):
 		m.enterSearch()
+	case key.Matches(msg, keys.TagPicker):
+		return m.enterTagPicker()
 	case key.Matches(msg, keys.Up):
 		if m.cursors[m.focusedCol] > 0 {
 			m.cursors[m.focusedCol]--
@@ -1187,6 +1195,8 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case key.Matches(msg, keys.Search):
 		m.enterSearch()
+	case key.Matches(msg, keys.TagPicker):
+		return m.enterTagPicker()
 	case key.Matches(msg, keys.Add):
 		return m.enterAddPopup()
 	case key.Matches(msg, keys.Zero):
@@ -2335,6 +2345,8 @@ func (m *Model) renderView(v viewMode) string {
 		return m.viewMove()
 	case settingsView:
 		return m.viewSettings()
+	case tagView:
+		return m.viewTagPicker()
 	default:
 		return m.viewBoard()
 	}
@@ -2343,7 +2355,7 @@ func (m *Model) renderView(v viewMode) string {
 // popupBackdrop renders the source view as the backdrop behind a popup, but
 // avoids recursing into popup views themselves.
 func (m *Model) popupBackdrop(source viewMode) string {
-	if source == addView || source == pickerView || source == moveView || source == settingsView {
+	if source == addView || source == pickerView || source == moveView || source == settingsView || source == tagView {
 		return m.viewBoard()
 	}
 	return m.renderView(source)
@@ -3202,9 +3214,9 @@ func (m *Model) helpText() string {
 		// search and settings lead: they are the two the board cannot teach you
 		// any other way, and fitHints drops from the end. The rest are either
 		// guessable or already on a card in front of you.
-		hints := fmt.Sprintf("h/l nav | j/k select | %s search | %s settings | %s/%s move | %s move | %s add | %s archive | %s quit",
-			hk("board.search"), hk("board.settings"), hk("card.moveLeft"), hk("card.moveRight"),
-			hk("card.move"), hk("card.add"), hk("card.archive"), "q")
+		hints := fmt.Sprintf("h/l nav | j/k select | %s search | %s tags | %s settings | %s/%s move | %s move | %s add | %s quit",
+			hk("board.search"), hk("board.tags"), hk("board.settings"), hk("card.moveLeft"), hk("card.moveRight"),
+			hk("card.move"), hk("card.add"), "q")
 		if m.searchActive() {
 			// Only the board view frees esc for this — elsewhere it still
 			// means "back", and shadowing that to clear a filter would be a
@@ -3214,6 +3226,8 @@ func (m *Model) helpText() string {
 		return hints
 	case settingsView:
 		return "j/k select | h/l section | enter change | esc close"
+	case tagView:
+		return "j/k select | enter filter by tag | esc close"
 	case moveView:
 		switch m.moveStage {
 		case moveStageColumn:

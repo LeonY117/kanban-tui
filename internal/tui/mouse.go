@@ -19,6 +19,7 @@ const (
 	zoneMoveRow
 	zoneSettingsRow
 	zoneSettingsTab
+	zoneTagRow
 )
 
 // hitZone is a rectangle registered during render so mouse events can be
@@ -98,6 +99,8 @@ func (m *Model) mouseScroll(msg tea.MouseMsg, dir int) (tea.Model, tea.Cmd) {
 		m.movePickerCursor(dir)
 	case zoneMoveRow:
 		m.moveMoveCursor(dir)
+	case zoneTagRow:
+		m.moveTagPickerCursor(dir)
 	case zoneSettingsRow, zoneSettingsTab:
 		m.moveSettingsCursor(dir)
 	}
@@ -204,6 +207,9 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case zoneMoveRow:
 		m.moveIdx = z.idx
 		return m.moveActivate()
+	case zoneTagRow:
+		m.tags.idx = z.idx
+		return m.tagPickerActivate()
 	case zoneSettingsRow:
 		// Select first, act on a second click on the same row — the row is
 		// already highlighted, so a single click that starts key capture would

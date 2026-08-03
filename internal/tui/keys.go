@@ -41,6 +41,7 @@ type keyMap struct {
 	Pin         key.Binding
 	Rename      key.Binding
 	Search      key.Binding
+	TagPicker   key.Binding
 }
 
 var keys = defaultKeyMap()
@@ -94,5 +95,6 @@ func defaultKeyMap() keyMap {
 		Pin:         key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pin board")),
 		Rename:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rename board")),
 		Search:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
+		TagPicker:   key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "tags")),
 	}
 }

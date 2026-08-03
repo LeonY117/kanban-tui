@@ -22,6 +22,9 @@ func sandboxTicket(t *testing.T) (*store.Store, *model.Ticket) {
 	}
 	rootCmd.SetOut(&bytes.Buffer{})
 	rootCmd.SetErr(&bytes.Buffer{})
+	// rootCmd is a package-level singleton, so args set here would otherwise
+	// leak into whichever test runs next.
+	t.Cleanup(func() { rootCmd.SetArgs(nil) })
 	return s, ticket
 }
 

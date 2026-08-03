@@ -44,6 +44,14 @@ func Execute() {
 	}
 }
 
+// silenceUsage stops cobra dumping the usage block after a runtime error.
+// It runs in PersistentPreRunE, i.e. after flags and args have already
+// validated, so genuine misuse ("accepts 1 arg(s)") still gets the usage that
+// answers it while "invalid status" stays a single line.
+func silenceUsage(cmd *cobra.Command) {
+	cmd.SilenceUsage = true
+}
+
 // statusValues lists the valid --status values straight from the model, so the
 // four commands that take one can't drift from ParseStatus or from each other.
 func statusValues() string {
@@ -112,21 +120,21 @@ func resolveStore(cmd *cobra.Command) error {
 }
 
 func init() {
-	// Execute() already prints the error. Without these, cobra prints it a
-	// second time and dumps the full usage block after it — three screens of
-	// noise around one line an agent needs to read.
+	// Execute() prints the error itself; without this cobra prints it a second
+	// time.
 	rootCmd.SilenceErrors = true
-	rootCmd.SilenceUsage = true
 
 	rootCmd.PersistentFlags().String("sprint", "", "Use a named sprint board instead of the main board")
 
 	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		silenceUsage(cmd)
 		return resolveStore(cmd)
 	}
 
 	// sprintsCmd and its children manage sprints themselves — they don't need
 	// `st` resolved. This no-op PreRunE overrides the one inherited from rootCmd.
 	sprintsCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		silenceUsage(cmd)
 		return nil
 	}
 

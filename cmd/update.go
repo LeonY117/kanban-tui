@@ -10,17 +10,26 @@ import (
 var updateCmd = &cobra.Command{
 	Use:   "update <id>",
 	Short: "Update a ticket",
+	Long:  "Update a ticket. <id> is the short form — 42 on main, KA7 on a sprint — and the prefix is implied on its own board, so 'kanban --sprint kanban update 7' resolves to KA7.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		id := args[0]
 
+		// Parse before st.Update — its callback has no error return, so a
+		// status parsed inside it could only ever be dropped silently.
+		var status model.Status
+		if cmd.Flags().Changed("status") {
+			s, _ := cmd.Flags().GetString("status")
+			parsed, err := model.ParseStatus(s)
+			if err != nil {
+				return err
+			}
+			status = parsed
+		}
+
 		err := st.Update(id, func(t *model.Ticket) {
-			if cmd.Flags().Changed("status") {
-				s, _ := cmd.Flags().GetString("status")
-				status, err := model.ParseStatus(s)
-				if err == nil {
-					t.Status = status
-				}
+			if status != "" {
+				t.Status = status
 			}
 			if cmd.Flags().Changed("title") {
 				t.Title, _ = cmd.Flags().GetString("title")
@@ -45,9 +54,9 @@ var updateCmd = &cobra.Command{
 }
 
 func init() {
-	updateCmd.Flags().String("status", "", "New status")
+	updateCmd.Flags().String("status", "", fmt.Sprintf("New status (%s)", statusValues()))
 	updateCmd.Flags().String("title", "", "New title")
-	updateCmd.Flags().String("desc", "", "New description")
+	updateCmd.Flags().String("desc", "", "New description — replaces the existing one rather than appending")
 	updateCmd.Flags().String("assigned-to", "", "New assignee")
 	updateCmd.Flags().StringSlice("tag", nil, "Replace tags")
 }

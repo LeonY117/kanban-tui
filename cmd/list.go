@@ -107,7 +107,7 @@ func tagsContain(tags []string, tag string) bool {
 }
 
 func init() {
-	listCmd.Flags().String("status", "", "Filter by status")
+	listCmd.Flags().String("status", "", fmt.Sprintf("Filter by status (%s)", statusValues()))
 	listCmd.Flags().String("tag", "", "Filter by tag")
 	listCmd.Flags().String("assigned-to", "", "Filter by assignee")
 	listCmd.Flags().Bool("json", false, "Output as JSON")

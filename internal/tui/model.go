@@ -992,6 +992,18 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) updateSplitDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// enter follows a borrowed card home from this pane too. Every write here
+	// is refused for a foreign card with a notice naming enter as the way to
+	// open it on its own board — and this was the one surface where that
+	// instruction did nothing, because enter reached the field handler and was
+	// refused by the same guard that had just recommended it.
+	//
+	// Safe ahead of the field handlers: jumpToForeign reports false for a
+	// local selection, and a borrowed card can never have a focused editor —
+	// guardMutate refuses before anything gets focus.
+	if key.Matches(msg, keys.Enter) && m.jumpToForeign() {
+		return m, nil
+	}
 	switch m.editField {
 	case 0: // metadata bar
 		return m.updateSplitDetailMeta(msg)

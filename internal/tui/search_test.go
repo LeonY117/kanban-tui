@@ -1051,3 +1051,31 @@ func TestBorrowedBadgeNeverEatsTheWholeCondensedRow(t *testing.T) {
 		}
 	}
 }
+
+func TestEnterFollowsABorrowedCardHomeFromTheDetailPane(t *testing.T) {
+	// The refusal names enter as the way to open a borrowed card on its own
+	// board, but the detail pane was the one surface that never wired it up:
+	// enter reached the field handler and was refused by the same guard that
+	// had just recommended it.
+	m, _ := boardWith(t, "auth local|TODO")
+	withSprint(t, "demo", "auth remote|TODO")
+
+	m.enterSplit()
+	typeSearch(m, "auth")
+	searchKeys(m, "ctrl+g", "enter")
+
+	// Select the borrowed card, then focus the detail pane.
+	m.cursors[1] = 1
+	m.refreshDetailEditors()
+	sel := m.selectedTicket()
+	if sel == nil || sel.Title != "auth remote" {
+		t.Fatalf("setup: selected %v, want the borrowed card", sel)
+	}
+	m.splitFocus, m.editField = 1, 0
+
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.sprintName != "demo" {
+		t.Errorf("board = %q, want the card's own board — the notice told the user to press this key", m.sprintName)
+	}
+}

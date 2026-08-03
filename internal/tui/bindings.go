@@ -139,18 +139,14 @@ func sanitizeBindings(overrides map[string]string) (map[string]string, []string)
 // Iteration order over the map isn't observable: it only fills another map and
 // appends to refused, which the caller sorts.
 func filterOverrides(overrides map[string]string) (map[string]string, []string) {
-	locked := map[string]bool{}
-	for _, a := range bindActions {
-		locked[a.id] = a.locked
-	}
 	reserved := reservedKeys()
 
 	valid := map[string]string{}
 	var refused []string
 	for id, k := range overrides {
-		isLocked, known := locked[id]
+		action, known := bindActionsByID[id]
 		switch {
-		case !known, isLocked, k == "", reserved[k]:
+		case !known, action.locked, k == "", reserved[k]:
 			refused = append(refused, id)
 		default:
 			valid[id] = k

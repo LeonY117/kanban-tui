@@ -67,6 +67,14 @@ var bindActions = []bindAction{
 	{id: "board.settings", group: "Board", label: "settings", def: "?"},
 }
 
+var bindActionsByID = func() map[string]bindAction {
+	byID := make(map[string]bindAction, len(bindActions))
+	for _, action := range bindActions {
+		byID[action.id] = action
+	}
+	return byID
+}()
+
 // ─── State ───────────────────────────────────────────────────────────
 
 type settingsSection int
@@ -116,13 +124,17 @@ func newSettingsState() settingsState {
 		changedBinds:   map[string]bool{},
 		changedLabels:  map[model.Status]bool{},
 	}
+	s.refreshLiveValues()
+	return s
+}
+
+func (s *settingsState) refreshLiveValues() {
 	for _, a := range bindActions {
 		s.binds[a.id] = hk(a.id)
 	}
 	for _, st := range model.ColumnOrder {
 		s.labels[st] = statusDisplay[st]
 	}
-	return s
 }
 
 // conflicts maps a key to every action claiming it, for keys claimed more than
@@ -317,43 +329,8 @@ func (m *Model) saveSettings() bool {
 
 	var saved store.Config
 	err := store.UpdateConfig(func(cfg *store.Config) error {
-		for _, a := range bindActions {
-			if !s.changedBinds[a.id] {
-				continue
-			}
-			if s.binds[a.id] == a.def {
-				delete(cfg.Keys, a.id)
-				continue
-			}
-			if cfg.Keys == nil {
-				cfg.Keys = map[string]string{}
-			}
-			cfg.Keys[a.id] = s.binds[a.id]
-		}
-		for _, status := range model.ColumnOrder {
-			if s.changedLabels[status] {
-				mergeColumnLabel(cfg, status, s.labels[status])
-			}
-		}
-		// Another settings page may have claimed a key after this one opened.
-		// Validate the merged assignment while the lock is still held; otherwise
-		// two individually clean working copies could write a conflict.
-		resolved, refused := sanitizeBindings(cfg.Keys)
-		changedKeys := map[string]bool{}
-		knownIDs := map[string]bool{}
-		for _, a := range bindActions {
-			knownIDs[a.id] = true
-			if s.changedBinds[a.id] {
-				changedKeys[s.binds[a.id]] = true
-			}
-			if s.changedBinds[a.id] && resolved[a.id] != s.binds[a.id] {
-				return fmt.Errorf("key %q was claimed by another config change", s.binds[a.id])
-			}
-		}
-		for _, id := range refused {
-			if knownIDs[id] && changedKeys[cfg.Keys[id]] {
-				return fmt.Errorf("key %q was claimed by another config change", cfg.Keys[id])
-			}
+		if err := s.mergeIntoConfig(cfg); err != nil {
+			return err
 		}
 		saved = *cfg
 		return nil
@@ -365,29 +342,72 @@ func (m *Model) saveSettings() bool {
 		s.notice = m.notice
 		return false
 	}
-	switch refused := ApplyConfig(saved); {
-	case len(refused) > 0:
-		m.notice = fmt.Sprintf("settings saved — %d binding(s) refused on load", len(refused))
-	case s.undone > 0:
-		// Saying only "settings saved" here would let someone leave believing an
-		// edit took when it had just been rolled back.
-		m.notice = fmt.Sprintf("settings saved — undid %d clashing change(s)", s.undone)
-	default:
-		m.notice = "settings saved"
-	}
-	s.undone = 0
+	m.setSettingsSavedNotice(ApplyConfig(saved))
 	// A concurrent writer may have changed an untouched known row. Reflect the
 	// config that is now live so reopening this Model cannot show stale values.
-	for _, a := range bindActions {
-		s.binds[a.id] = hk(a.id)
-	}
-	for _, status := range model.ColumnOrder {
-		s.labels[status] = statusDisplay[status]
-	}
+	s.refreshLiveValues()
 	s.changedBinds = map[string]bool{}
 	s.changedLabels = map[model.Status]bool{}
 	s.dirty = false
 	return true
+}
+
+func (s *settingsState) mergeIntoConfig(cfg *store.Config) error {
+	for _, a := range bindActions {
+		if !s.changedBinds[a.id] {
+			continue
+		}
+		if s.binds[a.id] == a.def {
+			delete(cfg.Keys, a.id)
+			continue
+		}
+		if cfg.Keys == nil {
+			cfg.Keys = map[string]string{}
+		}
+		cfg.Keys[a.id] = s.binds[a.id]
+	}
+	for _, status := range model.ColumnOrder {
+		if s.changedLabels[status] {
+			mergeColumnLabel(cfg, status, s.labels[status])
+		}
+	}
+	return s.validateMergedBindings(cfg.Keys)
+}
+
+// Another settings page may have claimed a key after this one opened. Validate
+// the merged assignment while the lock is still held so two individually clean
+// working copies cannot write a conflict.
+func (s *settingsState) validateMergedBindings(bindings map[string]string) error {
+	resolved, refused := sanitizeBindings(bindings)
+	changedKeys := map[string]bool{}
+	for _, a := range bindActions {
+		if s.changedBinds[a.id] {
+			changedKeys[s.binds[a.id]] = true
+		}
+		if s.changedBinds[a.id] && resolved[a.id] != s.binds[a.id] {
+			return fmt.Errorf("key %q was claimed by another config change", s.binds[a.id])
+		}
+	}
+	for _, id := range refused {
+		if _, known := bindActionsByID[id]; known && changedKeys[bindings[id]] {
+			return fmt.Errorf("key %q was claimed by another config change", bindings[id])
+		}
+	}
+	return nil
+}
+
+func (m *Model) setSettingsSavedNotice(refused []string) {
+	switch {
+	case len(refused) > 0:
+		m.notice = fmt.Sprintf("settings saved — %d binding(s) refused on load", len(refused))
+	case m.settings.undone > 0:
+		// Saying only "settings saved" here would let someone leave believing an
+		// edit took when it had just been rolled back.
+		m.notice = fmt.Sprintf("settings saved — undid %d clashing change(s)", m.settings.undone)
+	default:
+		m.notice = "settings saved"
+	}
+	m.settings.undone = 0
 }
 
 // mergeColumnLabel changes only one canonical status in the latest config.
@@ -727,22 +747,7 @@ func (m *Model) viewSettings() string {
 	header, tabSpans := s.header()
 	footer := s.footer(inner)
 	divider := " " + strings.Repeat("─", inner-2) + " "
-
-	var body []string
-	var rowIdx []int
-	cursorRow := 0
-	switch s.section {
-	case sectionShortcuts:
-		body, rowIdx, cursorRow = s.shortcutRows(inner)
-	case sectionColumns:
-		body, rowIdx, cursorRow = s.columnRows(inner)
-	case sectionAbout:
-		body = m.aboutRows(inner)
-		rowIdx = make([]int, len(body))
-		for i := range rowIdx {
-			rowIdx[i] = -1
-		}
-	}
+	body, rowIndexes, cursorRow := m.settingsBody(inner)
 
 	// Fixed height: the body window is whatever the chrome leaves, and a short
 	// section pads rather than shrinking the popup under the cursor.
@@ -750,6 +755,38 @@ func (m *Model) viewSettings() string {
 	if visible < 1 {
 		visible = 1
 	}
+	windowRows, windowIndexes := windowSettingsRows(body, rowIndexes, cursorRow, visible)
+	m.registerSettingsZones(origin, inner, len(header), tabSpans, windowIndexes)
+
+	rows := append([]string{}, header...)
+	rows = append(rows, windowRows...)
+	rows = append(rows, divider)
+	rows = append(rows, footer...)
+
+	content := lipgloss.NewStyle().PaddingLeft(1).Render(strings.Join(rows, "\n"))
+	popup := renderPanel("Settings", content, width, height, green, true)
+	return overlayAt(backdrop, popup, origin.x, origin.y)
+}
+
+func (m *Model) settingsBody(width int) ([]string, []int, int) {
+	switch m.settings.section {
+	case sectionShortcuts:
+		return m.settings.shortcutRows(width)
+	case sectionColumns:
+		return m.settings.columnRows(width)
+	case sectionAbout:
+		rows := m.aboutRows(width)
+		indexes := make([]int, len(rows))
+		for i := range indexes {
+			indexes[i] = -1
+		}
+		return rows, indexes, 0
+	default:
+		return nil, nil, 0
+	}
+}
+
+func windowSettingsRows(body []string, rowIndexes []int, cursorRow, visible int) ([]string, []int) {
 	start := 0
 	if len(body) > visible {
 		start = cursorRow - visible/2
@@ -764,46 +801,42 @@ func (m *Model) viewSettings() string {
 	if end > len(body) {
 		end = len(body)
 	}
-	winRows := append([]string{}, body[start:end]...)
-	winIdx := append([]int{}, rowIdx[start:end]...)
-	for len(winRows) < visible {
-		winRows = append(winRows, "")
-		winIdx = append(winIdx, -1)
+	rows := append([]string{}, body[start:end]...)
+	indexes := append([]int{}, rowIndexes[start:end]...)
+	for len(rows) < visible {
+		rows = append(rows, "")
+		indexes = append(indexes, -1)
 	}
 	dim := lipgloss.NewStyle().Foreground(dimGray)
 	if start > 0 {
-		winRows[0] = dim.Render(fmt.Sprintf(" ↑ %d more", start))
-		winIdx[0] = -1
+		rows[0] = dim.Render(fmt.Sprintf(" ↑ %d more", start))
+		indexes[0] = -1
 	}
 	if end < len(body) {
-		winRows[len(winRows)-1] = dim.Render(fmt.Sprintf(" ↓ %d more", len(body)-end))
-		winIdx[len(winRows)-1] = -1
+		rows[len(rows)-1] = dim.Render(fmt.Sprintf(" ↓ %d more", len(body)-end))
+		indexes[len(rows)-1] = -1
 	}
+	return rows, indexes
+}
 
-	// Zones. Content sits one cell in from the border plus the PaddingLeft(1).
+func (m *Model) registerSettingsZones(origin point, width, headerHeight int, tabSpans []tabSpan, rowIndexes []int) {
+	s := &m.settings
+	if s.capturing || s.editing || s.confirm != "" {
+		return
+	}
+	// Content sits one cell in from the border plus the PaddingLeft(1).
 	contentX := origin.x + 2
-	if !s.capturing && !s.editing && s.confirm == "" {
-		for i, span := range tabSpans {
-			m.addZone(hitZone{kind: zoneSettingsTab, x: contentX + span.x,
-				y: origin.y + 1, w: span.w, h: 1, idx: i})
-		}
-		for i, idx := range winIdx {
-			if idx < 0 {
-				continue
-			}
-			m.addZone(hitZone{kind: zoneSettingsRow, x: contentX,
-				y: origin.y + 1 + len(header) + i, w: inner, h: 1, idx: idx})
-		}
+	for i, span := range tabSpans {
+		m.addZone(hitZone{kind: zoneSettingsTab, x: contentX + span.x,
+			y: origin.y + 1, w: span.w, h: 1, idx: i})
 	}
-
-	rows := append([]string{}, header...)
-	rows = append(rows, winRows...)
-	rows = append(rows, divider)
-	rows = append(rows, footer...)
-
-	content := lipgloss.NewStyle().PaddingLeft(1).Render(strings.Join(rows, "\n"))
-	popup := renderPanel("Settings", content, width, height, green, true)
-	return overlayAt(backdrop, popup, origin.x, origin.y)
+	for i, idx := range rowIndexes {
+		if idx < 0 {
+			continue
+		}
+		m.addZone(hitZone{kind: zoneSettingsRow, x: contentX,
+			y: origin.y + 1 + headerHeight + i, w: width, h: 1, idx: idx})
+	}
 }
 
 type tabSpan struct{ x, w int }

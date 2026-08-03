@@ -14,9 +14,6 @@ import (
 	"github.com/LeonY117/kanban-tui/internal/store"
 )
 
-// PROTOTYPE — for feel only. Nothing here persists to disk yet; the point is
-// to settle the interaction before wiring it to config.json.
-
 var conflictRed = lipgloss.Color("1")
 
 // ─── The bindable surface ────────────────────────────────────────────
@@ -90,9 +87,13 @@ type settingsState struct {
 	binds  map[string]string
 	labels map[model.Status]string
 
-	// baseline is what binds looked like on open — used to undo just the
-	// conflicting edits when someone escapes out of a conflicted state.
-	baseline map[string]string
+	// Baselines identify the net rows changed during this visit. Saving merges
+	// only those rows into the latest config, so another process's unrelated
+	// edits and settings this build doesn't know about survive.
+	baseline       map[string]string
+	baselineLabels map[model.Status]string
+	changedBinds   map[string]bool
+	changedLabels  map[model.Status]bool
 
 	capturing bool   // waiting for the next keypress to become a binding
 	editing   bool   // typing a column label
@@ -106,9 +107,12 @@ type settingsState struct {
 
 func newSettingsState() settingsState {
 	s := settingsState{
-		binds:    map[string]string{},
-		labels:   map[model.Status]string{},
-		baseline: map[string]string{},
+		binds:          map[string]string{},
+		labels:         map[model.Status]string{},
+		baseline:       map[string]string{},
+		baselineLabels: map[model.Status]string{},
+		changedBinds:   map[string]bool{},
+		changedLabels:  map[model.Status]bool{},
 	}
 	for _, a := range bindActions {
 		s.binds[a.id] = hk(a.id)
@@ -158,6 +162,7 @@ func (s *settingsState) revertConflicts() int {
 			for _, id := range ids {
 				if s.binds[id] != s.baseline[id] {
 					s.binds[id] = s.baseline[id]
+					s.markBindingChanged(id)
 					n++
 				}
 			}
@@ -167,6 +172,7 @@ func (s *settingsState) revertConflicts() int {
 	for id, base := range s.baseline {
 		if s.binds[id] != base {
 			s.binds[id] = base
+			s.markBindingChanged(id)
 			n++
 		}
 	}
@@ -187,22 +193,26 @@ func (s *settingsState) labelTaken(self model.Status, name string) bool {
 	return false
 }
 
-// duplicateLabels reports column labels used by more than one status. Two
-// columns reading the same word is not merely ugly: the meta-bar status picker
-// keys its choices by label, so the duplicate shadows one status and picking it
-// writes the other one to the ticket.
-func (s *settingsState) duplicateLabels() map[string]int {
-	byLabel := map[string]int{}
-	for _, st := range model.ColumnOrder {
-		byLabel[strings.ToLower(strings.TrimSpace(s.labels[st]))]++
+func (s *settingsState) markBindingChanged(id string) {
+	if s.binds[id] == s.baseline[id] {
+		delete(s.changedBinds, id)
+	} else {
+		s.changedBinds[id] = true
 	}
-	out := map[string]int{}
-	for label, n := range byLabel {
-		if n > 1 {
-			out[label] = n
-		}
+	s.updateDirty()
+}
+
+func (s *settingsState) markLabelChanged(status model.Status) {
+	if s.labels[status] == s.baselineLabels[status] {
+		delete(s.changedLabels, status)
+	} else {
+		s.changedLabels[status] = true
 	}
-	return out
+	s.updateDirty()
+}
+
+func (s *settingsState) updateDirty() {
+	s.dirty = len(s.changedBinds) > 0 || len(s.changedLabels) > 0
 }
 
 // atDefault reports whether the focused row still holds its built-in value, so
@@ -250,6 +260,12 @@ func (m *Model) enterSettings() (tea.Model, tea.Cmd) {
 	for k, v := range m.settings.binds {
 		m.settings.baseline[k] = v
 	}
+	m.settings.baselineLabels = map[model.Status]string{}
+	for k, v := range m.settings.labels {
+		m.settings.baselineLabels[k] = v
+	}
+	m.settings.changedBinds = map[string]bool{}
+	m.settings.changedLabels = map[model.Status]bool{}
 	m.settings.idx = 0
 	m.settings.notice = ""
 	m.settings.warned = false
@@ -265,7 +281,9 @@ func (m *Model) closeSettings() {
 	m.settings.editing = false
 	m.settings.confirm = ""
 	if m.settings.dirty {
-		m.saveSettings()
+		if !m.saveSettings() {
+			return
+		}
 	}
 	m.restorePopupView(settingsView)
 }
@@ -274,64 +292,119 @@ func (m *Model) closeSettings() {
 //
 // Only what differs from the built-in default is stored, so a later change to
 // a default still reaches anyone who never overrode it.
-func (m *Model) saveSettings() {
+func (m *Model) saveSettings() bool {
 	s := &m.settings
 	// Defensive: closeSettings already refuses to leave a conflict behind, and
 	// a conflicted config would be silently refused on load — so a "saved"
 	// notice over one would be a lie.
 	if s.conflictCount() > 0 {
 		m.notice = "not saved — resolve the key conflicts first"
-		return
+		s.notice = m.notice
+		return false
 	}
 
-	// Start from what is on disk so fields this page doesn't expose survive.
-	// The short labels in the count strip are hand-edited only; rebuilding the
-	// config from the working copy alone silently dropped them.
-	cfg := store.LoadConfig()
-	shorts := map[string]string{}
-	for _, cc := range cfg.Columns {
-		if st, err := model.ParseStatus(cc.Status); err == nil && cc.Short != "" {
-			shorts[string(st)] = cc.Short
+	var saved store.Config
+	err := store.UpdateConfig(func(cfg *store.Config) error {
+		for _, a := range bindActions {
+			if !s.changedBinds[a.id] {
+				continue
+			}
+			if s.binds[a.id] == a.def {
+				delete(cfg.Keys, a.id)
+				continue
+			}
+			if cfg.Keys == nil {
+				cfg.Keys = map[string]string{}
+			}
+			cfg.Keys[a.id] = s.binds[a.id]
 		}
-	}
-
-	cfg.Columns = nil
-	for _, st := range model.ColumnOrder {
-		label := ""
-		if s.labels[st] != defaultStatusDisplay[st] {
-			label = s.labels[st]
+		for _, status := range model.ColumnOrder {
+			if s.changedLabels[status] {
+				mergeColumnLabel(cfg, status, s.labels[status])
+			}
 		}
-		short := shorts[string(st)]
-		if label == "" && short == "" {
-			continue
+		// Another settings page may have claimed a key after this one opened.
+		// Validate the merged assignment while the lock is still held; otherwise
+		// two individually clean working copies could write a conflict.
+		resolved, refused := sanitizeBindings(cfg.Keys)
+		changedKeys := map[string]bool{}
+		knownIDs := map[string]bool{}
+		for _, a := range bindActions {
+			knownIDs[a.id] = true
+			if s.changedBinds[a.id] {
+				changedKeys[s.binds[a.id]] = true
+			}
+			if s.changedBinds[a.id] && resolved[a.id] != s.binds[a.id] {
+				return fmt.Errorf("key %q was claimed by another config change", s.binds[a.id])
+			}
 		}
-		cfg.Columns = append(cfg.Columns,
-			store.ColumnConfig{Status: string(st), Label: label, Short: short})
-	}
-
-	cfg.Keys = nil
-	for _, a := range bindActions {
-		if a.locked || s.binds[a.id] == a.def {
-			continue
+		for _, id := range refused {
+			if knownIDs[id] && changedKeys[cfg.Keys[id]] {
+				return fmt.Errorf("key %q was claimed by another config change", cfg.Keys[id])
+			}
 		}
-		if cfg.Keys == nil {
-			cfg.Keys = map[string]string{}
-		}
-		cfg.Keys[a.id] = s.binds[a.id]
-	}
-
-	if err := store.SaveConfig(cfg); err != nil {
-		// m.err is set all over this file but rendered nowhere, so a failed
-		// save would otherwise report itself as a success.
+		saved = *cfg
+		return nil
+	})
+	if err != nil {
+		// Keep the popup and its dirty working copy alive so another esc can
+		// retry after the save problem has been fixed.
 		m.notice = "could not save settings: " + err.Error()
-		return
+		s.notice = m.notice
+		return false
 	}
-	if refused := ApplyConfig(cfg); len(refused) > 0 {
+	if refused := ApplyConfig(saved); len(refused) > 0 {
 		m.notice = fmt.Sprintf("settings saved — %d binding(s) refused on load", len(refused))
 	} else {
 		m.notice = "settings saved"
 	}
+	// A concurrent writer may have changed an untouched known row. Reflect the
+	// config that is now live so reopening this Model cannot show stale values.
+	for _, a := range bindActions {
+		s.binds[a.id] = hk(a.id)
+	}
+	for _, status := range model.ColumnOrder {
+		s.labels[status] = statusDisplay[status]
+	}
+	s.changedBinds = map[string]bool{}
+	s.changedLabels = map[model.Status]bool{}
 	s.dirty = false
+	return true
+}
+
+// mergeColumnLabel changes only one canonical status in the latest config.
+// Resetting clears every spelling of that status so an earlier duplicate
+// cannot become effective again; an entry with an independent short label is
+// retained, while a label-only entry disappears entirely.
+func mergeColumnLabel(cfg *store.Config, status model.Status, label string) {
+	last := -1
+	for i, cc := range cfg.Columns {
+		if parsed, err := model.ParseStatus(cc.Status); err == nil && parsed == status {
+			last = i
+		}
+	}
+	if label != defaultStatusDisplay[status] {
+		if last < 0 {
+			cfg.Columns = append(cfg.Columns, store.ColumnConfig{
+				Status: string(status), Label: label,
+			})
+			return
+		}
+		cfg.Columns[last].Label = label
+		return
+	}
+
+	columns := cfg.Columns[:0]
+	for _, cc := range cfg.Columns {
+		if parsed, err := model.ParseStatus(cc.Status); err == nil && parsed == status {
+			cc.Label = ""
+			if cc.Short == "" {
+				continue
+			}
+		}
+		columns = append(columns, cc)
+	}
+	cfg.Columns = columns
 }
 
 // statusChoices lists the statuses the meta-bar picker offers, labelled as they
@@ -353,7 +426,12 @@ func statusChoices() ([]string, map[string]model.Status) {
 		// status here, so picking the first "Done" could store DONE when the
 		// user meant TODO. Disambiguate rather than lose one.
 		if _, clash := byLabel[label]; clash {
-			label = fmt.Sprintf("%s (%s)", label, status)
+			for {
+				label = fmt.Sprintf("%s (%s)", label, status)
+				if _, clash = byLabel[label]; !clash {
+					break
+				}
+			}
 		}
 		labels = append(labels, label)
 		byLabel[label] = status
@@ -407,7 +485,7 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				s.notice = k + " is reserved — it's how you get around"
 			} else {
 				s.binds[a.id] = k
-				s.dirty = true
+				s.markBindingChanged(a.id)
 				s.notice = fmt.Sprintf("%s → %s", a.label, k)
 				s.warned = false
 			}
@@ -431,7 +509,7 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				s.notice = name + " is already another column — left unchanged"
 			default:
 				s.labels[st] = name
-				s.dirty = true
+				s.markLabelChanged(st)
 				s.notice = "renamed to " + name
 			}
 			s.editing, s.buf = false, ""
@@ -456,14 +534,16 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case "resetAll":
 				for _, a := range bindActions {
 					s.binds[a.id] = a.def
+					s.markBindingChanged(a.id)
 				}
-				s.dirty = true
 				s.notice = "all shortcuts back to defaults"
 			case "resetLabels":
+				// This replaces the complete set in one pass; the built-in labels
+				// are unique, so unlike a single-row reset it cannot make a clash.
 				for _, st := range model.ColumnOrder {
 					s.labels[st] = defaultStatusDisplay[st]
+					s.markLabelChanged(st)
 				}
-				s.dirty = true
 				s.notice = "all column names back to defaults"
 			}
 		} else {
@@ -520,7 +600,7 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			s.binds[a.id] = a.def
-			s.dirty = true
+			s.markBindingChanged(a.id)
 			s.notice = a.label + " back to " + a.def
 		case sectionColumns:
 			st := model.ColumnOrder[s.idx]
@@ -528,8 +608,12 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				s.notice = "already default"
 				return m, nil
 			}
+			if s.labelTaken(st, defaultStatusDisplay[st]) {
+				s.notice = defaultStatusDisplay[st] + " is already another column — left unchanged"
+				return m, nil
+			}
 			s.labels[st] = defaultStatusDisplay[st]
-			s.dirty = true
+			s.markLabelChanged(st)
 			s.notice = "back to " + defaultStatusDisplay[st]
 		}
 
@@ -812,7 +896,7 @@ func (s *settingsState) footer(w int) []string {
 
 	var lines []string
 	switch {
-	case s.conflictCount() > 0 && s.section == sectionShortcuts:
+	case s.conflictCount() > 0:
 		n := s.conflictCount()
 		noun := "key is"
 		if n > 1 {

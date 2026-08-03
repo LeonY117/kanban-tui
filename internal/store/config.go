@@ -61,33 +61,13 @@ func LoadConfig() Config {
 	return cfg
 }
 
-// SaveConfig writes config.json atomically, under a lock.
-//
-// The lock matters because every process shares one config.json.tmp: two TUIs
-// closing their settings at the same moment would otherwise write the same
-// temp file concurrently and rename whichever won, installing a mixture. Pins
-// take the same precaution for the same reason.
-func SaveConfig(cfg Config) error {
+func saveConfig(cfg Config) error {
 	cfg.Version = 1
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
-	if err := os.MkdirAll(defaultRoot(), 0755); err != nil {
-		return err
-	}
-
-	lock, err := os.OpenFile(filepath.Join(defaultRoot(), configLock),
-		os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		return err
-	}
-	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		return err
-	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 
 	tmp := configPath() + ".tmp"
 	if err := os.WriteFile(tmp, data, 0644); err != nil {
@@ -98,6 +78,46 @@ func SaveConfig(cfg Config) error {
 		return err
 	}
 	return nil
+}
+
+func editConfig(fn func() error) error {
+	if err := os.MkdirAll(defaultRoot(), 0755); err != nil {
+		return err
+	}
+	lock, err := os.OpenFile(filepath.Join(defaultRoot(), configLock),
+		os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	return fn()
+}
+
+// SaveConfig replaces config.json atomically, under a lock.
+//
+// The lock matters because every process shares one config.json.tmp: two TUIs
+// writing settings at the same moment would otherwise write the same temp file
+// concurrently and rename whichever won, installing a mixture. Callers doing
+// a read-modify-write should use UpdateConfig so the read is covered too.
+func SaveConfig(cfg Config) error {
+	return editConfig(func() error { return saveConfig(cfg) })
+}
+
+// UpdateConfig applies fn to the latest config and saves it while holding the
+// config lock for the entire read-modify-write. This keeps unrelated settings
+// written by another process between a page opening and closing.
+func UpdateConfig(fn func(*Config) error) error {
+	return editConfig(func() error {
+		cfg := LoadConfig()
+		if err := fn(&cfg); err != nil {
+			return err
+		}
+		return saveConfig(cfg)
+	})
 }
 
 // Labels resolves configured column names onto canonical statuses. Entries

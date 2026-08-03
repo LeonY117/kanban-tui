@@ -1,7 +1,10 @@
 package tui
 
 import (
+	"reflect"
 	"testing"
+
+	"github.com/charmbracelet/bubbles/key"
 
 	"github.com/LeonY117/kanban-tui/internal/store"
 )
@@ -12,7 +15,11 @@ import (
 func liveKeyHolders(t *testing.T) map[string]string {
 	t.Helper()
 	holders := map[string]string{}
-	for id, b := range bindingTargets(&keys) {
+	km := reflect.ValueOf(keys)
+	kmType := km.Type()
+	for i := 0; i < km.NumField(); i++ {
+		id := kmType.Field(i).Name
+		b := km.Field(i).Interface().(key.Binding)
 		for _, k := range b.Keys() {
 			if prev, dup := holders[k]; dup {
 				t.Errorf("%s and %s both answer to %q", prev, id, k)
@@ -21,6 +28,22 @@ func liveKeyHolders(t *testing.T) map[string]string {
 		}
 	}
 	return holders
+}
+
+func TestLiveKeyHoldersIncludesFixedBindingsOutsideSettings(t *testing.T) {
+	restoreBindings(t)
+	holders := liveKeyHolders(t)
+	for keyName, field := range map[string]string{
+		"0":           "Zero",
+		"4":           "Four",
+		"alt+enter":   "NewLine",
+		"shift+enter": "NewLine",
+		"ctrl+j":      "NewLine",
+	} {
+		if got := holders[keyName]; got != field {
+			t.Errorf("holder of %q = %q, want %s", keyName, got, field)
+		}
+	}
 }
 
 // The property the old single-pass sanitiser claimed and didn't have. Every

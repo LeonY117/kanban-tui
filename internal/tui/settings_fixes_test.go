@@ -23,6 +23,9 @@ func TestEscapingFromAnotherSectionStillCatchesAConflict(t *testing.T) {
 		t.Fatalf("expected a conflict, got %d", m.settings.conflictCount())
 	}
 	press(m, "2") // hop to Columns
+	if out := crop(m.View()); !strings.Contains(out, "used twice") {
+		t.Errorf("Columns footer hid the outstanding conflict:\n%s", out)
+	}
 	press(m, "esc")
 	if m.view != settingsView {
 		t.Fatal("esc closed the page from Columns while a key conflict stood")
@@ -39,6 +42,28 @@ func TestEscapingFromAnotherSectionStillCatchesAConflict(t *testing.T) {
 	if keys.Archive.Keys()[0] != "x" || keys.Move.Keys()[0] != "m" {
 		t.Errorf("archive=%v move=%v, want the defaults intact",
 			keys.Archive.Keys(), keys.Move.Keys())
+	}
+}
+
+// A hand-edited config can start with a custom label occupying another
+// column's default. Resetting just that row must not create a duplicate.
+func TestResettingAColumnRefusesADuplicateDefault(t *testing.T) {
+	restoreBindings(t)
+	ApplyConfig(store.Config{Columns: []store.ColumnConfig{
+		{Status: "TODO", Label: "Tasks"},
+		{Status: "DONE", Label: "Todo"},
+	}})
+	m := settingsModel(t)
+	m.settings.section = sectionColumns
+	m.settings.idx = 1 // TODO
+
+	press(m, "r")
+
+	if got := m.settings.labels[model.StatusTodo]; got != "Tasks" {
+		t.Errorf("TODO label = %q, want Tasks left in place", got)
+	}
+	if !strings.Contains(m.settings.notice, "already another column") {
+		t.Errorf("notice = %q, want the duplicate refusal", m.settings.notice)
 	}
 }
 
@@ -104,6 +129,31 @@ func TestStatusChoicesDisambiguatesADuplicateLabel(t *testing.T) {
 	}
 	if !seen[model.StatusTodo] || !seen[model.StatusDone] {
 		t.Errorf("byLabel = %v, want both TODO and DONE reachable", byLabel)
+	}
+}
+
+// A generated suffix can itself be a label from the file. Keep suffixing
+// until every picker entry is actually addressable.
+func TestStatusChoicesDisambiguatesAGeneratedSuffixCollision(t *testing.T) {
+	restoreBindings(t)
+	ApplyConfig(store.Config{Columns: []store.ColumnConfig{
+		{Status: "TODO", Label: "Foo"},
+		{Status: "DOING", Label: "Foo (DONE)"},
+		{Status: "DONE", Label: "Foo"},
+	}})
+
+	labels, byLabel := statusChoices()
+	if len(byLabel) != len(labels) {
+		t.Fatalf("%d labels collapsed to %d choices: %v", len(labels), len(byLabel), labels)
+	}
+	seen := map[model.Status]bool{}
+	for _, status := range byLabel {
+		seen[status] = true
+	}
+	for _, status := range []model.Status{model.StatusTodo, model.StatusDoing, model.StatusDone} {
+		if !seen[status] {
+			t.Errorf("%s disappeared from choices: %v", status, byLabel)
+		}
 	}
 }
 
@@ -201,7 +251,7 @@ func TestClickingASettingsTabSwitchesSection(t *testing.T) {
 	if columnsTab == nil {
 		t.Fatal("no zone for the Columns tab")
 	}
-	m.setSettingsSection(settingsSection(columnsTab.idx))
+	m.Update(mouseAt(columnsTab.x, columnsTab.y))
 	if m.settings.section != sectionColumns {
 		t.Errorf("section = %v, want Columns", m.settings.section)
 	}

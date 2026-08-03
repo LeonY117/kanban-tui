@@ -115,6 +115,13 @@ func defaultBindings() map[string]string {
 // version let a refused override "fall back to its own default", which is only
 // safe if that default was reserved for it; with {card.add: "e",
 // card.edit: "e"} both ended up on "e".
+//
+// This fixed-point rule deliberately over-drops in some hand-edited configs.
+// For example, {card.add: "z", card.edit: "z", card.archive: "e"} keeps only
+// card.add, although a maximal assignment could keep card.add and archive.
+// That outcome is safe, deterministic, and unreachable from settings because
+// the UI blocks conflicts before saving; matching/backtracking here is not
+// worth the extra complexity.
 func sanitizeBindings(overrides map[string]string) (map[string]string, []string) {
 	valid, refused := filterOverrides(overrides)
 	for {

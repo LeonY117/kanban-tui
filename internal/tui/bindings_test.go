@@ -2,6 +2,7 @@ package tui
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/LeonY117/kanban-tui/internal/model"
@@ -142,6 +143,56 @@ func TestApplyConfigRebindsTheLiveKeymap(t *testing.T) {
 	ApplyConfig(store.Config{})
 	if keys.Add.Keys()[0] != "a" {
 		t.Errorf("keys.Add = %v, want the default a back", keys.Add.Keys())
+	}
+}
+
+func TestHelpTextUsesReboundKeysOnEveryView(t *testing.T) {
+	restoreBindings(t)
+	refused := ApplyConfig(store.Config{Keys: map[string]string{
+		"board.rename":      "n",
+		"board.pin":         "b",
+		"card.reorderUp":    "U",
+		"card.reorderDown":  "D",
+		"card.archive":      "y",
+		"board.unarchive":   "i",
+		"board.archiveView": "Z",
+		"board.picker":      "t",
+		"card.moveLeft":     "<",
+		"card.moveRight":    ">",
+		"card.move":         "g",
+		"card.delete":       "!",
+		"board.unzoom":      "_",
+		"card.edit":         "f",
+	}})
+	if len(refused) != 0 {
+		t.Fatalf("test bindings were refused: %v", refused)
+	}
+
+	m := &Model{view: pickerView, pickerShowArchived: true}
+	for _, want := range []string{
+		"n rename", "b pin", "U/D reorder", "y archive", "i unarchive", "Z hide archived", "esc/t close",
+	} {
+		if got := m.helpText(); !strings.Contains(got, want) {
+			t.Errorf("picker help %q does not contain %q", got, want)
+		}
+	}
+
+	m.view, m.splitFocus, m.editField = splitView, 1, 0
+	for _, want := range []string{"</> move", "g move to", "y archive"} {
+		if got := m.helpText(); !strings.Contains(got, want) {
+			t.Errorf("split help %q does not contain %q", got, want)
+		}
+	}
+
+	m.view, m.editField = detailView, 0
+	for _, want := range []string{"</> move", "g move to", "! delete", "_ back"} {
+		if got := m.helpText(); !strings.Contains(got, want) {
+			t.Errorf("detail help %q does not contain %q", got, want)
+		}
+	}
+	m.editField = 1
+	if got := m.helpText(); !strings.Contains(got, "enter/f edit") {
+		t.Errorf("detail edit help %q does not contain rebound edit key", got)
 	}
 }
 

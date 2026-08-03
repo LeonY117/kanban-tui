@@ -32,7 +32,7 @@ const (
 	addView               // floating popup for new ticket
 	pickerView            // floating board picker (main + sprints)
 	moveView              // floating move-ticket picker (column / other board)
-	settingsView          // floating settings popup (PROTOTYPE)
+	settingsView          // floating settings popup
 )
 
 // inputMode tracks what the user is typing into.
@@ -354,7 +354,7 @@ func (m *Model) footerLine() string {
 //
 // Bubble Tea truncates a rendered line to the terminal width with no ellipsis,
 // so an over-long footer loses its tail silently. The picker's footer is the
-// only place its keys are documented, and the tail is where "esc/tab close"
+// only place its keys are documented, and the tail is where the close hint
 // lives, so losing it strands the user in a popup with no visible way out.
 func fitHints(text string, width int) string {
 	if width < 1 || lipgloss.Width(text) <= width {
@@ -3055,11 +3055,13 @@ func (m *Model) helpText() string {
 			return "tab/↑↓ fields | enter apply | esc cancel"
 		}
 		if m.pickerShowArchived {
-			return "j/k select | enter switch | r rename | p pin | J/K reorder | x archive | u unarchive | X hide archived | esc/tab close"
+			return fmt.Sprintf("j/k select | enter switch | %s rename | %s pin | %s/%s reorder | %s archive | %s unarchive | %s hide archived | esc/%s close",
+				hk("board.rename"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
+				hk("card.archive"), hk("board.unarchive"), hk("board.archiveView"), hk("board.picker"))
 		}
-		return fmt.Sprintf("j/k select | enter switch | %s rename | %s pin | %s/%s reorder | %s archive | %s show archived | esc/tab close",
+		return fmt.Sprintf("j/k select | enter switch | %s rename | %s pin | %s/%s reorder | %s archive | %s show archived | esc/%s close",
 			hk("board.rename"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
-			hk("card.archive"), hk("board.archiveView"))
+			hk("card.archive"), hk("board.archiveView"), hk("board.picker"))
 	case archiveView:
 		return fmt.Sprintf("j/k nav | %s unarchive | %s copy id | %s/esc back | q quit",
 			hk("board.unarchive"), hk("card.copy"), hk("board.archiveView"))
@@ -3077,7 +3079,8 @@ func (m *Model) helpText() string {
 		}
 		switch m.editField {
 		case 0:
-			return "h/l meta | j/k fields | enter edit | H/L move | m move to | x archive | q quit"
+			return fmt.Sprintf("h/l meta | j/k fields | enter edit | %s/%s move | %s move to | %s archive | q quit",
+				hk("card.moveLeft"), hk("card.moveRight"), hk("card.move"), hk("card.archive"))
 		case 1, 2:
 			return fmt.Sprintf("j/k fields | enter/%s edit | %s/%s move | h list | q quit",
 				hk("card.edit"), hk("card.moveLeft"), hk("card.moveRight"))
@@ -3095,9 +3098,10 @@ func (m *Model) helpText() string {
 		}
 		switch m.editField {
 		case 0:
-			return "h/l meta | j/k fields | enter edit | H/L move | m move to | d delete | - back | q quit"
+			return fmt.Sprintf("h/l meta | j/k fields | enter edit | %s/%s move | %s move to | %s delete | %s back | q quit",
+				hk("card.moveLeft"), hk("card.moveRight"), hk("card.move"), hk("card.delete"), hk("board.unzoom"))
 		case 1, 2:
-			return "j/k fields | enter/e edit | esc back | q quit"
+			return fmt.Sprintf("j/k fields | enter/%s edit | esc back | q quit", hk("card.edit"))
 		}
 	}
 	return ""

@@ -62,9 +62,34 @@ func TestRebindingSurvivesAReopen(t *testing.T) {
 	}
 }
 
+func TestLegalTwoKeySwapPersists(t *testing.T) {
+	restoreBindings(t)
+	m := settingsModel(t)
+	m.settings.idx = findAction(t, "card.add")
+	press(m, "enter", "x")
+	m.settings.idx = findAction(t, "card.archive")
+	press(m, "enter", "a")
+	if conflicts := m.settings.conflictCount(); conflicts != 0 {
+		t.Fatalf("completed swap has %d conflict(s)", conflicts)
+	}
+	press(m, "esc")
+
+	cfg := store.LoadConfig()
+	if cfg.Keys["card.add"] != "x" || cfg.Keys["card.archive"] != "a" {
+		t.Errorf("swap on disk = %v, want add=x and archive=a", cfg.Keys)
+	}
+	if keys.Add.Keys()[0] != "x" || keys.Archive.Keys()[0] != "a" {
+		t.Errorf("live swap = add %v, archive %v", keys.Add.Keys(), keys.Archive.Keys())
+	}
+}
+
 func TestRenamingAColumnSurvivesAReopen(t *testing.T) {
 	restoreBindings(t)
 	m := settingsModel(t)
+	holdTicket, err := m.store.Add("Waiting on review", "", model.StatusHold, nil, "", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
 	m.settings.section = sectionColumns
 	m.settings.idx = 4 // HOLD
 
@@ -84,10 +109,152 @@ func TestRenamingAColumnSurvivesAReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, tk := range board.Tickets {
-		if strings.EqualFold(string(tk.Status), "Wait") {
-			t.Errorf("ticket %s stored the label instead of the status", tk.ShortID)
+	ticket, _ := board.FindByID(holdTicket.ShortID)
+	if ticket == nil {
+		t.Fatalf("renamed column lost ticket %s", holdTicket.ShortID)
+	}
+	if ticket.Status != model.StatusHold {
+		t.Errorf("ticket %s status = %q, want canonical HOLD", ticket.ShortID, ticket.Status)
+	}
+}
+
+func TestUnicodeColumnNameSurvivesAReopen(t *testing.T) {
+	restoreBindings(t)
+	m := settingsModel(t)
+	m.settings.section = sectionColumns
+	m.settings.idx = 4 // HOLD
+
+	press(m, "enter", "backspace", "backspace", "backspace", "backspace")
+	for _, r := range "待機✨" {
+		press(m, string(r))
+	}
+	press(m, "enter", "esc")
+
+	ApplyConfig(store.LoadConfig())
+	if got := statusDisplay[model.StatusHold]; got != "待機✨" {
+		t.Errorf("HOLD label = %q, want 待機✨", got)
+	}
+}
+
+// The page is a stale working copy by the time it closes. A second writer's
+// unrelated known and future settings must survive, while this visit's reset
+// removes only the override the user actually reset.
+func TestSavingSettingsMergesASecondWritersEntries(t *testing.T) {
+	restoreBindings(t)
+	m := testModel(t, "Wire up the auth callback")
+	if err := store.SaveConfig(store.Config{Keys: map[string]string{
+		"card.archive": "z",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	ApplyConfig(store.LoadConfig())
+	m.enterSettings()
+	m.settings.idx = findAction(t, "card.archive")
+
+	// This lands after the page opened and before it saved.
+	concurrentColumns := []store.ColumnConfig{
+		{Status: "FUTURE", Label: "Later", Short: "L"},
+		{Status: "DONE", Label: "Shipped"},
+	}
+	if err := store.SaveConfig(store.Config{
+		Columns: concurrentColumns,
+		Keys: map[string]string{
+			"card.archive":  "z",
+			"card.copy":     "w",
+			"future.action": "!",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	press(m, "r", "esc") // reset only archive to its default
+
+	cfg := store.LoadConfig()
+	if _, ok := cfg.Keys["card.archive"]; ok {
+		t.Errorf("reset override still on disk: %v", cfg.Keys)
+	}
+	if cfg.Keys["card.copy"] != "w" || cfg.Keys["future.action"] != "!" {
+		t.Errorf("second writer's keys were lost: %v", cfg.Keys)
+	}
+	if len(cfg.Columns) != len(concurrentColumns) {
+		t.Fatalf("second writer's columns changed: %+v", cfg.Columns)
+	}
+	for i := range concurrentColumns {
+		if cfg.Columns[i] != concurrentColumns[i] {
+			t.Errorf("column %d = %+v, want %+v", i, cfg.Columns[i], concurrentColumns[i])
 		}
+	}
+	if m.settings.binds["card.copy"] != "w" || m.settings.labels[model.StatusDone] != "Shipped" {
+		t.Errorf("working copy stayed stale: copy=%q DONE=%q",
+			m.settings.binds["card.copy"], m.settings.labels[model.StatusDone])
+	}
+}
+
+func TestConcurrentSettingsConflictDoesNotReachDisk(t *testing.T) {
+	restoreBindings(t)
+	m := settingsModel(t)
+	m.settings.idx = findAction(t, "card.archive")
+	press(m, "enter", "z")
+
+	// A second page independently chose the same key after this one opened.
+	if err := store.SaveConfig(store.Config{Keys: map[string]string{
+		"card.copy": "z",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	press(m, "esc")
+
+	if m.view != settingsView {
+		t.Fatal("settings closed after its merged binding conflicted")
+	}
+	if !strings.Contains(m.settings.notice, "claimed by another config change") {
+		t.Errorf("notice = %q, want the concurrent conflict", m.settings.notice)
+	}
+	cfg := store.LoadConfig()
+	if _, ok := cfg.Keys["card.archive"]; ok {
+		t.Errorf("conflicting archive binding reached disk: %v", cfg.Keys)
+	}
+	if cfg.Keys["card.copy"] != "z" {
+		t.Errorf("second writer's binding changed: %v", cfg.Keys)
+	}
+}
+
+func TestSaveFailureKeepsSettingsOpenAndDirty(t *testing.T) {
+	restoreBindings(t)
+	m := settingsModel(t)
+	m.settings.idx = findAction(t, "card.archive")
+	press(m, "enter", "z")
+
+	originalBoard := os.Getenv("KANBAN_FILE")
+	blocker := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocker, []byte("block config root"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KANBAN_FILE", filepath.Join(blocker, "board.json"))
+	press(m, "esc")
+
+	if m.view != settingsView {
+		t.Fatal("settings closed after config persistence failed")
+	}
+	if !m.settings.dirty || m.settings.binds["card.archive"] != "z" {
+		t.Errorf("dirty working copy was lost: dirty=%v archive=%q",
+			m.settings.dirty, m.settings.binds["card.archive"])
+	}
+	if !strings.Contains(m.settings.notice, "could not save settings") {
+		t.Errorf("notice = %q, want the save failure", m.settings.notice)
+	}
+	if out := crop(m.View()); !strings.Contains(out, "could not save settings") {
+		t.Errorf("save failure is not rendered in the open popup:\n%s", out)
+	}
+
+	// Once the filesystem target is usable again, closing retries the same edit.
+	t.Setenv("KANBAN_FILE", originalBoard)
+	press(m, "esc")
+	if m.view == settingsView {
+		t.Fatal("settings stayed open after a successful retry")
+	}
+	if got := store.LoadConfig().Keys["card.archive"]; got != "z" {
+		t.Errorf("retried archive binding = %q, want z", got)
 	}
 }
 

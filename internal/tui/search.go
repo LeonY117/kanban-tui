@@ -302,6 +302,8 @@ func (m *Model) jumpToForeign() bool {
 	return true
 }
 
+// focusTicket puts the cursor on a card by id — silently doing nothing if the
+// filter leaves it off screen, which is why callers that care check first.
 func (m *Model) focusTicket(id string) {
 	for col, status := range model.ColumnOrder {
 		for i, t := range m.visibleTickets(status) {

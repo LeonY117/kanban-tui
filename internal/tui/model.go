@@ -3001,7 +3001,9 @@ func formatCounts(counts map[model.Status]int) string {
 func (m *Model) helpText() string {
 	switch m.view {
 	case boardView:
-		return "h/l nav | j/k select | v size | H/L move | m move | c copy id | a add | x archive | q quit"
+		return "h/l nav | j/k select | H/L move | m move | a add | x archive | ? settings | q quit"
+	case settingsView:
+		return "j/k select | h/l section | enter change | esc close"
 	case moveView:
 		switch m.moveStage {
 		case moveStageColumn:
@@ -3024,7 +3026,7 @@ func (m *Model) helpText() string {
 		return "j/k nav | u unarchive | c copy id | X/esc back | q quit"
 	case splitView:
 		if m.splitFocus == 0 {
-			return "j/k select | ] edit | + zoom | H/L move | m move | c copy id | x archive | - back | q quit"
+			return "j/k select | ] edit | H/L move | m move | x archive | - back | ? settings | q quit"
 		}
 		if m.editDesc.Focused() {
 			return "enter save | shift+enter new line | esc save"
@@ -3039,7 +3041,7 @@ func (m *Model) helpText() string {
 			return "j/k fields | enter/e edit | H/L move | h list | q quit"
 		}
 	case columnView:
-		return "j/k select | H/L move | m move to | x archive | enter detail | - back | a add | q quit"
+		return "j/k select | H/L move | m move to | x archive | enter detail | - back | a add | ? settings | q quit"
 	case detailView:
 		if m.editDesc.Focused() {
 			return "enter save | shift+enter new line | esc save"

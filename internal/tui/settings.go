@@ -82,17 +82,9 @@ const (
 
 var sectionNames = []string{"Shortcuts", "Columns", "About"}
 
-// headerVariant selects one of the three header treatments under test. Toggled
-// live with `\` so the options can be compared by feel rather than by mockup.
-const headerVariantCount = 3
-
-var headerVariantNames = []string{"tabs", "underline", "numbered"}
-
 type settingsState struct {
-	open    bool
 	section settingsSection
 	idx     int
-	variant int
 
 	// Working copies. Edits land here and only reach the real config on save,
 	// so esc can always walk it back.
@@ -117,7 +109,6 @@ func newSettingsState() settingsState {
 		binds:    map[string]string{},
 		labels:   map[model.Status]string{},
 		baseline: map[string]string{},
-		variant:  0,
 	}
 	for _, a := range bindActions {
 		s.binds[a.id] = a.def
@@ -134,11 +125,9 @@ func newSettingsState() settingsState {
 func (s *settingsState) conflicts() map[string][]string {
 	byKey := map[string][]string{}
 	for _, a := range bindActions {
-		k := s.binds[a.id]
-		if k == "" {
-			continue
+		if k := s.binds[a.id]; k != "" {
+			byKey[k] = append(byKey[k], a.id)
 		}
-		byKey[k] = append(byKey[k], a.id)
 	}
 	out := map[string][]string{}
 	for k, ids := range byKey {
@@ -148,11 +137,6 @@ func (s *settingsState) conflicts() map[string][]string {
 		}
 	}
 	return out
-}
-
-func (s *settingsState) conflicted(id string) bool {
-	c := s.conflicts()
-	return len(c[s.binds[id]]) > 1
 }
 
 func (s *settingsState) conflictCount() int { return len(s.conflicts()) }
@@ -170,6 +154,41 @@ func (s *settingsState) revertConflicts() int {
 		}
 	}
 	return n
+}
+
+// atDefault reports whether the focused row still holds its built-in value, so
+// the footer can say "already default" rather than offering a reset that would
+// do nothing.
+func (s *settingsState) atDefault() bool {
+	switch s.section {
+	case sectionShortcuts:
+		a := s.currentAction()
+		return a != nil && s.binds[a.id] == a.def
+	case sectionColumns:
+		if s.idx < 0 || s.idx >= len(model.ColumnOrder) {
+			return false
+		}
+		st := model.ColumnOrder[s.idx]
+		return s.labels[st] == statusDisplay[st]
+	}
+	return false
+}
+
+func (s *settingsState) rowCount() int {
+	switch s.section {
+	case sectionShortcuts:
+		return len(bindActions)
+	case sectionColumns:
+		return len(model.ColumnOrder)
+	}
+	return 0
+}
+
+func (s *settingsState) currentAction() *bindAction {
+	if s.section != sectionShortcuts || s.idx < 0 || s.idx >= len(bindActions) {
+		return nil
+	}
+	return &bindActions[s.idx]
 }
 
 // ─── Entry / update ──────────────────────────────────────────────────
@@ -198,6 +217,31 @@ func (m *Model) closeSettings() {
 	m.restorePopupView(settingsView)
 }
 
+func (m *Model) setSettingsSection(sec settingsSection) {
+	m.settings.section = (sec + 3) % 3
+	m.settings.idx = 0
+	m.settings.notice = ""
+}
+
+// moveSettingsCursor is the shared entry point for j/k and the wheel.
+func (m *Model) moveSettingsCursor(dir int) {
+	s := &m.settings
+	if s.capturing || s.editing || s.confirm != "" {
+		return
+	}
+	n := s.rowCount()
+	if n == 0 {
+		return
+	}
+	s.idx += dir
+	if s.idx < 0 {
+		s.idx = 0
+	}
+	if s.idx > n-1 {
+		s.idx = n - 1
+	}
+}
+
 func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	s := &m.settings
 	k := msg.String()
@@ -210,8 +254,7 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			s.notice = "cancelled"
 			return m, nil
 		}
-		a := s.currentAction()
-		if a != nil {
+		if a := s.currentAction(); a != nil {
 			s.binds[a.id] = k
 			s.notice = fmt.Sprintf("%s → %s", a.label, k)
 			s.warned = false
@@ -229,7 +272,7 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			st := model.ColumnOrder[s.idx]
 			if name := strings.TrimSpace(s.buf); name != "" {
 				s.labels[st] = name
-				s.notice = fmt.Sprintf("renamed to %s", name)
+				s.notice = "renamed to " + name
 			} else {
 				s.notice = "a column needs a name — left unchanged"
 			}
@@ -247,8 +290,7 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if s.confirm != "" {
-		switch k {
-		case "y", "Y":
+		if k == "y" || k == "Y" {
 			switch s.confirm {
 			case "resetAll":
 				for _, a := range bindActions {
@@ -261,86 +303,70 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 				s.notice = "all column names back to defaults"
 			}
-			s.confirm = ""
-		default:
-			s.confirm = ""
+		} else {
 			s.notice = "cancelled"
 		}
+		s.confirm = ""
 		return m, nil
 	}
 
 	switch {
-	case k == "\\":
-		s.variant = (s.variant + 1) % headerVariantCount
-		s.notice = "header: " + headerVariantNames[s.variant]
-
 	case k == "esc":
 		if s.section == sectionShortcuts && s.conflictCount() > 0 {
 			if !s.warned {
 				s.warned = true
-				s.notice = "esc again undoes the clashing changes"
 				return m, nil
 			}
 			n := s.revertConflicts()
-			s.notice = ""
 			m.notice = fmt.Sprintf("undid %d conflicting change(s)", n)
 		}
 		m.closeSettings()
 
-	case k == "tab", k == "]":
-		s.section = (s.section + 1) % 3
-		s.idx, s.notice = 0, ""
-	case k == "[":
-		s.section = (s.section + 2) % 3
-		s.idx, s.notice = 0, ""
+	// Sections move on h/l as well as tab — the same left/right idiom the board
+	// uses for columns, so the top menu reads as a row of columns too.
+	case k == "tab", key.Matches(msg, keys.Right):
+		m.setSettingsSection(s.section + 1)
+	case k == "shift+tab", key.Matches(msg, keys.Left):
+		m.setSettingsSection(s.section - 1)
 	case k == "1":
-		s.section, s.idx = sectionShortcuts, 0
+		m.setSettingsSection(sectionShortcuts)
 	case k == "2":
-		s.section, s.idx = sectionColumns, 0
+		m.setSettingsSection(sectionColumns)
 	case k == "3":
-		s.section, s.idx = sectionAbout, 0
+		m.setSettingsSection(sectionAbout)
 
 	case key.Matches(msg, keys.Up):
-		if s.idx > 0 {
-			s.idx--
-		}
+		m.moveSettingsCursor(-1)
 	case key.Matches(msg, keys.Down):
-		if s.idx < s.rowCount()-1 {
-			s.idx++
-		}
+		m.moveSettingsCursor(1)
 
 	case key.Matches(msg, keys.Enter):
+		return m.settingsActivate()
+
+	case k == "r":
 		switch s.section {
 		case sectionShortcuts:
 			a := s.currentAction()
-			if a == nil {
+			if a == nil || a.locked {
 				return m, nil
 			}
-			if a.locked {
-				s.notice = a.label + " can't be rebound — it's how you get out"
+			if s.binds[a.id] == a.def {
+				s.notice = "already default"
 				return m, nil
 			}
-			s.capturing = true
-			s.notice = ""
-		case sectionColumns:
-			s.editing = true
-			s.buf = s.labels[model.ColumnOrder[s.idx]]
-		}
-
-	case k == "d":
-		switch s.section {
-		case sectionShortcuts:
-			if a := s.currentAction(); a != nil && !a.locked {
-				s.binds[a.id] = a.def
-				s.notice = fmt.Sprintf("%s back to %s", a.label, a.def)
-			}
+			s.binds[a.id] = a.def
+			s.notice = a.label + " back to " + a.def
 		case sectionColumns:
 			st := model.ColumnOrder[s.idx]
+			if s.labels[st] == statusDisplay[st] {
+				s.notice = "already default"
+				return m, nil
+			}
 			s.labels[st] = statusDisplay[st]
 			s.notice = "back to " + statusDisplay[st]
 		}
 
-	case k == "D":
+	case k == "R":
 		switch s.section {
 		case sectionShortcuts:
 			s.confirm = "resetAll"
@@ -351,152 +377,188 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (s *settingsState) rowCount() int {
+// settingsActivate is what enter does, and where a click lands.
+func (m *Model) settingsActivate() (tea.Model, tea.Cmd) {
+	s := &m.settings
 	switch s.section {
 	case sectionShortcuts:
-		return len(bindActions)
+		a := s.currentAction()
+		if a == nil {
+			return m, nil
+		}
+		if a.locked {
+			s.notice = a.label + " can't be rebound — it's how you get out"
+			return m, nil
+		}
+		s.capturing = true
+		s.notice = ""
 	case sectionColumns:
-		return len(model.ColumnOrder)
+		s.editing = true
+		s.buf = s.labels[model.ColumnOrder[s.idx]]
 	}
-	return 0
-}
-
-func (s *settingsState) currentAction() *bindAction {
-	if s.section != sectionShortcuts || s.idx < 0 || s.idx >= len(bindActions) {
-		return nil
-	}
-	return &bindActions[s.idx]
+	return m, nil
 }
 
 // ─── Render ──────────────────────────────────────────────────────────
 
 const settingsWidth = 56
 
+// settingsHeight keeps the popup a constant share of the viewport, so
+// switching sections doesn't make it grow and shrink under the cursor.
+func (m *Model) settingsHeight() int {
+	h := m.height * 4 / 5
+	if h > m.height-2 {
+		h = m.height - 2
+	}
+	if h < 10 {
+		h = 10
+	}
+	return h
+}
+
 func (m *Model) viewSettings() string {
 	s := &m.settings
-	inner := settingsWidth - 4
+	width := settingsWidth
+	if width > m.width-4 {
+		width = m.width - 4
+	}
+	inner := width - 4
+	height := m.settingsHeight()
+	origin := m.popupOrigin(width, height)
 
-	header := s.header(inner)
+	header, tabSpans := s.header()
 	footer := s.footer(inner)
 	divider := " " + strings.Repeat("─", inner-2) + " "
 
 	var body []string
+	var rowIdx []int
 	cursorRow := 0
 	switch s.section {
 	case sectionShortcuts:
-		body, cursorRow = s.shortcutRows(inner)
+		body, rowIdx, cursorRow = s.shortcutRows(inner)
 	case sectionColumns:
-		body, cursorRow = s.columnRows(inner)
+		body, rowIdx, cursorRow = s.columnRows(inner)
 	case sectionAbout:
 		body = s.aboutRows(inner)
+		rowIdx = make([]int, len(body))
+		for i := range rowIdx {
+			rowIdx[i] = -1
+		}
 	}
 
-	// The shortcuts list is longer than any sensible popup, so the body
-	// scrolls while the header and footer stay put — the footer carries the
-	// conflict warning, which must never be the thing that scrolls away.
-	chrome := len(header) + len(footer) + 1
-	height := len(body) + chrome + 2
-	if max := m.height - 2; height > max {
-		height = max
-	}
-	if height < 8 {
-		height = 8
-	}
-	visible := height - 2 - chrome
+	// Fixed height: the body window is whatever the chrome leaves, and a short
+	// section pads rather than shrinking the popup under the cursor.
+	visible := height - 2 - len(header) - len(footer) - 1
 	if visible < 1 {
 		visible = 1
 	}
-	above, below := 0, 0
+	start := 0
 	if len(body) > visible {
-		start := cursorRow - visible/2
+		start = cursorRow - visible/2
 		if start < 0 {
 			start = 0
 		}
 		if start+visible > len(body) {
 			start = len(body) - visible
 		}
-		above, below = start, len(body)-start-visible
-		body = body[start : start+visible]
-		dim := lipgloss.NewStyle().Foreground(dimGray)
-		if above > 0 {
-			body[0] = dim.Render(fmt.Sprintf("  ↑ %d more", above))
+	}
+	end := start + visible
+	if end > len(body) {
+		end = len(body)
+	}
+	winRows := append([]string{}, body[start:end]...)
+	winIdx := append([]int{}, rowIdx[start:end]...)
+	for len(winRows) < visible {
+		winRows = append(winRows, "")
+		winIdx = append(winIdx, -1)
+	}
+	dim := lipgloss.NewStyle().Foreground(dimGray)
+	if start > 0 {
+		winRows[0] = dim.Render(fmt.Sprintf(" ↑ %d more", start))
+		winIdx[0] = -1
+	}
+	if end < len(body) {
+		winRows[len(winRows)-1] = dim.Render(fmt.Sprintf(" ↓ %d more", len(body)-end))
+		winIdx[len(winRows)-1] = -1
+	}
+
+	// Zones. Content sits one cell in from the border plus the PaddingLeft(1).
+	contentX := origin.x + 2
+	if !s.capturing && !s.editing && s.confirm == "" {
+		for i, span := range tabSpans {
+			m.addZone(hitZone{kind: zoneSettingsTab, x: contentX + span.x,
+				y: origin.y + 1, w: span.w, h: 1, idx: i})
 		}
-		if below > 0 {
-			body[len(body)-1] = dim.Render(fmt.Sprintf("  ↓ %d more", below))
+		for i, idx := range winIdx {
+			if idx < 0 {
+				continue
+			}
+			m.addZone(hitZone{kind: zoneSettingsRow, x: contentX,
+				y: origin.y + 1 + len(header) + i, w: inner, h: 1, idx: idx})
 		}
 	}
 
 	rows := append([]string{}, header...)
-	rows = append(rows, body...)
+	rows = append(rows, winRows...)
 	rows = append(rows, divider)
 	rows = append(rows, footer...)
-
-	width := settingsWidth
-	if width > m.width-4 {
-		width = m.width - 4
-	}
 
 	content := lipgloss.NewStyle().PaddingLeft(1).Render(strings.Join(rows, "\n"))
 	popup := renderPanel("Settings", content, width, height, green, true)
 	return m.centerOverPopup(popup, m.popupBackdrop(m.popupReturnView), width, height)
 }
 
-// header draws the section menu in whichever treatment is under test.
-func (s *settingsState) header(w int) []string {
+type tabSpan struct{ x, w int }
+
+// header draws the section tabs and reports where each one landed, so the same
+// layout can be registered as click targets without measuring styled text.
+func (s *settingsState) header() ([]string, []tabSpan) {
 	active := lipgloss.NewStyle().Foreground(green).Bold(true)
 	idle := lipgloss.NewStyle().Foreground(dimGray)
 
-	switch s.variant {
-	case 0: // tabs — the active section in brackets
-		var parts []string
-		for i, n := range sectionNames {
-			if settingsSection(i) == s.section {
-				parts = append(parts, active.Render("["+n+"]"))
-			} else {
-				parts = append(parts, idle.Render(" "+n+" "))
-			}
+	var b strings.Builder
+	var spans []tabSpan
+	b.WriteString(" ")
+	x := 1
+	for i, n := range sectionNames {
+		text := " " + n + " "
+		if settingsSection(i) == s.section {
+			text = "[" + n + "]"
+			b.WriteString(active.Render(text))
+		} else {
+			b.WriteString(idle.Render(text))
 		}
-		return []string{" " + strings.Join(parts, "  "), ""}
-
-	case 1: // underline — a rule under the active section only
-		var parts []string
-		var rule strings.Builder
-		rule.WriteString(" ")
-		for i, n := range sectionNames {
-			if settingsSection(i) == s.section {
-				parts = append(parts, active.Render(n))
-				rule.WriteString(strings.Repeat("─", len(n)))
-			} else {
-				parts = append(parts, idle.Render(n))
-				rule.WriteString(strings.Repeat(" ", len(n)))
-			}
-			rule.WriteString("   ")
-		}
-		return []string{" " + strings.Join(parts, "   "), rule.String()}
-
-	default: // numbered — press the number to jump
-		var parts []string
-		for i, n := range sectionNames {
-			tag := fmt.Sprintf("%d %s", i+1, n)
-			if settingsSection(i) == s.section {
-				parts = append(parts, active.Render(tag))
-			} else {
-				parts = append(parts, idle.Render(tag))
-			}
-		}
-		return []string{" " + strings.Join(parts, idle.Render(" · ")), ""}
+		spans = append(spans, tabSpan{x: x, w: len(text)})
+		x += len(text) + 1
+		b.WriteString(" ")
 	}
+	return []string{b.String(), ""}, spans
 }
 
-func (s *settingsState) shortcutRows(w int) ([]string, int) {
+// groupHeader separates a group from its rows with weight and a rule rather
+// than with indentation, so every row keeps the same left edge.
+func groupHeader(name string, w int) string {
+	rule := w - len(name) - 3
+	if rule < 1 {
+		rule = 1
+	}
+	return " " + lipgloss.NewStyle().Bold(true).Render(name) + " " +
+		lipgloss.NewStyle().Foreground(dimGray).Render(strings.Repeat("─", rule))
+}
+
+func (s *settingsState) shortcutRows(w int) ([]string, []int, int) {
 	conf := s.conflicts()
 	var rows []string
+	var idxs []int
 	cursorRow := 0
 	group := ""
 	for i, a := range bindActions {
 		if a.group != group {
+			if group != "" {
+				rows, idxs = append(rows, ""), append(idxs, -1)
+			}
 			group = a.group
-			rows = append(rows, lipgloss.NewStyle().Foreground(dimGray).Render(" "+group))
+			rows, idxs = append(rows, groupHeader(group, w)), append(idxs, -1)
 		}
 		marker := "  "
 		if i == s.idx {
@@ -508,8 +570,7 @@ func (s *settingsState) shortcutRows(w int) ([]string, int) {
 			keyText = "press a key…"
 		}
 
-		labelStyle := lipgloss.NewStyle()
-		keyStyle := lipgloss.NewStyle()
+		labelStyle, keyStyle := lipgloss.NewStyle(), lipgloss.NewStyle()
 		switch {
 		case len(conf[s.binds[a.id]]) > 1:
 			labelStyle = labelStyle.Foreground(conflictRed)
@@ -520,17 +581,18 @@ func (s *settingsState) shortcutRows(w int) ([]string, int) {
 		default:
 			keyStyle = keyStyle.Foreground(green)
 		}
-		rows = append(rows, padBetween(marker+labelStyle.Render("  "+a.label),
-			keyStyle.Render(keyText), w))
+		rows = append(rows, padBetween(" "+marker+labelStyle.Render(a.label),
+			keyStyle.Render(keyText)+" ", w))
+		idxs = append(idxs, i)
 	}
-	return rows, cursorRow
+	return rows, idxs, cursorRow
 }
 
-func (s *settingsState) columnRows(w int) ([]string, int) {
+func (s *settingsState) columnRows(w int) ([]string, []int, int) {
 	var rows []string
+	var idxs []int
 	cursorRow := 0
-	rows = append(rows, lipgloss.NewStyle().Foreground(dimGray).
-		Render(padBetween("  status", "name", w)))
+	rows, idxs = append(rows, groupHeader("Columns", w)), append(idxs, -1)
 	for i, st := range model.ColumnOrder {
 		marker := "  "
 		if i == s.idx {
@@ -541,32 +603,22 @@ func (s *settingsState) columnRows(w int) ([]string, int) {
 		style := lipgloss.NewStyle().Foreground(green)
 		if s.editing && i == s.idx {
 			name = "[" + s.buf + "▏]"
-			style = lipgloss.NewStyle().Foreground(green).Bold(true)
+			style = style.Bold(true)
 		}
 		rows = append(rows, padBetween(
-			marker+lipgloss.NewStyle().Foreground(dimGray).Render(string(st)),
-			style.Render(name), w))
+			" "+marker+lipgloss.NewStyle().Foreground(dimGray).Render(string(st)),
+			style.Render(name)+" ", w))
+		idxs = append(idxs, i)
 	}
-	rows = append(rows, "")
-	rows = append(rows, lipgloss.NewStyle().Foreground(dimGray).
-		Render("  the stored status never changes — board.json"))
-	rows = append(rows, lipgloss.NewStyle().Foreground(dimGray).
-		Render("  still says HOLD, and --status HOLD still works"))
-	return rows, cursorRow
+	return rows, idxs, cursorRow
 }
 
 func (s *settingsState) aboutRows(w int) []string {
 	dim := lipgloss.NewStyle().Foreground(dimGray)
 	return []string{
-		"  " + dim.Render("config") + "   ~/.kanban/config.json",
-		"  " + dim.Render("board") + "    ~/.kanban/board.json",
-		"",
-		dim.Render("  Shortcuts and column names are local display"),
-		dim.Render("  preferences. They never change what a board"),
-		dim.Render("  stores, so the CLI and agents keep one"),
-		dim.Render("  vocabulary whatever your screen says."),
-		"",
-		dim.Render("  PROTOTYPE — nothing here saves to disk yet."),
+		groupHeader("Files", w),
+		padBetween(" "+dim.Render("  config"), "~/.kanban/config.json ", w),
+		padBetween(" "+dim.Render("  board"), "~/.kanban/board.json ", w),
 	}
 }
 
@@ -579,31 +631,45 @@ func (s *settingsState) footer(w int) []string {
 		if s.confirm == "resetLabels" {
 			what = "every column name"
 		}
-		return []string{warn.Render("  reset " + what + " to defaults?  y / n")}
+		return []string{warn.Render(" reset " + what + " to defaults?  y / n"), ""}
 	}
 	if s.capturing {
-		return []string{dim.Render("  press any key to bind it · esc cancel")}
+		return []string{dim.Render(" press any key to bind it · esc cancel"), ""}
 	}
 	if s.editing {
-		return []string{dim.Render("  type a name · enter save · esc cancel")}
+		return []string{dim.Render(" type a name · enter save · esc cancel"), ""}
 	}
 
 	var lines []string
-	if n := s.conflictCount(); n > 0 && s.section == sectionShortcuts {
-		lines = append(lines, warn.Render(fmt.Sprintf("  %d key used twice — resolve to leave", n)))
-	}
-	if s.notice != "" {
-		lines = append(lines, dim.Render("  "+s.notice))
+	switch {
+	case s.conflictCount() > 0 && s.section == sectionShortcuts:
+		n := s.conflictCount()
+		noun := "key is"
+		if n > 1 {
+			noun = "keys are"
+		}
+		// Once esc has been refused, the line has to say what esc will do
+		// next — otherwise the only way out is a message the user can't see.
+		tail := "resolve to leave"
+		if s.warned {
+			tail = "esc again undoes them"
+		}
+		lines = append(lines, warn.Render(fmt.Sprintf(" %d %s used twice — %s", n, noun, tail)))
+	case s.notice != "":
+		lines = append(lines, dim.Render(" "+s.notice))
+	case s.atDefault():
+		lines = append(lines, dim.Render(" already default"))
+	default:
+		lines = append(lines, "")
 	}
 	switch s.section {
 	case sectionShortcuts:
-		lines = append(lines, dim.Render("  enter rebind · d reset row · D reset all"))
+		lines = append(lines, dim.Render(" enter rebind · r reset · R reset all · esc close"))
 	case sectionColumns:
-		lines = append(lines, dim.Render("  enter rename · d reset row · D reset all"))
+		lines = append(lines, dim.Render(" enter rename · r reset · R reset all · esc close"))
 	default:
-		lines = append(lines, dim.Render("  tab section · esc close"))
+		lines = append(lines, dim.Render(" h/l section · esc close"))
 	}
-	lines = append(lines, dim.Render("  \\ header style: "+headerVariantNames[s.variant]))
 	for i, l := range lines {
 		if lipgloss.Width(l) > w {
 			lines[i] = ansi.Truncate(l, w, "…")

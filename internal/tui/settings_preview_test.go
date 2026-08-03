@@ -75,12 +75,11 @@ func crop(full string) string {
 	return strings.Join(out, "\n")
 }
 
-func TestZZSettingsVariants(t *testing.T) {
-	for v := 0; v < headerVariantCount; v++ {
+func TestZZSettingsSections(t *testing.T) {
+	for _, sec := range []settingsSection{sectionShortcuts, sectionColumns, sectionAbout} {
 		m := settingsModel(t)
-		m.settings.variant = v
-		m.settings.section = sectionColumns
-		fmt.Printf("\n===== %d: %s =====\n", v, headerVariantNames[v])
+		m.settings.section = sec
+		fmt.Printf("\n===== %s =====\n", sectionNames[sec])
 		fmt.Println(crop(m.View()))
 	}
 }
@@ -115,7 +114,7 @@ func TestZZSettingsStates(t *testing.T) {
 	fmt.Println(crop(m2.View()))
 
 	// Reset-all confirm
-	press(m2, "D")
+	press(m2, "R")
 	fmt.Println("\n===== RESET ALL: confirm gate =====")
 	fmt.Println(crop(m2.View()))
 

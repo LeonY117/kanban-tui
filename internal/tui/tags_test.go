@@ -101,21 +101,22 @@ func TestTagPickerQuotesAMultiWordTag(t *testing.T) {
 }
 
 func TestTagPickerEscLeavesTheBoardAlone(t *testing.T) {
-	m, _ := boardWith(t, "a|TODO|cli", "b|TODO|ui")
+	// One press, one exit. The list is opened through the board picker, but
+	// esc goes to the board rather than back to that picker: the point of the
+	// list is the board it filters, and "up one level" is a meaning esc
+	// carries nowhere else in this TUI.
+	for _, k := range []tea.KeyType{tea.KeyEsc, tea.KeyTab} {
+		m, _ := boardWith(t, "a|TODO|cli", "b|TODO|ui")
 
-	openTags(m)
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		openTags(m)
+		m.Update(tea.KeyMsg{Type: k})
 
-	// esc steps back to the board picker it was opened from, not past it.
-	if m.view != pickerView {
-		t.Errorf("view = %v, want the board picker back", m.view)
-	}
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	if m.view != boardView {
-		t.Errorf("view = %v, want the board after a second esc", m.view)
-	}
-	if m.searchActive() {
-		t.Error("esc applied a filter anyway")
+		if m.view != boardView {
+			t.Errorf("%v: view = %v, want the board in one press", k, m.view)
+		}
+		if m.searchActive() {
+			t.Errorf("%v: leaving applied a filter anyway", k)
+		}
 	}
 }
 

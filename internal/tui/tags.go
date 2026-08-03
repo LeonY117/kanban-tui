@@ -97,14 +97,14 @@ func (m *Model) updateTagPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
-	case key.Matches(msg, keys.Esc), key.Matches(msg, keys.TagPicker):
-		// One level: back to the board list this was opened from.
-		m.closeTagPicker(false)
-	case key.Matches(msg, keys.BoardPicker):
-		// tab toggles the whole picker, here as it does on the board list, so
-		// it closes the stack rather than stepping back through it.
-		m.tags.fromPicker = false
-		m.restorePopupView(tagView)
+	case key.Matches(msg, keys.Esc), key.Matches(msg, keys.TagPicker),
+		key.Matches(msg, keys.BoardPicker):
+		// Every way out leaves for the board, not for the list this was opened
+		// from. One press, one exit (Leon, 2026-08-03) — stepping back to the
+		// board picker made esc mean "up one level" in the only place it means
+		// that, and put two presses between the tag list and the board it
+		// filters.
+		m.closeTagPicker()
 	case key.Matches(msg, keys.Up):
 		m.moveTagPickerCursor(-1)
 	case key.Matches(msg, keys.Down):
@@ -138,19 +138,15 @@ func (m *Model) tagPickerActivate() (tea.Model, tea.Cmd) {
 	m.setQuery(query)
 	m.search.input.SetValue(query)
 	m.search.open = false
-	m.closeTagPicker(true)
+	m.closeTagPicker()
 	m.refreshSearchSelection()
 	return m, nil
 }
 
-// closeTagPicker leaves the popup. esc steps back to the board picker it was
-// opened from; picking a tag goes all the way out, because the point of
-// picking is to look at the board it just filtered.
-func (m *Model) closeTagPicker(applied bool) {
-	if m.tags.fromPicker && !applied {
-		m.view = pickerView
-		return
-	}
+// closeTagPicker leaves the popup for the board, whether a tag was picked or
+// not. The point of the list is the board it filters, so every exit goes there
+// rather than back through the board picker it was opened from.
+func (m *Model) closeTagPicker() {
 	m.tags.fromPicker = false
 	m.restorePopupView(tagView)
 }

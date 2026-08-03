@@ -337,11 +337,24 @@ func (m *Model) pendingTag() (prefix string, before string, ok bool) {
 	}
 	// A trailing space ended the last term, so it is no longer being typed —
 	// unless a quote is still open, where the space is part of the tag.
-	if !openQuote && strings.LastIndexFunc(value, unicode.IsSpace) == len(value)-1 {
+	// Compare trimmed against the whole string rather than a byte index against
+	// len-1: multibyte whitespace (U+00A0 among others) survives the textinput
+	// sanitiser, and its start byte is never its last one, so an index test
+	// read a finished term as still being typed.
+	if !openQuote && strings.TrimRightFunc(value, unicode.IsSpace) != value {
 		return "", "", false
 	}
 	last := tokens[len(tokens)-1]
 	if !last.Tagged {
+		return "", "", false
+	}
+	// A negated term is not completed. The count beside a candidate is the
+	// number of cards accepting it leaves you with, and under negation that
+	// number describes the complement — so either it stops meaning what it
+	// means everywhere else, or the list has to explain itself. `-#cli` is
+	// still typed out in full; it is the completion that is declined, not the
+	// query (Leon, 2026-08-03).
+	if last.Negated {
 		return "", "", false
 	}
 	return last.Text, value[:last.Start], true
@@ -458,7 +471,7 @@ func (m *Model) searchFooter(badge string) string {
 	if strip := m.completionStrip(budget - lipgloss.Width(floor) - 2); strip != "" {
 		right = strip + "  " + fitHints(hints, budget-lipgloss.Width(strip)-2)
 	}
-	return lipgloss.JoinHorizontal(lipgloss.Center, badge, input, helpStyle.Render(right))
+	return clampLine(lipgloss.JoinHorizontal(lipgloss.Center, badge, input, helpStyle.Render(right)), m.width)
 }
 
 // completionStrip lists the tag completions that fit, marking the one tab
@@ -511,6 +524,16 @@ func (m *Model) completionStrip(budget int) string {
 // It is capped rather than wrapped or scrolled — the badge shares one line
 // with the board name and the id prefix, and a long query is still recognisable
 // from its first few terms.
+// maxFilterBadge is the widest the filter chip ever gets, before the terminal
+// itself lowers it further.
+const maxFilterBadge = 24
+
+// filterBadgeVisible reports whether the chip is on the footer right now. It
+// is off while the input is open, where the input itself shows the query.
+func (m *Model) filterBadgeVisible() bool {
+	return !m.search.open && m.filterBadge() != ""
+}
+
 func (m *Model) filterBadge() string {
 	// The archive browser's list is not filtered by any of this, so a filter
 	// shown against it would caption the wrong panel — the same reason the
@@ -519,19 +542,24 @@ func (m *Model) filterBadge() string {
 		return ""
 	}
 	label := m.search.query
-	if label == model.Untagged {
+	switch {
+	case label == model.Untagged:
 		label = "no tags"
-	}
-	if label == "" {
+	case label == "":
 		// Scope alone, with no query — the board is wider, not narrower.
-		return "all boards "
-	}
-	const maxFilterBadge = 24
-	if lipgloss.Width(label) > maxFilterBadge {
-		label = ansi.Truncate(label, maxFilterBadge, "…")
-	}
-	if m.search.global {
+		label = "all boards"
+	case m.search.global:
 		label += " · all boards"
+	}
+
+	// Bound against the terminal, and truncate only once the scope suffix is
+	// on. Capping the query first and appending " · all boards" afterwards
+	// made the one piece that was supposed to be bounded the piece that
+	// overflowed — 38 columns from a stated cap of 24, on a terminal whose
+	// supported minimum is 50.
+	cap := min(maxFilterBadge, max(m.width/3, 8))
+	if lipgloss.Width(label) > cap {
+		label = ansi.Truncate(label, cap, "…")
 	}
 	// The board name is already padded on both sides; one trailing space here
 	// separates the filter from the id prefix that follows it.

@@ -640,23 +640,63 @@ func TestGlobalScopeSkipsArchivedSprints(t *testing.T) {
 // ─── Footer geometry ─────────────────────────────────────────────────
 
 func TestFooterNeverOverflowsTheTerminal(t *testing.T) {
-	m, _ := boardWith(t, "auth refresh|TODO|customer,cli", "billing|TODO|cli")
-
-	for _, width := range []int{50, 60, 80, 120, 160} {
-		m.width = width
-		for _, stage := range []string{"typing", "committed"} {
-			typeSearch(m, "auth #c")
-			if stage == "committed" {
-				searchKeys(m, "enter")
-			}
-			for _, line := range strings.Split(m.View(), "\n") {
-				if got := lipgloss.Width(line); got > width {
-					t.Errorf("width %d, %s: a line rendered %d cells", width, stage, got)
-					break
+	// The board name, the query and the scope suffix all land on the same
+	// line, so the test has to push all three. An earlier version used the
+	// 4-cell name `main` with a 7-cell query and passed while the shipped
+	// footer rendered 163 cells into a 50-cell terminal: lipgloss pads every
+	// board row out to the widest line, so one cell of overflow wraps the
+	// whole frame, not just the footer.
+	queries := []string{
+		"auth #c",
+		"a-very-long-query-nobody-would-really-type-but-can",
+		model.Untagged,
+	}
+	for _, board := range []string{"", "customer-analytics-migration"} {
+		m, _ := boardWith(t, "auth refresh|TODO|customer,cli", "billing|TODO|cli")
+		if board != "" {
+			withSprint(t, board, "remote card|TODO|cli")
+			m.sprintName = board
+		}
+		for _, width := range []int{50, 60, 80, 120, 160} {
+			m.width = width
+			for _, q := range queries {
+				for _, global := range []bool{false, true} {
+					for _, stage := range []string{"typing", "committed"} {
+						typeSearch(m, q)
+						if global {
+							searchKeys(m, "ctrl+g")
+						}
+						if stage == "committed" {
+							searchKeys(m, "enter")
+						}
+						for _, line := range strings.Split(m.View(), "\n") {
+							if got := lipgloss.Width(line); got > width {
+								t.Errorf("board %q, width %d, query %q, global=%v, %s: a line rendered %d cells",
+									board, width, q, global, stage, got)
+								break
+							}
+						}
+						m.clearSearch()
+					}
 				}
 			}
-			m.clearSearch()
 		}
+	}
+}
+
+func TestTypingDoesNotPrintTheQueryTwice(t *testing.T) {
+	// The chip and the input say the same thing, and while the input is open
+	// the input is the one that is live. Rendering both cost the line ~25
+	// cells in the state with the least to spare.
+	m, _ := boardWith(t, "auth refresh|TODO|cli")
+
+	typeSearch(m, "auth")
+	if m.filterBadgeVisible() {
+		t.Error("the filter chip rendered beside the input that already shows the query")
+	}
+	searchKeys(m, "enter")
+	if !m.filterBadgeVisible() {
+		t.Error("the chip did not come back once the input closed")
 	}
 }
 
@@ -890,5 +930,124 @@ func TestCompletedTagStopsOfferingItself(t *testing.T) {
 
 	if cands := m.tagCandidates(); cands != nil {
 		t.Errorf("candidates = %+v, want none once the term is finished", cands)
+	}
+}
+
+func TestNegatedTagIsNotCompleted(t *testing.T) {
+	// Completing `-#cl` used to write `#cli `, dropping the negation and
+	// flipping the board to exactly the cards the user asked to exclude. The
+	// count beside a candidate is the number of cards accepting it leaves you
+	// with, and under negation that number describes the complement — so the
+	// completion is declined rather than made to mean two things.
+	m, _ := boardWith(t, "a|TODO|cli", "b|TODO|ui")
+
+	typeSearch(m, "-#cl")
+	if got := titlesOf(m.visibleTickets(model.StatusTodo)); len(got) != 1 || got[0] != "b" {
+		t.Fatalf("setup: visible = %v, want the card not tagged cli", got)
+	}
+	if m.tagCandidates() != nil {
+		t.Error("candidates were offered for a negated term")
+	}
+
+	searchKeys(m, "tab")
+
+	if got := m.search.input.Value(); got != "-#cl" {
+		t.Errorf("query = %q, want the negated term left exactly as typed", got)
+	}
+	if got := titlesOf(m.visibleTickets(model.StatusTodo)); len(got) != 1 || got[0] != "b" {
+		t.Errorf("visible = %v, want the filter still excluding cli", got)
+	}
+	// The positive form still completes — it is negation that is declined,
+	// not tag completion.
+	m.clearSearch()
+	typeSearch(m, "#cl")
+	searchKeys(m, "tab")
+	if got := m.search.input.Value(); got != "#cli " {
+		t.Errorf("query = %q, want the positive tag completed", got)
+	}
+}
+
+func TestZoomIsOffWhileSearchingOnEverySurface(t *testing.T) {
+	// guardZoom was wired into the board and split-list handlers but not into
+	// the three split-detail field handlers, which are reachable while a
+	// search is active by entering split view first and filtering after.
+	for _, focus := range []int{0, 1, 2, 3} {
+		m, _ := boardWith(t, "auth refresh|TODO", "auth logout|TODO")
+		m.enterSplit()
+		typeSearch(m, "auth")
+		searchKeys(m, "enter")
+		if !m.searchActive() || m.view != splitView {
+			t.Fatalf("setup: active=%v view=%v", m.searchActive(), m.view)
+		}
+		m.splitFocus = focus
+
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("+")})
+
+		if m.view == detailView {
+			t.Errorf("splitFocus=%d: zoom reached the detail view during a search", focus)
+		}
+	}
+}
+
+func TestEditingACardOutOfTheFilterRebindsTheEditors(t *testing.T) {
+	// A write can change a field the filter reads, so a card can leave the
+	// visible set on its own edit. The pane renders from selectedTicket while
+	// writes go to editTicketID, so a stale binding sends the next save to a
+	// card that is no longer on screen — with nothing looking wrong until it
+	// lands.
+	m, _ := boardWith(t, "auth refresh|TODO", "auth logout|TODO")
+
+	m.enterSplit()
+	typeSearch(m, "auth")
+	searchKeys(m, "enter")
+
+	first := m.selectedTicket()
+	if first == nil {
+		t.Fatal("setup: nothing selected")
+	}
+	m.editTicketID = first.ID
+	m.editTitle.SetValue("billing page") // no longer matches "auth"
+	m.editDesc.SetValue("")
+	m.saveEdit()
+
+	sel := m.selectedTicket()
+	if sel == nil {
+		t.Fatal("nothing selected after the edit")
+	}
+	if sel.ID == first.ID {
+		t.Fatal("setup: the edited card did not leave the filter")
+	}
+	if m.editTicketID != sel.ID {
+		t.Errorf("editors bound to %s while the pane shows %s (%q) — the next save writes off screen",
+			m.editTicketID, sel.ID, sel.Title)
+	}
+	if m.editTitle.Value() != sel.Title {
+		t.Errorf("title editor holds %q, want the card the pane shows (%q)", m.editTitle.Value(), sel.Title)
+	}
+}
+
+func TestBorrowedBadgeNeverEatsTheWholeCondensedRow(t *testing.T) {
+	// Sprint names are valid up to 64 characters. Prepended raw, a long one
+	// pushed the title out of the condensed row and let the panel clip the
+	// line, so the row lost its title with no ellipsis to say so.
+	m, _ := boardWith(t, "local card|TODO")
+	for _, width := range []int{20, 30, 40} {
+		line := m.renderTicketLine(
+			model.Ticket{ID: "x", Title: "fix the thing", ShortID: "DE1"}, false, width, green)
+		if got := lipgloss.Width(line); got > width {
+			t.Errorf("width %d: unbadged row rendered %d cells", width, got)
+		}
+	}
+
+	m.search.owners = map[string]string{"x": "2026-q3-platform-migration-workstream"}
+	for _, width := range []int{20, 30, 40} {
+		line := m.renderTicketLine(
+			model.Ticket{ID: "x", Title: "fix the thing", ShortID: "DE1"}, false, width, green)
+		if got := lipgloss.Width(line); got > width {
+			t.Errorf("width %d: badged row rendered %d cells", width, got)
+		}
+		if !strings.Contains(line, "…") {
+			t.Errorf("width %d: row was cut with no ellipsis: %q", width, line)
+		}
 	}
 }

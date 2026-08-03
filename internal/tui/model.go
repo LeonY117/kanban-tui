@@ -382,9 +382,13 @@ func (m *Model) footerLine() string {
 	// rather than in the hint text so it is never the thing that gets trimmed
 	// away — a narrowed board that looks like an empty one is the failure
 	// worth spending a permanent slot on.
-	if label := m.filterBadge(); label != "" {
+	// Not while the input is open: the input beside it already shows the
+	// query, and printing it twice costs the line ~25 columns in the one
+	// state where the input, the completions, the count and the hints are
+	// already competing for it.
+	if m.filterBadgeVisible() {
 		badge = lipgloss.JoinHorizontal(lipgloss.Top, badge,
-			lipgloss.NewStyle().Foreground(green).Bold(true).Render(label))
+			lipgloss.NewStyle().Foreground(green).Bold(true).Render(m.filterBadge()))
 	}
 	// A hint at what ids new tickets here will carry — not part of the
 	// board's name, so it appears here and nowhere else.
@@ -418,7 +422,20 @@ func (m *Model) footerLine() string {
 		rightText = fitHints(m.helpText(), budget)
 	}
 	help := helpStyle.Render(rightText)
-	return lipgloss.JoinHorizontal(lipgloss.Center, badge, help)
+	return clampLine(lipgloss.JoinHorizontal(lipgloss.Center, badge, help), m.width)
+}
+
+// clampLine is the floor under the footer: whatever the pieces above negotiate,
+// the line never leaves the terminal.
+//
+// It matters more than a trimmed hint would suggest. lipgloss pads every board
+// row out to the widest line in the frame, so a footer one cell too wide does
+// not wrap on its own — it widens the entire board and wraps all of it.
+func clampLine(line string, width int) string {
+	if width < 1 || lipgloss.Width(line) <= width {
+		return line
+	}
+	return ansi.Truncate(line, width, "…")
 }
 
 // fitHints drops whole hints off the end of a help line until it fits, keeping
@@ -554,6 +571,19 @@ func (m *Model) reload() {
 	// Under a global search the other boards are on screen too, so they go
 	// stale on the same beat this one does.
 	m.loadForeign()
+
+	// A write can change a field the filter reads — title, tags, assignee —
+	// so the card just saved may have left the visible set on its own edit.
+	// Cursors index what is on screen, so re-clamp, and re-seed the detail
+	// editors when the selection has moved out from under them: the pane
+	// renders from selectedTicket while writes go to editTicketID, and a
+	// mismatch sends the next save to a card nobody is looking at.
+	m.clampCursors()
+	if m.view == splitView || m.view == detailView {
+		if t := m.selectedTicket(); t == nil || t.ID != m.editTicketID {
+			m.refreshDetailEditors()
+		}
+	}
 }
 
 func (m *Model) selectedTicket() *model.Ticket {
@@ -1004,6 +1034,9 @@ func (m *Model) updateSplitDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.splitFocus = 0
 		m.view = boardView
 	case key.Matches(msg, keys.Zoom):
+		if !m.guardZoom() {
+			return m, nil
+		}
 		m.enterDetail()
 		return m, nil
 	case key.Matches(msg, keys.Down):
@@ -1089,6 +1122,9 @@ func (m *Model) updateSplitDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.splitFocus = 0
 		m.view = boardView
 	case key.Matches(msg, keys.Zoom):
+		if !m.guardZoom() {
+			return m, nil
+		}
 		m.enterDetail()
 		return m, nil
 	case key.Matches(msg, keys.MoveLeft):
@@ -1150,6 +1186,9 @@ func (m *Model) updateSplitDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.splitFocus = 0
 		m.view = boardView
 	case key.Matches(msg, keys.Zoom):
+		if !m.guardZoom() {
+			return m, nil
+		}
 		m.enterDetail()
 		return m, nil
 	case key.Matches(msg, keys.MoveLeft):
@@ -3232,12 +3271,6 @@ func (m *Model) helpText() string {
 	case settingsView:
 		return "j/k select | h/l section | enter change | esc close"
 	case tagView:
-		// Name where esc lands rather than saying "close": it steps back to
-		// the board list, and a hint that reads as "leave entirely" makes a
-		// second reflexive press look like the first one overshot.
-		if m.tags.fromPicker {
-			return fmt.Sprintf("j/k select | enter filter by tag | esc boards | %s close", hk("board.picker"))
-		}
 		return "j/k select | enter filter by tag | esc close"
 	case moveView:
 		switch m.moveStage {
@@ -3480,6 +3513,15 @@ func (m *Model) renderTicketLine(t model.Ticket, selected bool, width int, accen
 	// has to share it — the badge is what stops a foreign card reading as one
 	// of this board's own.
 	badge := m.boardBadge(t.ID)
+	// The badge is unbounded — sprint names are valid up to 64 characters —
+	// and prepending it raw drove maxTitle to its floor and overran the row
+	// anyway, leaving the panel rather than ansi.Truncate to do the cutting,
+	// so the row lost its title with no ellipsis to say anything was missing.
+	// Half the row is the badge's ceiling: enough to tell boards apart, never
+	// enough to leave nothing to read.
+	if maxBadge := width / 2; lipgloss.Width(badge) > maxBadge {
+		badge = ansi.Truncate(badge, maxBadge, "…")
+	}
 
 	title := t.Title
 	maxTitle := width - 1 - lipgloss.Width(badge)

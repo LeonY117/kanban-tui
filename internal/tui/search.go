@@ -6,6 +6,7 @@ import (
 	"unicode"
 
 	"github.com/LeonY117/kanban-tui/internal/model"
+	"github.com/LeonY117/kanban-tui/internal/store"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -34,10 +35,12 @@ type searchState struct {
 
 	tagIdx int // highlighted tag completion
 
-	// Cards borrowed from other boards under global scope, and the board each
-	// came from. Membership in owners is what makes a card foreign: the main
-	// board's name is "", so comparing names would read it as local.
-	foreign []model.Ticket
+	// The board keeps borrowed cards beside its local ones; the archive merges
+	// them into archiveEntries so they can sort by date. Both surfaces track the
+	// board each card came from. Membership in owners is what makes a card
+	// foreign: the main board's name is "", so comparing names would read it as
+	// local.
+	foreign []model.Ticket // board surface only
 	owners  map[string]string
 }
 
@@ -47,6 +50,22 @@ func newSearchState() searchState {
 	ti.CharLimit = 120
 	ti.Placeholder = "title, #tag, assignee"
 	return searchState{input: ti}
+}
+
+// reset puts one filter back to nothing — query, scope, completion and the
+// borrowed rows it had pulled in. It deliberately does not reload rows or
+// re-clamp a cursor: clearSearch does both for the active surface, while a
+// board switch resets both surfaces before either is shown.
+func (s *searchState) reset() {
+	s.open = false
+	s.input.Blur()
+	s.input.SetValue("")
+	s.query = ""
+	s.parsed = model.ParseQuery("")
+	s.tagIdx = 0
+	s.global = false
+	s.foreign = nil
+	s.owners = nil
 }
 
 // active reports whether this filter narrows or widens what its surface shows.
@@ -238,25 +257,9 @@ func (m *Model) cancelSearch() {
 // filter, not a separate mode: leaving it on after a clear would keep other
 // boards' cards on screen with nothing left to explain why.
 func (m *Model) clearSearch() {
-	m.resetSearch(m.activeSearch())
+	m.activeSearch().reset()
 	m.loadActiveForeign()
 	m.refreshActiveSelection()
-}
-
-// resetSearch puts one filter back to nothing — query, scope, completion and
-// the borrowed rows it had pulled in. Separate from clearSearch because a
-// board switch has to reset both filters, not just the one whose surface
-// happens to be on screen.
-func (m *Model) resetSearch(st *searchState) {
-	st.open = false
-	st.input.Blur()
-	st.input.SetValue("")
-	st.query = ""
-	st.parsed = model.ParseQuery("")
-	st.tagIdx = 0
-	st.global = false
-	st.foreign = nil
-	st.owners = nil
 }
 
 // refreshDetailIfOpen re-seeds the detail editors from whatever the cursor is
@@ -334,13 +337,28 @@ func (m *Model) loadForeign() {
 		return
 	}
 
-	entries, err := loadPickerEntries(false)
+	foreign, owners, err := m.loadOtherBoardTickets((*store.Store).Load)
 	if err != nil {
 		m.notice = "could not read the other boards: " + err.Error()
 		m.search.global = false
 		return
 	}
+	m.search.foreign = foreign
+	m.search.owners = owners
+}
 
+// loadOtherBoardTickets enumerates the active boards and collects their
+// tickets. The loader remains explicit at each call site because board and
+// archive search must read different files. A failure to enumerate is returned
+// for the caller's surface-specific notice; an unavailable individual board is
+// skipped on both surfaces.
+func (m *Model) loadOtherBoardTickets(load func(*store.Store) (*model.Board, error)) ([]model.Ticket, map[string]string, error) {
+	entries, err := loadPickerEntries(false)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var tickets []model.Ticket
 	owners := map[string]string{}
 	for _, e := range entries {
 		if e.name == m.sprintName {
@@ -350,16 +368,16 @@ func (m *Model) loadForeign() {
 		if err != nil {
 			continue
 		}
-		b, err := s.Load()
+		board, err := load(s)
 		if err != nil {
 			continue
 		}
-		for _, t := range b.Tickets {
+		for _, t := range board.Tickets {
 			owners[t.ID] = e.name
-			m.search.foreign = append(m.search.foreign, t)
+			tickets = append(tickets, t)
 		}
 	}
-	m.search.owners = owners
+	return tickets, owners, nil
 }
 
 // jumpToForeign follows a card borrowed by a global search home to the board
@@ -769,36 +787,17 @@ func (m *Model) loadForeignArchive() bool {
 		m.err = err
 		return false
 	}
-	m.archiveSearch.foreign = nil
 	m.archiveSearch.owners = nil
 	tickets := local.Tickets
 
 	if m.archiveSearch.global {
-		entries, err := loadPickerEntries(false)
+		foreign, owners, err := m.loadOtherBoardTickets((*store.Store).LoadArchive)
 		if err != nil {
 			m.notice = "could not read the other archives: " + err.Error()
 			m.archiveSearch.global = false
 		} else {
-			owners := map[string]string{}
-			for _, e := range entries {
-				if e.name == m.sprintName {
-					continue
-				}
-				s, err := boardStore(e.name)
-				if err != nil {
-					continue
-				}
-				arch, err := s.LoadArchive()
-				if err != nil {
-					continue
-				}
-				for _, t := range arch.Tickets {
-					owners[t.ID] = e.name
-					m.archiveSearch.foreign = append(m.archiveSearch.foreign, t)
-					tickets = append(tickets, t)
-				}
-			}
 			m.archiveSearch.owners = owners
+			tickets = append(tickets, foreign...)
 		}
 	}
 

@@ -3066,8 +3066,8 @@ func (m *Model) switchBoard(sprintName string) error {
 	//
 	// jumpToForeign and jumpToForeignArchive are the deliberate exceptions and
 	// re-apply their own query after calling this.
-	m.resetSearch(&m.search)
-	m.resetSearch(&m.archiveSearch)
+	m.search.reset()
+	m.archiveSearch.reset()
 	m.archiveEntries = nil
 	m.clampCursors()
 

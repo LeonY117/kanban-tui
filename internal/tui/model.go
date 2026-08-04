@@ -3066,21 +3066,7 @@ func (m *Model) viewPicker() string {
 	if m.renameTarget != "" {
 		rowCount += 4 // blank + heading + name + prefix
 	}
-	popupHeight := rowCount + 2
-	if popupHeight > m.height-4 {
-		popupHeight = m.height - 4
-	}
-	if popupHeight < 6 {
-		popupHeight = 6
-	}
-
-	popupWidth := m.pickerWidth
-	if popupWidth > m.width-4 {
-		popupWidth = m.width - 4
-	}
-	if popupWidth < 30 {
-		popupWidth = 30
-	}
+	popupWidth, popupHeight := m.listPopupSize(m.pickerWidth, rowCount)
 
 	backdrop := m.popupBackdrop(m.popupReturnView)
 	m.resetZones()
@@ -3089,28 +3075,52 @@ func (m *Model) viewPicker() string {
 	return overlayAt(backdrop, popup, origin.x, origin.y)
 }
 
+// listRowWidth is one row of a name-and-counts list: the name, a two-column
+// gap, and the right-aligned per-status counts.
+func listRowWidth(name string, counts map[model.Status]int) int {
+	return lipgloss.Width(name) + 2 + lipgloss.Width(formatCounts(counts))
+}
+
 // pickerPopupWidth sizes the popup to fit the widest row (name + counts).
 func pickerPopupWidth(entries []pickerEntry) int {
+	widest := 0
+	for _, e := range entries {
+		if w := listRowWidth(boardDisplayName(e.name), e.counts); w > widest {
+			widest = w
+		}
+	}
+	return widest
+}
+
+// listPopupSize is the shape of every name-and-counts popup — the board list
+// and the tag list are the same object at two different moments, so they size
+// by one rule rather than drifting apart by a dozen columns and half a screen.
+//
+// widestRow comes from listRowWidth; +6 is the marker (2), the outer border (2)
+// and the inner padding (2). The bounds keep a one-board list from rendering as
+// a sliver and a long board name from filling the terminal.
+func (m *Model) listPopupSize(widestRow, rowCount int) (width, height int) {
 	const (
 		minWidth = 40
 		maxWidth = 72
 	)
-	widest := 0
-	for _, e := range entries {
-		w := lipgloss.Width(boardDisplayName(e.name)) + 2 + lipgloss.Width(formatCounts(e.counts))
-		if w > widest {
-			widest = w
-		}
+	width = widestRow + 6
+	width = min(max(width, minWidth), maxWidth)
+	if width > m.width-4 {
+		width = m.width - 4
 	}
-	// +6: marker (2) + outer border (2) + inner padding (2)
-	width := widest + 6
-	if width < minWidth {
-		width = minWidth
+	if width < 30 {
+		width = 30
 	}
-	if width > maxWidth {
-		width = maxWidth
+
+	height = max(rowCount, 1) + 2
+	if height > m.height-4 {
+		height = m.height - 4
 	}
-	return width
+	if height < 6 {
+		height = 6
+	}
+	return width, height
 }
 
 func (m *Model) renderPickerPopup(width, height int, origin point) string {

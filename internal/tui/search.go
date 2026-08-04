@@ -14,8 +14,8 @@ import (
 
 // ─── State ───────────────────────────────────────────────────────────
 
-// searchState is the board filter: `/` opens an input over the footer hint
-// line and the board narrows live as you type.
+// searchState is a surface filter: `/` opens an input over the footer hint
+// line and the board or archive narrows live as you type.
 //
 // It is session-only and never persisted. Reopening a board to find half of it
 // missing, with no memory of why, is a worse trade than retyping four
@@ -675,22 +675,19 @@ func (m *Model) visibleArchiveEntries() []archiveEntry {
 		return m.archiveEntries
 	}
 	out := make([]archiveEntry, 0, len(m.archiveEntries))
+	var pendingHeader archiveEntry
 	for _, e := range m.archiveEntries {
 		if e.isHeader {
-			// The previous header kept nothing, so it goes now that its group
-			// has ended.
-			if n := len(out); n > 0 && out[n-1].isHeader {
-				out = out[:n-1]
-			}
-			out = append(out, e)
+			pendingHeader = e
 			continue
 		}
 		if m.archiveSearch.parsed.Match(e.ticket) {
+			if pendingHeader.isHeader {
+				out = append(out, pendingHeader)
+				pendingHeader = archiveEntry{}
+			}
 			out = append(out, e)
 		}
-	}
-	if n := len(out); n > 0 && out[n-1].isHeader {
-		out = out[:n-1]
 	}
 	return out
 }

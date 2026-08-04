@@ -16,6 +16,11 @@ func sandboxTicket(t *testing.T) (*store.Store, *model.Ticket) {
 	t.Helper()
 	t.Setenv("KANBAN_FILE", filepath.Join(t.TempDir(), "board.json"))
 	s := store.New("")
+	for _, name := range []string{"status", "priority"} {
+		flag := updateCmd.Flags().Lookup(name)
+		flag.Value.Set(flag.DefValue)
+		flag.Changed = false
+	}
 	ticket, err := s.Add("hello", "body", model.StatusTodo, nil, "", "test")
 	if err != nil {
 		t.Fatalf("add: %v", err)
@@ -50,6 +55,33 @@ func TestUpdateRejectsInvalidStatus(t *testing.T) {
 	}
 	if got.Status != model.StatusTodo {
 		t.Errorf("status changed on a failed update: got %s, want %s", got.Status, model.StatusTodo)
+	}
+}
+
+func TestUpdateAppliesValidPriority(t *testing.T) {
+	s, ticket := sandboxTicket(t)
+
+	rootCmd.SetArgs([]string{"update", ticket.ShortID, "--priority", "3"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	board, err := s.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := board.FindByID(ticket.ShortID)
+	if got.Priority != 3 {
+		t.Errorf("priority = %d, want 3", got.Priority)
+	}
+}
+
+func TestUpdateRejectsInvalidPriority(t *testing.T) {
+	_, ticket := sandboxTicket(t)
+
+	rootCmd.SetArgs([]string{"update", ticket.ShortID, "--priority", "4"})
+	if err := rootCmd.Execute(); err == nil || !strings.Contains(err.Error(), "invalid priority") {
+		t.Fatalf("invalid priority error = %v", err)
 	}
 }
 

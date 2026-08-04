@@ -170,7 +170,15 @@ func (s *Store) ensurePrefix(board *model.Board) string {
 }
 
 // Add creates a new ticket and saves the board. Returns the created ticket.
-func (s *Store) Add(title, description string, status model.Status, tags []string, assignedTo, createdBy string) (*model.Ticket, error) {
+func (s *Store) Add(title, description string, status model.Status, tags []string, assignedTo, createdBy string, priorities ...int) (*model.Ticket, error) {
+	priority := 0
+	if len(priorities) > 0 {
+		priority = priorities[0]
+	}
+	if err := model.ValidatePriority(priority); err != nil {
+		return nil, err
+	}
+
 	var ticket *model.Ticket
 	err := s.WithLock(func() error {
 		board, err := s.Load()
@@ -192,6 +200,7 @@ func (s *Store) Add(title, description string, status model.Status, tags []strin
 			Description: description,
 			Status:      status,
 			Tags:        tags,
+			Priority:    priority,
 			AssignedTo:  assignedTo,
 			CreatedAt:   now,
 			UpdatedAt:   now,

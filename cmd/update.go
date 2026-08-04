@@ -27,6 +27,13 @@ var updateCmd = &cobra.Command{
 			status = parsed
 		}
 
+		priority, _ := cmd.Flags().GetInt("priority")
+		if cmd.Flags().Changed("priority") {
+			if err := model.ValidatePriority(priority); err != nil {
+				return err
+			}
+		}
+
 		err := st.Update(id, func(t *model.Ticket) {
 			if status != "" {
 				t.Status = status
@@ -36,6 +43,9 @@ var updateCmd = &cobra.Command{
 			}
 			if cmd.Flags().Changed("desc") {
 				t.Description, _ = cmd.Flags().GetString("desc")
+			}
+			if cmd.Flags().Changed("priority") {
+				t.Priority = priority
 			}
 			if cmd.Flags().Changed("assigned-to") {
 				t.AssignedTo, _ = cmd.Flags().GetString("assigned-to")
@@ -57,6 +67,7 @@ func init() {
 	updateCmd.Flags().String("status", "", fmt.Sprintf("New status (%s)", statusValues()))
 	updateCmd.Flags().String("title", "", "New title")
 	updateCmd.Flags().String("desc", "", "New description — replaces the existing one rather than appending")
+	updateCmd.Flags().Int("priority", 0, "New priority score (0-3; 3 is highest)")
 	updateCmd.Flags().String("assigned-to", "", "New assignee")
 	updateCmd.Flags().StringSlice("tag", nil, "Replace tags")
 }

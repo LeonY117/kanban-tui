@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/LeonY117/kanban-tui/internal/model"
@@ -71,12 +72,14 @@ var listCmd = &cobra.Command{
 				}
 				fmt.Printf("\n%s (%d)\n", status, len(filtered))
 				fmt.Println(strings.Repeat("─", 40))
+				SortByPriority(filtered)
 				for _, t := range filtered {
 					printTicketLine(t)
 				}
 			}
 			fmt.Println()
 		} else {
+			SortByPriority(tickets)
 			for _, t := range tickets {
 				printTicketLine(t)
 			}
@@ -85,15 +88,32 @@ var listCmd = &cobra.Command{
 	},
 }
 
+// SortByPriority sorts tickets by priority, descending.
+// showing the highest priority tickets first when using "kanban list"
+func SortByPriority(tickets []model.Ticket) {
+	sort.Slice(tickets, func(i, j int) bool {
+		return tickets[i].Priority > tickets[j].Priority
+	})
+}
+
+// truncate truncates a string to a maximum length
+func truncate(s string, max int) string {
+	if len(s) > max {
+		return s[:max-3] + "..."
+	}
+	return s
+}
+
 func printTicketLine(t model.Ticket) {
-	parts := []string{fmt.Sprintf("  %s  %s", t.ShortID, t.Title)}
+	title := truncate(t.Title, 10)
+	parts := []string{fmt.Sprintf("|%-4s|%-10s|P%-3d ", t.ShortID, title, t.Priority)}
 	if len(t.Tags) > 0 {
 		parts = append(parts, fmt.Sprintf(" [%s]", strings.Join(t.Tags, ", ")))
 	}
 	if t.AssignedTo != "" {
 		parts = append(parts, fmt.Sprintf(" → %s", t.AssignedTo))
 	}
-	fmt.Println(strings.Join(parts, ""))
+	fmt.Println(strings.Join(parts, " "))
 }
 
 func tagsContain(tags []string, tag string) bool {

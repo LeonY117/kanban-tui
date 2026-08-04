@@ -182,7 +182,7 @@ type Model struct {
 	// Board picker state
 	pickerBoards       []pickerEntry
 	pickerIdx          int
-	pickerWidth        int
+	pickerWidestRow    int
 	pickerShowArchived bool   // when true, picker lists archived sprints below active ones
 	confirmArchive     string // non-empty = mid-confirm prompt for that sprint name
 
@@ -2598,7 +2598,7 @@ func (m *Model) loadPickerData() bool {
 		return false
 	}
 	m.pickerBoards = entries
-	m.pickerWidth = pickerPopupWidth(entries)
+	m.pickerWidestRow = widestPickerRow(entries)
 	return true
 }
 
@@ -3066,7 +3066,7 @@ func (m *Model) viewPicker() string {
 	if m.renameTarget != "" {
 		rowCount += 4 // blank + heading + name + prefix
 	}
-	popupWidth, popupHeight := m.listPopupSize(m.pickerWidth, rowCount)
+	popupWidth, popupHeight := m.listPopupSize(m.pickerWidestRow, rowCount)
 
 	backdrop := m.popupBackdrop(m.popupReturnView)
 	m.resetZones()
@@ -3081,8 +3081,8 @@ func listRowWidth(name string, counts map[model.Status]int) int {
 	return lipgloss.Width(name) + 2 + lipgloss.Width(formatCounts(counts))
 }
 
-// pickerPopupWidth sizes the popup to fit the widest row (name + counts).
-func pickerPopupWidth(entries []pickerEntry) int {
+// widestPickerRow measures the widest board row (name + counts).
+func widestPickerRow(entries []pickerEntry) int {
 	widest := 0
 	for _, e := range entries {
 		if w := listRowWidth(boardDisplayName(e.name), e.counts); w > widest {

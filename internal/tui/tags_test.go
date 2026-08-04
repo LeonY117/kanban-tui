@@ -6,6 +6,7 @@ import (
 
 	"github.com/LeonY117/kanban-tui/internal/model"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // openTags walks the real route: tab opens the board picker, t switches it to
@@ -196,12 +197,58 @@ func TestTagPickerScrollsPastTheWindow(t *testing.T) {
 	if want := len(m.tags.rows) - 1; m.tags.idx != want {
 		t.Fatalf("cursor at %d, want the last row %d", m.tags.idx, want)
 	}
-	start, rows := m.tagPickerWindow()
+	// A short terminal is what forces a window at all — at 40 rows the whole
+	// list fits, which is the point of dropping the fixed 12-row cap.
+	m.height = 14
+	_, height := m.listPopupSize(0, len(m.tags.rows))
+	start, rows := m.tagPickerWindow(height)
+	if rows >= len(m.tags.rows) {
+		t.Fatalf("setup: %d rows fit of %d, wanted a window", rows, len(m.tags.rows))
+	}
 	if m.tags.idx < start || m.tags.idx >= start+rows {
 		t.Errorf("cursor %d outside the window [%d,%d)", m.tags.idx, start, start+rows)
 	}
 	if view := m.View(); !strings.Contains(view, "no tags") {
 		t.Error("the last row is not on screen after scrolling to it")
+	}
+
+	// And at full height it does not window at all.
+	m.height = 40
+	if _, h := m.listPopupSize(0, len(m.tags.rows)); h < len(m.tags.rows)+2 {
+		t.Errorf("height %d truncates %d rows on a tall terminal", h, len(m.tags.rows))
+	}
+}
+
+func TestTagListAndBoardListAreTheSameShape(t *testing.T) {
+	// They are one object at two moments — same rows, same marker, same
+	// right-aligned counts — so a reader should not be able to tell them apart
+	// by size. They used to differ by 16 columns of minimum width and a hard
+	// 12-row cap that the board list never had.
+	m, _ := boardWith(t, "a|TODO|cli", "b|TODO|ui")
+	withSprint(t, "demo", "remote|TODO|cli")
+
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	boardPopup := m.View()
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	tagPopup := m.View()
+
+	widthOf := func(view string) int {
+		widest := 0
+		for _, line := range strings.Split(view, "\n") {
+			if strings.ContainsAny(line, "╭╰│") {
+				if w := lipgloss.Width(strings.TrimRight(line, " ")); w > widest {
+					widest = w
+				}
+			}
+		}
+		return widest
+	}
+	b, tg := widthOf(boardPopup), widthOf(tagPopup)
+	if b == 0 || tg == 0 {
+		t.Fatalf("setup: measured no popup border (board %d, tag %d)", b, tg)
+	}
+	if b != tg {
+		t.Errorf("board popup renders %d cells wide, tag popup %d — same rows, same rule", b, tg)
 	}
 }
 

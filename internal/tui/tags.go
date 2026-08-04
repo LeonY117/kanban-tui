@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/LeonY117/kanban-tui/internal/model"
@@ -26,20 +25,15 @@ type tagRow struct {
 }
 
 type tagPickerState struct {
-	rows  []tagRow
-	idx   int
-	start int // first row rendered; the window slides to keep idx visible
+	rows []tagRow
+	idx  int
 }
-
-// tagPickerMaxRows caps the popup so a board with forty tags doesn't produce a
-// list taller than the terminal.
-const tagPickerMaxRows = 12
 
 func (m *Model) enterTagPicker() (tea.Model, tea.Cmd) {
 	// The pool follows the active scope, so under a global search this lists
 	// every board's tags — matching what picking one would then show.
 	m.tags.rows = m.buildTagRows()
-	m.tags.idx, m.tags.start = 0, 0
+	m.tags.idx = 0
 
 	// Land on whatever the board is filtered by, so the list doubles as a
 	// reminder of what is applied.
@@ -146,69 +140,46 @@ func (m *Model) closeTagPicker() {
 	m.restorePopupView(tagView)
 }
 
-// tagPickerWindow is the slice of rows on screen, sliding to keep the cursor
-// in view. Returns the start index and how many rows fit.
-func (m *Model) tagPickerWindow() (start, rows int) {
-	rows = len(m.tags.rows)
-	if rows > tagPickerMaxRows {
-		rows = tagPickerMaxRows
-	}
-	if avail := m.height - 6; rows > avail {
-		rows = avail
-	}
+// tagPickerWindow is the slice of rows on screen. It centres on the cursor and
+// keeps no scroll state, exactly as the board list does — the two popups are
+// the same object and scrolling them differently was the most visible way they
+// had drifted apart.
+func (m *Model) tagPickerWindow(height int) (start, rows int) {
+	rows = height - 2
 	if rows < 1 {
 		rows = 1
 	}
-
-	start = m.tags.start
-	if m.tags.idx < start {
-		start = m.tags.idx
+	if rows > len(m.tags.rows) {
+		rows = len(m.tags.rows)
 	}
-	if m.tags.idx >= start+rows {
-		start = m.tags.idx - rows + 1
+	if len(m.tags.rows) > rows {
+		start = m.tags.idx - rows/2
+		if start < 0 {
+			start = 0
+		}
+		if start+rows > len(m.tags.rows) {
+			start = len(m.tags.rows) - rows
+		}
 	}
-	if max := len(m.tags.rows) - rows; start > max {
-		start = max
-	}
-	if start < 0 {
-		start = 0
-	}
-	m.tags.start = start
 	return start, rows
 }
 
 func (m *Model) viewTagPicker() string {
-	start, rows := m.tagPickerWindow()
-
 	title := "Tags"
 	if m.search.global {
 		title += " · all boards"
 	}
 
-	// Every row carries the same counts block, so the popup has to be wide
-	// enough for the longest name plus that block — sizing off the name alone
-	// truncated names down to an ellipsis.
-	countsWidth := 0
-	if len(m.tags.rows) > 0 {
-		countsWidth = lipgloss.Width(formatCounts(m.tags.rows[0].counts))
-	}
-	width := lipgloss.Width(title) + 8
+	// Sized by the same rule as the board list: the widest row, where a row is
+	// the label plus the same right-aligned counts block every row carries.
+	widest := 0
 	for _, r := range m.tags.rows {
-		if w := lipgloss.Width(r.label) + countsWidth + 8; w > width {
-			width = w
+		if w := listRowWidth(r.label, r.counts); w > widest {
+			widest = w
 		}
 	}
-	if width > m.width-4 {
-		width = m.width - 4
-	}
-	if width < 24 {
-		width = 24
-	}
-
-	height := rows + 2
-	if len(m.tags.rows) > rows {
-		height++ // the "N more" line
-	}
+	width, height := m.listPopupSize(widest, len(m.tags.rows))
+	start, rows := m.tagPickerWindow(height)
 
 	backdrop := m.popupBackdrop(m.popupReturnView)
 	// Zones are registered while rendering the popup, so the backdrop has to
@@ -234,10 +205,6 @@ func (m *Model) renderTagPopup(title string, width, height, start, rows int, ori
 		r := m.tags.rows[i]
 		lines = append(lines, m.renderTagRow(r, innerWidth, i == m.tags.idx, r.query == m.search.query))
 	}
-	if hidden := len(m.tags.rows) - (start + len(lines)); hidden > 0 {
-		lines = append(lines, dimStyle.Render(fmt.Sprintf("  ↓ %d more", hidden)))
-	}
-
 	content := lipgloss.NewStyle().PaddingLeft(1).Render(strings.Join(lines, "\n"))
 	return renderPanel(title, content, width, height, green, true)
 }

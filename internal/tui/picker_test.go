@@ -8,6 +8,7 @@ import (
 
 	"github.com/LeonY117/kanban-tui/internal/model"
 	"github.com/LeonY117/kanban-tui/internal/store"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -597,5 +598,42 @@ func TestPinSurvivesReopeningThePicker(t *testing.T) {
 
 	if got, want := pickerNames(m), []string{"main", "beta", "alpha"}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("order after reopening = %v, want %v", got, want)
+	}
+}
+
+func TestRenameFormSurvivesTheSmallestTerminal(t *testing.T) {
+	// The board list and the tag list now share listPopupSize, so a change made
+	// for one can starve the other. The rename form is the tightest case: it
+	// adds four rows and owns the keyboard, so losing a row means typing into a
+	// field that is not on screen.
+	m, _ := boardWith(t, "a|TODO")
+	withSprint(t, "demo", "b|TODO")
+	m.width, m.height = minTerminalWidth, minTerminalHeight
+
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	// Land on the sprint — main cannot be renamed.
+	for range m.pickerBoards {
+		if m.pickerBoards[m.pickerIdx].name == "demo" {
+			break
+		}
+		m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	if m.renameTarget == "" {
+		t.Fatalf("setup: rename did not open on %q", m.pickerBoards[m.pickerIdx].name)
+	}
+
+	view := m.View()
+	for _, want := range []string{"name", "prefix"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("rename form lost its %q field at %dx%d:\n%s",
+				want, minTerminalWidth, minTerminalHeight, view)
+		}
+	}
+	for _, line := range strings.Split(view, "\n") {
+		if lipgloss.Width(line) > minTerminalWidth {
+			t.Errorf("line overflows the terminal: %d cells", lipgloss.Width(line))
+			break
+		}
 	}
 }

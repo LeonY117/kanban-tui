@@ -6,6 +6,7 @@ import (
 	"unicode"
 
 	"github.com/LeonY117/kanban-tui/internal/model"
+	"github.com/LeonY117/kanban-tui/internal/store"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -14,8 +15,8 @@ import (
 
 // ─── State ───────────────────────────────────────────────────────────
 
-// searchState is the board filter: `/` opens an input over the footer hint
-// line and the board narrows live as you type.
+// searchState is a surface filter: `/` opens an input over the footer hint
+// line and the board or archive narrows live as you type.
 //
 // It is session-only and never persisted. Reopening a board to find half of it
 // missing, with no memory of why, is a worse trade than retyping four
@@ -34,10 +35,12 @@ type searchState struct {
 
 	tagIdx int // highlighted tag completion
 
-	// Cards borrowed from other boards under global scope, and the board each
-	// came from. Membership in owners is what makes a card foreign: the main
-	// board's name is "", so comparing names would read it as local.
-	foreign []model.Ticket
+	// The board keeps borrowed cards beside its local ones; the archive merges
+	// them into archiveEntries so they can sort by date. Both surfaces track the
+	// board each card came from. Membership in owners is what makes a card
+	// foreign: the main board's name is "", so comparing names would read it as
+	// local.
+	foreign []model.Ticket // board surface only
 	owners  map[string]string
 }
 
@@ -49,8 +52,70 @@ func newSearchState() searchState {
 	return searchState{input: ti}
 }
 
-func (m *Model) searchActive() bool {
-	return !m.search.parsed.Empty() || m.search.global
+// reset puts one filter back to nothing — query, scope, completion and the
+// borrowed rows it had pulled in. It deliberately does not reload rows or
+// re-clamp a cursor: clearSearch does both for the active surface, while a
+// board switch resets both surfaces before either is shown.
+func (s *searchState) reset() {
+	s.open = false
+	s.input.Blur()
+	s.input.SetValue("")
+	s.query = ""
+	s.parsed = model.ParseQuery("")
+	s.tagIdx = 0
+	s.global = false
+	s.foreign = nil
+	s.owners = nil
+}
+
+// active reports whether this filter narrows or widens what its surface shows.
+func (s *searchState) active() bool { return !s.parsed.Empty() || s.global }
+
+// searchActive is the board's filter specifically. visibleTickets and the zoom
+// guard mean the board even while the archive browser is on screen, so they ask
+// this rather than activeSearch.
+func (m *Model) searchActive() bool { return m.search.active() }
+
+// ─── Which surface is being filtered ─────────────────────────────────
+
+// activeSearch is the filter belonging to the surface on screen.
+//
+// The board and the archive browser keep separate ones (Leon, 2026-08-04).
+// They are separate lists — one holds what is open, the other what is finished
+// — and a query typed over one has no meaning over the other. Sharing the value
+// would also mean stepping into the archive silently re-scoped the board.
+// Sharing the *type* is the point: one implementation, two instances.
+func (m *Model) activeSearch() *searchState {
+	if m.view == archiveView {
+		return &m.archiveSearch
+	}
+	return &m.search
+}
+
+// activePool is every ticket the active surface's scope can reach — what the
+// completion counts and the "of N" are measured against.
+func (m *Model) activePool() []model.Ticket {
+	if m.view == archiveView {
+		return m.archivePool()
+	}
+	return m.searchPool()
+}
+
+// activeCounts is the "12 of 58" for whichever surface is on screen.
+func (m *Model) activeCounts() (shown, total int) {
+	if m.view == archiveView {
+		return m.archiveCounts()
+	}
+	return m.searchCounts()
+}
+
+// refreshActiveSelection re-clamps whichever cursor the filter just moved under.
+func (m *Model) refreshActiveSelection() {
+	if m.view == archiveView {
+		m.clampArchiveCursor()
+		return
+	}
+	m.refreshSearchSelection()
 }
 
 // ─── The filtered read ───────────────────────────────────────────────
@@ -88,7 +153,7 @@ func (m *Model) visibleTickets(status model.Status) []model.Ticket {
 // ticketOwner names the board a card came from, and reports false for cards
 // belonging to the board on screen.
 func (m *Model) ticketOwner(id string) (string, bool) {
-	name, ok := m.search.owners[id]
+	name, ok := m.activeSearch().owners[id]
 	return name, ok
 }
 
@@ -132,29 +197,39 @@ func (m *Model) searchCounts() (shown, total int) {
 // its end — the sprint rename's shape, so refining a filter never means
 // retyping it.
 func (m *Model) enterSearch() {
-	m.search.prevQuery = m.search.query
-	m.search.prevGlobal = m.search.global
+	st := m.activeSearch()
+	st.prevQuery = st.query
+	st.prevGlobal = st.global
 	// Remember the card, not the index: typing narrows the column and clamps
 	// the cursor, so an index saved here means something else by the time esc
 	// puts it back.
-	m.search.prevTicket = ""
-	if t := m.selectedTicket(); t != nil {
-		m.search.prevTicket = t.ID
+	st.prevTicket = ""
+	if t := m.activeSelectedTicket(); t != nil {
+		st.prevTicket = t.ID
 	}
-	m.search.input.SetValue(m.search.query)
-	m.search.input.CursorEnd()
-	m.search.input.Focus()
-	m.search.open = true
-	m.search.tagIdx = 0
+	st.input.SetValue(st.query)
+	st.input.CursorEnd()
+	st.input.Focus()
+	st.open = true
+	st.tagIdx = 0
+}
+
+// activeSelectedTicket is whatever the surface on screen has under its cursor.
+func (m *Model) activeSelectedTicket() *model.Ticket {
+	if m.view == archiveView {
+		return m.archiveSelected()
+	}
+	return m.selectedTicket()
 }
 
 // commitSearch closes the input and leaves the filter standing. Filtering in
 // place is only worth doing if you can then move around what's left, which
 // means the filter has to outlive the input that made it.
 func (m *Model) commitSearch() {
-	m.search.open = false
-	m.search.input.Blur()
-	if !m.searchActive() {
+	st := m.activeSearch()
+	st.open = false
+	st.input.Blur()
+	if !st.active() {
 		m.clearSearch()
 	}
 }
@@ -164,31 +239,27 @@ func (m *Model) commitSearch() {
 // live filtering clamps the cursor while you type, so the board would come back
 // with a different card selected despite nothing having been committed.
 func (m *Model) cancelSearch() {
-	m.search.open = false
-	m.search.input.Blur()
-	m.setQuery(m.search.prevQuery)
-	if m.search.global != m.search.prevGlobal {
-		m.search.global = m.search.prevGlobal
-		m.loadForeign()
+	st := m.activeSearch()
+	st.open = false
+	st.input.Blur()
+	m.setQuery(st.prevQuery)
+	if st.global != st.prevGlobal {
+		st.global = st.prevGlobal
+		m.loadActiveForeign()
 	}
-	if m.search.prevTicket != "" {
-		m.focusTicket(m.search.prevTicket)
+	if st.prevTicket != "" {
+		m.focusActiveTicket(st.prevTicket)
 	}
-	m.refreshSearchSelection()
+	m.refreshActiveSelection()
 }
 
 // clearSearch drops the filter and the scope together. Scope is part of the
 // filter, not a separate mode: leaving it on after a clear would keep other
 // boards' cards on screen with nothing left to explain why.
 func (m *Model) clearSearch() {
-	m.search.open = false
-	m.search.input.Blur()
-	m.search.input.SetValue("")
-	m.setQuery("")
-	m.search.tagIdx = 0
-	m.search.global = false
-	m.loadForeign()
-	m.refreshSearchSelection()
+	m.activeSearch().reset()
+	m.loadActiveForeign()
+	m.refreshActiveSelection()
 }
 
 // refreshDetailIfOpen re-seeds the detail editors from whatever the cursor is
@@ -210,21 +281,41 @@ func (m *Model) refreshSearchSelection() {
 }
 
 func (m *Model) setQuery(q string) {
-	m.search.query = q
-	m.search.parsed = model.ParseQuery(q)
+	st := m.activeSearch()
+	st.query = q
+	st.parsed = model.ParseQuery(q)
 }
 
 func (m *Model) toggleSearchScope() {
-	m.search.global = !m.search.global
+	st := m.activeSearch()
+	st.global = !st.global
+	m.loadActiveForeign()
+	st.tagIdx = 0
+	m.refreshActiveSelection()
+}
+
+// loadActiveForeign reloads borrowed rows for whichever surface is on screen.
+func (m *Model) loadActiveForeign() {
+	if m.view == archiveView {
+		m.loadForeignArchive()
+		return
+	}
 	m.loadForeign()
-	m.search.tagIdx = 0
-	m.refreshSearchSelection()
+}
+
+// focusActiveTicket puts the surface's cursor back on a ticket by id.
+func (m *Model) focusActiveTicket(id string) {
+	if m.view == archiveView {
+		m.focusArchiveTicket(id)
+		return
+	}
+	m.focusTicket(id)
 }
 
 // scopeToggleLabel names where ctrl+g would take the search, not where it is —
 // a hint is only useful if it says what the key does next.
 func (m *Model) scopeToggleLabel() string {
-	if m.search.global {
+	if m.activeSearch().global {
 		return "this board"
 	}
 	return "all boards"
@@ -246,13 +337,28 @@ func (m *Model) loadForeign() {
 		return
 	}
 
-	entries, err := loadPickerEntries(false)
+	foreign, owners, err := m.loadOtherBoardTickets((*store.Store).Load)
 	if err != nil {
 		m.notice = "could not read the other boards: " + err.Error()
 		m.search.global = false
 		return
 	}
+	m.search.foreign = foreign
+	m.search.owners = owners
+}
 
+// loadOtherBoardTickets enumerates the active boards and collects their
+// tickets. The loader remains explicit at each call site because board and
+// archive search must read different files. A failure to enumerate is returned
+// for the caller's surface-specific notice; an unavailable individual board is
+// skipped on both surfaces.
+func (m *Model) loadOtherBoardTickets(load func(*store.Store) (*model.Board, error)) ([]model.Ticket, map[string]string, error) {
+	entries, err := loadPickerEntries(false)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var tickets []model.Ticket
 	owners := map[string]string{}
 	for _, e := range entries {
 		if e.name == m.sprintName {
@@ -262,16 +368,16 @@ func (m *Model) loadForeign() {
 		if err != nil {
 			continue
 		}
-		b, err := s.Load()
+		board, err := load(s)
 		if err != nil {
 			continue
 		}
-		for _, t := range b.Tickets {
+		for _, t := range board.Tickets {
 			owners[t.ID] = e.name
-			m.search.foreign = append(m.search.foreign, t)
+			tickets = append(tickets, t)
 		}
 	}
-	m.search.owners = owners
+	return tickets, owners, nil
 }
 
 // jumpToForeign follows a card borrowed by a global search home to the board
@@ -327,8 +433,9 @@ func (m *Model) focusTicket(id string) {
 // field is not the one being edited, and completing it would rewrite text the
 // user isn't looking at.
 func (m *Model) pendingTag() (prefix string, before string, ok bool) {
-	value := m.search.input.Value()
-	if m.search.input.Position() != len([]rune(value)) {
+	st := m.activeSearch()
+	value := st.input.Value()
+	if st.input.Position() != len([]rune(value)) {
 		return "", "", false
 	}
 	tokens, openQuote := model.Tokenize(value)
@@ -372,7 +479,7 @@ func (m *Model) tagCandidates() []model.TagCount {
 		return nil
 	}
 	context := model.ParseQuery(before)
-	return model.TagCandidates(context.MatchAll(m.searchPool()), prefix)
+	return model.TagCandidates(context.MatchAll(m.activePool()), prefix)
 }
 
 func (m *Model) acceptTagCompletion() bool {
@@ -384,8 +491,9 @@ func (m *Model) acceptTagCompletion() bool {
 	if len(cands) == 0 {
 		return false
 	}
-	m.search.input.SetValue(before + model.QuoteTag(cands[clampIndex(m.search.tagIdx, len(cands))].Tag) + " ")
-	m.search.input.CursorEnd()
+	st := m.activeSearch()
+	st.input.SetValue(before + model.QuoteTag(cands[clampIndex(st.tagIdx, len(cands))].Tag) + " ")
+	st.input.CursorEnd()
 	m.syncQuery()
 	return true
 }
@@ -397,7 +505,8 @@ func (m *Model) moveTagCursor(dir int) {
 	if n == 0 {
 		return
 	}
-	m.search.tagIdx = ((clampIndex(m.search.tagIdx, n)+dir)%n + n) % n
+	st := m.activeSearch()
+	st.tagIdx = ((clampIndex(st.tagIdx, n)+dir)%n + n) % n
 }
 
 // ─── Keys ────────────────────────────────────────────────────────────
@@ -427,7 +536,8 @@ func (m *Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	var cmd tea.Cmd
-	m.search.input, cmd = m.search.input.Update(msg)
+	st := m.activeSearch()
+	st.input, cmd = st.input.Update(msg)
 	m.syncQuery()
 	return m, cmd
 }
@@ -436,9 +546,10 @@ func (m *Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // rather than at the render, because a narrowing column can strand it past the
 // end of a list that still has to answer selectedTicket correctly.
 func (m *Model) syncQuery() {
-	m.setQuery(m.search.input.Value())
-	m.search.tagIdx = 0
-	m.refreshSearchSelection()
+	st := m.activeSearch()
+	m.setQuery(st.input.Value())
+	st.tagIdx = 0
+	m.refreshActiveSelection()
 }
 
 // ─── Footer ──────────────────────────────────────────────────────────
@@ -454,11 +565,12 @@ func searchInputWidth(total int) int {
 // tag completions, the match count, and whatever hints still fit. There is one
 // line to share, so the pieces compete for it and the least useful drop first.
 func (m *Model) searchFooter(badge string) string {
-	m.search.input.Width = searchInputWidth(m.width)
-	input := helpStyle.Render(m.search.input.View())
+	st := m.activeSearch()
+	st.input.Width = searchInputWidth(m.width)
+	input := helpStyle.Render(st.input.View())
 
 	budget := m.width - lipgloss.Width(badge) - lipgloss.Width(input) - 2
-	shown, total := m.searchCounts()
+	shown, total := m.activeCounts()
 	count := fmt.Sprintf("%d/%d", shown, total)
 	hints := fmt.Sprintf("%s | ^g %s | tab tag | esc cancel", count, m.scopeToggleLabel())
 
@@ -481,7 +593,7 @@ func (m *Model) completionStrip(budget int) string {
 	if len(cands) == 0 || budget < 6 {
 		return ""
 	}
-	idx := clampIndex(m.search.tagIdx, len(cands))
+	idx := clampIndex(m.activeSearch().tagIdx, len(cands))
 
 	render := func(start int) (string, int) {
 		var parts []string
@@ -531,24 +643,22 @@ const maxFilterBadge = 24
 // filterBadgeVisible reports whether the chip is on the footer right now. It
 // is off while the input is open, where the input itself shows the query.
 func (m *Model) filterBadgeVisible() bool {
-	return !m.search.open && m.filterBadge() != ""
+	return !m.activeSearch().open && m.filterBadge() != ""
 }
 
 func (m *Model) filterBadge() string {
-	// The archive browser's list is not filtered by any of this, so a filter
-	// shown against it would caption the wrong panel — the same reason the
-	// count stays off that footer too.
-	if !m.searchActive() || m.view == archiveView {
+	st := m.activeSearch()
+	if !st.active() {
 		return ""
 	}
-	label := m.search.query
+	label := st.query
 	switch {
 	case label == model.Untagged:
 		label = "no tags"
 	case label == "":
 		// Scope alone, with no query — the board is wider, not narrower.
 		label = "all boards"
-	case m.search.global:
+	case st.global:
 		label += " · all boards"
 	}
 
@@ -569,6 +679,157 @@ func (m *Model) filterBadge() string {
 // searchCountLabel is the footer's "how much of the board is this" — the
 // query itself lives beside the board name, so this carries only the count.
 func (m *Model) searchCountLabel() string {
-	shown, total := m.searchCounts()
+	shown, total := m.activeCounts()
 	return fmt.Sprintf("%d of %d", shown, total)
+}
+
+// ─── The archive browser's filter ────────────────────────────────────
+
+// The archive is the second surface, and the one dfd36a pencilled first. It
+// reuses the query language, the input, the completion strip and the footer
+// chip; only the list underneath differs — a flat run of date headers and
+// tickets rather than five columns.
+
+// visibleArchiveEntries is the archive's single answer to "what is in this
+// list right now", and every cursor, render and action path reads through it.
+// archiveCursor indexes what is on screen while the store indexes what exists,
+// which is the same trap the board's visibleTickets exists to close.
+//
+// A date header survives only if something under it did. Filtering headers
+// alongside tickets would leave a day heading a group with nothing in it, and
+// dropping them entirely would lose the one thing the archive is sorted by.
+func (m *Model) visibleArchiveEntries() []archiveEntry {
+	if !m.archiveSearch.active() {
+		return m.archiveEntries
+	}
+	out := make([]archiveEntry, 0, len(m.archiveEntries))
+	var pendingHeader archiveEntry
+	for _, e := range m.archiveEntries {
+		if e.isHeader {
+			pendingHeader = e
+			continue
+		}
+		if m.archiveSearch.parsed.Match(e.ticket) {
+			if pendingHeader.isHeader {
+				out = append(out, pendingHeader)
+				pendingHeader = archiveEntry{}
+			}
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// archivePool is every archived ticket the current scope can reach.
+func (m *Model) archivePool() []model.Ticket {
+	out := make([]model.Ticket, 0, len(m.archiveEntries))
+	for _, e := range m.archiveEntries {
+		if !e.isHeader {
+			out = append(out, e.ticket)
+		}
+	}
+	return out
+}
+
+func (m *Model) archiveCounts() (shown, total int) {
+	return countArchiveTickets(m.visibleArchiveEntries()), countArchiveTickets(m.archiveEntries)
+}
+
+// clampArchiveCursor puts the cursor back on a ticket that is actually on
+// screen, after a filter narrowed the list under it.
+func (m *Model) clampArchiveCursor() {
+	entries := m.visibleArchiveEntries()
+	if len(entries) == 0 {
+		m.archiveCursor = 0
+		return
+	}
+	if m.archiveCursor >= len(entries) {
+		m.archiveCursor = len(entries) - 1
+	}
+	if m.archiveCursor < 0 {
+		m.archiveCursor = 0
+	}
+	// Never rest on a date header: it has no ticket, so every action would
+	// have to special-case it.
+	for m.archiveCursor < len(entries) && entries[m.archiveCursor].isHeader {
+		m.archiveCursor++
+	}
+	if m.archiveCursor >= len(entries) {
+		m.archiveCursor = firstTicketIdx(entries)
+	}
+}
+
+// focusArchiveTicket puts the cursor back on a ticket by id, for the esc that
+// restores what the search was standing on.
+func (m *Model) focusArchiveTicket(id string) {
+	for i, e := range m.visibleArchiveEntries() {
+		if !e.isHeader && e.ticket.ID == id {
+			m.archiveCursor = i
+			return
+		}
+	}
+}
+
+// loadForeignArchive reads every other active board's archive for global
+// scope, the way loadForeign reads their boards. Archived sprints stay out for
+// the same reason they do there.
+//
+// The borrowed rows are merged into archiveEntries rather than kept beside
+// them: the archive is one list sorted by date, so a card from another board
+// belongs at its own date rather than in a clump at the end.
+func (m *Model) loadForeignArchive() bool {
+	// Read before discarding anything. Clearing owners first and then failing
+	// left the previous rows on screen with no ownership: a borrowed one lost
+	// its badge, enter stopped following it home, and the unarchive guard that
+	// keeps this board from writing another board's card was bypassed.
+	local, err := m.store.LoadArchive()
+	if err != nil {
+		m.err = err
+		return false
+	}
+	m.archiveSearch.owners = nil
+	tickets := local.Tickets
+
+	if m.archiveSearch.global {
+		foreign, owners, err := m.loadOtherBoardTickets((*store.Store).LoadArchive)
+		if err != nil {
+			m.notice = "could not read the other archives: " + err.Error()
+			m.archiveSearch.global = false
+		} else {
+			m.archiveSearch.owners = owners
+			tickets = append(tickets, foreign...)
+		}
+	}
+
+	m.archiveEntries = buildArchiveEntries(tickets)
+	m.clampArchiveCursor()
+	return true
+}
+
+// jumpToForeignArchive follows a borrowed archive row home, landing in that
+// board's archive with the query still applied — the board search's enter,
+// pointed at the other list.
+func (m *Model) jumpToForeignArchive() bool {
+	t := m.archiveSelected()
+	if t == nil {
+		return false
+	}
+	owner, ok := m.ticketOwner(t.ID)
+	if !ok {
+		return false
+	}
+
+	id, query := t.ID, m.archiveSearch.query
+	if err := m.switchBoard(owner); err != nil {
+		m.notice = err.Error()
+		return true
+	}
+	// switchBoard lands on the board; the row was in an archive, so follow it
+	// into that board's archive rather than leaving the user somewhere else.
+	m.archiveSearch.query = query
+	m.archiveSearch.parsed = model.ParseQuery(query)
+	m.archiveSearch.input.SetValue(query)
+	m.enterArchive()
+	m.focusArchiveTicket(id)
+	return true
 }

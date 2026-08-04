@@ -31,6 +31,7 @@ Not reachable from `--help`, so it lives here:
 - A missing `--sprint` prompts `[y/N]` on TUI launch but hard-errors on CLI subcommands — no silent creation, no hanging prompts for agents.
 - `/` filters the board in place, live. Terms are ANDed; a bare term matches title, description, short id, tags or assignee, `#tag` matches tags only, a leading `-` negates, and `"` groups. Matching is case-insensitive **substring**, so `#cli` also selects `#client` — the completion counts say so. `ctrl+g` widens to every active board, whose cards arrive badged and read-only; `enter` follows one home. Session-only, cleared on board switch. The active filter shows in green between the board name and its id prefix.
 - `t` in the picker opens the board's tags as a list, bookended by **all tickets** and **no tags** (`-#`). Picking one writes the query you could have typed, so there is one filter with one meaning; picking replaces rather than ANDs. Any exit key leaves for the board, not back to the picker.
+- The archive browser takes the same `/`, the same query language and the same `ctrl+g`, over its own list — a **separate filter** from the board's, since the two narrow different things. Date headers collapse when nothing under them matches. Under `ctrl+g` it borrows every board's archive, badged and read-only; `enter` follows one home into that board's archive. `esc` clears the filter before it closes the browser.
 
 ## Where work lives
 

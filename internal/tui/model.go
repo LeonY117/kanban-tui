@@ -202,8 +202,14 @@ type Model struct {
 	moveTargetBoard  string
 
 	settings settingsState
-	search   searchState
-	tags     tagPickerState
+
+	// Two filters, one implementation. The board's and the archive browser's
+	// are separate values because they narrow separate lists — see
+	// activeSearch for which one a keystroke reaches.
+	search        searchState
+	archiveSearch searchState
+
+	tags tagPickerState
 
 	// Source view for the active popup or picker — restored on close, also
 	// rendered as the backdrop behind the popup.
@@ -316,14 +322,15 @@ func NewModel(s *store.Store, sprintName string) (*Model, error) {
 	archived := sprintName != "" && store.IsSprintArchived(sprintName)
 
 	return &Model{
-		store:       s,
-		board:       board,
-		sprintName:  sprintName,
-		input:       ti,
-		search:      newSearchState(),
-		focusedCol:  1, // default to Todo
-		lastModTime: modTime,
-		archived:    archived,
+		store:         s,
+		board:         board,
+		sprintName:    sprintName,
+		input:         ti,
+		search:        newSearchState(),
+		archiveSearch: newSearchState(),
+		focusedCol:    1, // default to Todo
+		lastModTime:   modTime,
+		archived:      archived,
 	}, nil
 }
 
@@ -400,7 +407,7 @@ func (m *Model) footerLine() string {
 		badge = lipgloss.JoinHorizontal(lipgloss.Top, badge, archivedTag)
 	}
 
-	if m.search.open {
+	if m.activeSearch().open {
 		return m.searchFooter(badge)
 	}
 
@@ -409,10 +416,7 @@ func (m *Model) footerLine() string {
 	switch {
 	case m.notice != "":
 		rightText = m.notice
-	// The archive browser has its own list, which no filter touches. Showing
-	// the board's chip there would caption the wrong panel with the wrong
-	// count, and it would crowd out the archive's own way back.
-	case m.searchActive() && m.view != archiveView:
+	case m.activeSearch().active():
 		// The chip is rendered outside fitHints rather than as its leading
 		// hint: fitHints protects only the last hint, so a long enough query
 		// could push out the very thing that explains why the board looks
@@ -511,7 +515,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// The search input sits over the footer of whichever view is behind
 		// it, so it takes keys ahead of that view rather than being one.
-		if m.search.open {
+		if m.activeSearch().open {
 			return m.updateSearch(msg)
 		}
 
@@ -1856,14 +1860,15 @@ func (m *Model) viewInput() string {
 // ─── Archive view ───────────────────────────────────────────────────
 
 func (m *Model) enterArchive() {
-	arch, err := m.store.LoadArchive()
-	if err != nil {
-		m.err = err
-		return
-	}
-	m.archiveEntries = buildArchiveEntries(arch.Tickets)
-	m.archiveCursor = firstTicketIdx(m.archiveEntries)
+	// The view has to be set first: loadForeignArchive reads the archive's own
+	// filter through activeSearch, which picks the state by view.
 	m.view = archiveView
+	// Start at the top and let the one clamp find the first row that is
+	// actually a ticket. Picking the index here as well meant two places
+	// deciding where the cursor may rest, and the second one could not be
+	// told apart from the unfiltered read it was supposed to avoid.
+	m.archiveCursor = 0
+	m.loadForeignArchive()
 }
 
 func (m *Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1871,6 +1876,13 @@ func (m *Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
 	case key.Matches(msg, keys.Esc), key.Matches(msg, keys.Unzoom), key.Matches(msg, keys.ArchiveView):
+		// esc clears a filter before it closes the browser, exactly as it does
+		// on the board — leaving takes one more press than clearing, so a
+		// narrowed archive is never abandoned silently.
+		if key.Matches(msg, keys.Esc) && m.archiveSearch.active() {
+			m.clearSearch()
+			return m, nil
+		}
 		m.view = boardView
 	case key.Matches(msg, keys.Up):
 		m.moveArchiveCursor(-1)
@@ -1880,21 +1892,26 @@ func (m *Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.descScroll = 0
 	case key.Matches(msg, keys.Unarchive):
 		m.unarchiveSelected()
+	case key.Matches(msg, keys.Search):
+		m.enterSearch()
+	case key.Matches(msg, keys.Enter):
+		m.jumpToForeignArchive()
 	case key.Matches(msg, keys.Copy):
 		if t := m.archiveSelected(); t != nil {
-			m.copyToClipboard(t.ShortID, copyID)
+			m.copyToClipboard(m.boardBadge(t.ID)+t.ShortID, copyID)
 		}
 	}
 	return m, nil
 }
 
 func (m *Model) moveArchiveCursor(dir int) {
-	n := len(m.archiveEntries)
+	entries := m.visibleArchiveEntries()
+	n := len(entries)
 	if n == 0 {
 		return
 	}
 	i := m.archiveCursor + dir
-	for i >= 0 && i < n && m.archiveEntries[i].isHeader {
+	for i >= 0 && i < n && entries[i].isHeader {
 		i += dir
 	}
 	if i < 0 || i >= n {
@@ -1904,10 +1921,11 @@ func (m *Model) moveArchiveCursor(dir int) {
 }
 
 func (m *Model) archiveSelected() *model.Ticket {
-	if m.archiveCursor < 0 || m.archiveCursor >= len(m.archiveEntries) {
+	entries := m.visibleArchiveEntries()
+	if m.archiveCursor < 0 || m.archiveCursor >= len(entries) {
 		return nil
 	}
-	e := &m.archiveEntries[m.archiveCursor]
+	e := &entries[m.archiveCursor]
 	if e.isHeader {
 		return nil
 	}
@@ -1922,27 +1940,19 @@ func (m *Model) unarchiveSelected() {
 	if t == nil {
 		return
 	}
+	// A row borrowed from another board's archive belongs to a different
+	// store; unarchiving it here would write this board's file.
+	if owner, ok := m.ticketOwner(t.ID); ok {
+		m.notice = fmt.Sprintf("%s lives on %s — enter to open it there", t.ShortID, boardDisplayName(owner))
+		return
+	}
 	if err := m.store.Unarchive(t.ID); err != nil {
 		m.err = err
 		return
 	}
 	m.reload()
 	m.clampCursors()
-	arch, err := m.store.LoadArchive()
-	if err != nil {
-		m.err = err
-		return
-	}
-	m.archiveEntries = buildArchiveEntries(arch.Tickets)
-	if m.archiveCursor >= len(m.archiveEntries) {
-		m.archiveCursor = len(m.archiveEntries) - 1
-	}
-	if m.archiveCursor < 0 {
-		m.archiveCursor = 0
-	}
-	for m.archiveCursor < len(m.archiveEntries) && m.archiveEntries[m.archiveCursor].isHeader {
-		m.archiveCursor++
-	}
+	m.loadForeignArchive()
 }
 
 // buildArchiveEntries sorts tickets newest-archived-first and inserts date
@@ -2015,7 +2025,8 @@ func (m *Model) viewArchive() string {
 }
 
 func (m *Model) renderArchiveList(width, height int) string {
-	title := fmt.Sprintf("Archive (%d)", countArchiveTickets(m.archiveEntries))
+	entries := m.visibleArchiveEntries()
+	title := fmt.Sprintf("Archive (%d)", countArchiveTickets(entries))
 	innerWidth := width - 2
 	if innerWidth < 3 {
 		innerWidth = 3
@@ -2032,8 +2043,8 @@ func (m *Model) renderArchiveList(width, height int) string {
 	}
 
 	var lines []string
-	for i := startIdx; i < len(m.archiveEntries) && len(lines) < visibleCount; i++ {
-		e := m.archiveEntries[i]
+	for i := startIdx; i < len(entries) && len(lines) < visibleCount; i++ {
+		e := entries[i]
 		if !e.isHeader {
 			m.addZone(hitZone{kind: zoneArchiveRow, x: 1, y: 1 + len(lines), w: innerWidth, h: 1, idx: i})
 		}
@@ -3312,8 +3323,14 @@ func (m *Model) helpText() string {
 			hk("board.tags"), hk("board.rename"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
 			hk("card.archive"), hk("board.archiveView"), hk("board.picker"))
 	case archiveView:
-		return fmt.Sprintf("j/k nav | %s unarchive | %s copy id | %s/esc back | q quit",
-			hk("board.unarchive"), hk("card.copy"), hk("board.archiveView"))
+		if m.archiveSearch.active() {
+			return fmt.Sprintf("esc clear | j/k nav | %s unarchive | %s copy id | %s back",
+				hk("board.unarchive"), hk("card.copy"), hk("board.archiveView"))
+		}
+		// The way out goes last: fitHints protects the final hint, and in a
+		// panel with its own close key that is the one that must survive.
+		return fmt.Sprintf("j/k nav | %s search | %s unarchive | %s copy id | %s/esc back",
+			hk("board.search"), hk("board.unarchive"), hk("card.copy"), hk("board.archiveView"))
 	case splitView:
 		if m.splitFocus == 0 {
 			return fmt.Sprintf("j/k select | %s edit | %s search | %s/%s move | %s move | %s archive | %s back | %s settings | q quit",

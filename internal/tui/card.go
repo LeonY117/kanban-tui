@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/LeonY117/kanban-tui/internal/model"
@@ -12,6 +13,8 @@ import (
 // sizes form a ladder: condensed (one line), card (title + meta), large (title
 // + description preview + meta).
 type ticketLayout int
+
+var priorityStyle = lipgloss.NewStyle().Bold(true)
 
 const (
 	layoutCard ticketLayout = iota
@@ -220,9 +223,7 @@ func renderBoxedBlock(content []string, selected bool, inner int, accent lipglos
 
 func padCardLine(line string, width int) string {
 	padding := width - lipgloss.Width(line)
-	if padding < 0 {
-		padding = 0
-	}
+	padding = max(0, padding)
 	return line + strings.Repeat(" ", padding)
 }
 
@@ -318,8 +319,23 @@ func (m *Model) cardMetaLine(t model.Ticket, width int, withDate, selected bool,
 		idStyle = lipgloss.NewStyle().Foreground(accent).Bold(true)
 	}
 	renderedID := m.renderTicketID(t, idStyle)
-	parts := []string{renderedID}
-	used := lipgloss.Width(renderedID)
+	priority := fmt.Sprintf("P%d", t.Priority)
+	parts := []string{priority, renderedID}
+	switch t.Priority {
+	case 0:
+		priorityStyle = priorityStyle.Foreground(lipgloss.Color("#3C3C3C"))
+		parts = []string{priorityStyle.Render(priority), renderedID}
+	case 1:
+		priorityStyle = priorityStyle.Foreground(lipgloss.Color("#4C6FA8"))
+		parts = []string{priorityStyle.Render(priority), renderedID}
+	case 2:
+		priorityStyle = priorityStyle.Foreground(lipgloss.Color("#D69636"))
+		parts = []string{priorityStyle.Render(priority), renderedID}
+	case 3:
+		priorityStyle = priorityStyle.Foreground(lipgloss.Color("#E06C75"))
+		parts = []string{priorityStyle.Render(priority), renderedID}
+	}
+	used := lipgloss.Width(priority) + 2 + lipgloss.Width(renderedID)
 
 	add := func(text, styled string) {
 		if used+2+lipgloss.Width(text) <= width {

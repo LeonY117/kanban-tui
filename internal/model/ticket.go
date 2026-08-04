@@ -38,28 +38,11 @@ func ParseStatus(s string) (Status, error) {
 	}
 }
 
-type Priority string
-
-const (
-	P0 Priority = "P0"
-	P1 Priority = "P1"
-	P2 Priority = "P2"
-	P3 Priority = "P3"
-)
-
-func ParsePriority(s string) (Priority, error) {
-	switch strings.ToUpper(strings.TrimSpace(s)) {
-	case "P0":
-		return P0, nil
-	case "P1":
-		return P1, nil
-	case "P2":
-		return P2, nil
-	case "P3":
-		return P3, nil
-	default:
-		return "", fmt.Errorf("invalid priority %q, valid: P0, P1, P2, P3", s)
+func ValidatePriority(priority int) error {
+	if priority < 0 || priority > 3 {
+		return fmt.Errorf("invalid priority %d, valid: 0, 1, 2, 3", priority)
 	}
+	return nil
 }
 
 type Ticket struct {
@@ -68,7 +51,7 @@ type Ticket struct {
 	Title       string            `json:"title"`
 	Description string            `json:"description,omitempty"`
 	Status      Status            `json:"status"`
-	Priority    Priority          `json:"priority"`
+	Priority    int               `json:"priority"`
 	Tags        []string          `json:"tags,omitempty"`
 	AssignedTo  string            `json:"assigned_to,omitempty"`
 	CreatedAt   time.Time         `json:"created_at"`
@@ -90,7 +73,7 @@ type Board struct {
 // FilterOptions for querying tickets.
 type FilterOptions struct {
 	Status     *Status
-	Priority   *Priority
+	Priority   *int
 	Tag        string
 	AssignedTo *string // pointer so we can distinguish "not set" from "filter for empty"
 }

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -131,10 +132,12 @@ func (m *Model) refreshActiveSelection() {
 func (m *Model) visibleTickets(status model.Status) []model.Ticket {
 	local := m.board.ByStatus(status)
 	if !m.searchActive() {
+		sort.SliceStable(local, func(i, j int) bool { return local[i].Priority > local[j].Priority })
 		return local
 	}
 	out := m.search.parsed.MatchAll(local)
 	if !m.search.global {
+		sort.SliceStable(out, func(i, j int) bool { return out[i].Priority > out[j].Priority })
 		return out
 	}
 
@@ -147,6 +150,7 @@ func (m *Model) visibleTickets(status model.Status) []model.Ticket {
 			merged = append(merged, t)
 		}
 	}
+	sort.SliceStable(merged, func(i, j int) bool { return merged[i].Priority > merged[j].Priority })
 	return merged
 }
 

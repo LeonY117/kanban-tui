@@ -23,10 +23,11 @@ var addCmd = &cobra.Command{
 
 		desc, _ := cmd.Flags().GetString("desc")
 		tags, _ := cmd.Flags().GetStringSlice("tag")
+		priority, _ := cmd.Flags().GetInt("priority")
 		assignedTo, _ := cmd.Flags().GetString("assigned-to")
 		createdBy, _ := cmd.Flags().GetString("created-by")
 
-		ticket, err := st.Add(title, desc, status, tags, assignedTo, createdBy)
+		ticket, err := st.Add(title, desc, status, tags, assignedTo, createdBy, priority)
 		if err != nil {
 			return err
 		}
@@ -40,6 +41,7 @@ func init() {
 	addCmd.Flags().String("desc", "", "Description")
 	addCmd.Flags().String("status", "TODO", fmt.Sprintf("Status (%s)", statusValues()))
 	addCmd.Flags().StringSlice("tag", nil, "Tags (repeatable)")
+	addCmd.Flags().Int("priority", 0, "Priority score (0-3; 3 is highest)")
 	addCmd.Flags().String("assigned-to", "", "Assigned agent or person")
 	addCmd.Flags().String("created-by", "", "Creator name")
 }

@@ -40,6 +40,15 @@ func defaultRoot() string {
 	return filepath.Join(home, defaultDir)
 }
 
+// saveToArchive writes the target board to archive and then the board
+// to avoid losing the archived ticket on failure.
+func (s *Store) saveToArchive(board, archive *model.Board) error {
+	if err := s.saveArchive(archive); err != nil {
+		return err
+	}
+	return s.Save(board)
+}
+
 // New creates a store. If dir is empty, uses the default root (or KANBAN_FILE).
 // Once constructed, the store's paths are fixed — later env-var changes don't affect it.
 func New(dir string) *Store {
@@ -161,7 +170,15 @@ func (s *Store) ensurePrefix(board *model.Board) string {
 }
 
 // Add creates a new ticket and saves the board. Returns the created ticket.
-func (s *Store) Add(title, description string, status model.Status, tags []string, assignedTo, createdBy string) (*model.Ticket, error) {
+func (s *Store) Add(title, description string, status model.Status, tags []string, assignedTo, createdBy string, priorities ...int) (*model.Ticket, error) {
+	priority := 0
+	if len(priorities) > 0 {
+		priority = priorities[0]
+	}
+	if err := model.ValidatePriority(priority); err != nil {
+		return nil, err
+	}
+
 	var ticket *model.Ticket
 	err := s.WithLock(func() error {
 		board, err := s.Load()
@@ -183,6 +200,7 @@ func (s *Store) Add(title, description string, status model.Status, tags []strin
 			Description: description,
 			Status:      status,
 			Tags:        tags,
+			Priority:    priority,
 			AssignedTo:  assignedTo,
 			CreatedAt:   now,
 			UpdatedAt:   now,
@@ -235,10 +253,8 @@ func (s *Store) ArchiveByID(id string) error {
 		archive.Tickets = append(archive.Tickets, archived)
 		board.Tickets = append(board.Tickets[:idx], board.Tickets[idx+1:]...)
 
-		if err := s.Save(board); err != nil {
-			return err
-		}
-		return s.saveArchive(archive)
+		// Save to archive first, then to board
+		return s.saveToArchive(board, archive)
 	})
 }
 
@@ -268,6 +284,8 @@ func (s *Store) Unarchive(id string) error {
 		restored.UpdatedAt = time.Now()
 		board.Tickets = append(board.Tickets, restored)
 		archive.Tickets = append(archive.Tickets[:idx], archive.Tickets[idx+1:]...)
+
+		// Unarchive needs board first write, then archive
 		if err := s.Save(board); err != nil {
 			return err
 		}
@@ -315,10 +333,8 @@ func (s *Store) Archive(before *time.Time) (int, error) {
 		}
 		board.Tickets = keep
 
-		if err := s.Save(board); err != nil {
-			return err
-		}
-		return s.saveArchive(archive)
+		// Save to archive first, then to board
+		return s.saveToArchive(board, archive)
 	})
 	return count, err
 }

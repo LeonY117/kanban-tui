@@ -36,6 +36,7 @@ var showCmd = &cobra.Command{
 		fmt.Printf("ID:        %s (%s)\n", t.ShortID, t.ID)
 		fmt.Printf("Title:     %s\n", t.Title)
 		fmt.Printf("Status:    %s\n", t.Status)
+		fmt.Printf("Priority:  %d\n", t.Priority)
 		if len(t.Tags) > 0 {
 			fmt.Printf("Tags:      %s\n", strings.Join(t.Tags, ", "))
 		}

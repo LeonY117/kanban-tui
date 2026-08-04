@@ -139,7 +139,7 @@ type Model struct {
 	editDesc     textarea.Model
 	editField    int    // 0 = metadata, 1 = title, 2 = description
 	editTicketID string // ID of ticket being edited
-	metaIdx      int    // selected sub-field within metadata (0=status, 1=tags, 2=assigned)
+	metaIdx      int    // selected metadata field: status, priority, assignee, tags
 
 	// Split view state
 	splitFocus int // 0 = list panel, 1 = detail panel
@@ -175,6 +175,7 @@ type Model struct {
 	addDesc        textarea.Model
 	addTags        textinput.Model
 	addAssign      textinput.Model
+	addPriority    int
 	addFocusIdx    int
 	addDescEditing bool
 	addConfirmQuit bool // esc pressed with content in the popup — awaiting y/N
@@ -1043,7 +1044,7 @@ func (m *Model) updateSplitDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.splitFocus = 0
 		}
 	case key.Matches(msg, keys.Right):
-		if m.metaIdx < 2 {
+		if m.metaIdx < 3 {
 			m.metaIdx++
 		}
 	case key.Matches(msg, keys.PanelPrev), key.Matches(msg, keys.Esc):
@@ -1338,7 +1339,7 @@ func (m *Model) updateDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.metaIdx--
 		}
 	case key.Matches(msg, keys.Right):
-		if m.metaIdx < 2 {
+		if m.metaIdx < 3 {
 			m.metaIdx++
 		}
 	case key.Matches(msg, keys.Down):
@@ -1393,14 +1394,24 @@ func (m *Model) editMetaField() (tea.Model, tea.Cmd) {
 			m.reload()
 			m.clampCursors()
 		})
-	case 1: // assigned
+	case 1: // priority
+		m.startSelect("Priority", []string{"0", "1", "2", "3"}, func(val string) {
+			priority := int(val[0] - '0')
+			m.store.Update(m.editTicketID, func(ticket *model.Ticket) { ticket.Priority = priority })
+			m.reload()
+			m.clampCursors()
+		})
+		if t := m.selectedTicket(); t != nil {
+			m.selectIdx = t.Priority
+		}
+	case 2: // assigned
 		m.startInput(inputAssign, "Assign to: ")
 		t := m.selectedTicket()
 		if t != nil {
 			m.input.SetValue(t.AssignedTo)
 		}
 		return m, textinput.Blink
-	case 2: // tags
+	case 3: // tags
 		t := m.selectedTicket()
 		current := ""
 		if t != nil && len(t.Tags) > 0 {
@@ -1592,11 +1603,11 @@ func (m *Model) startSelect(label string, options []string, onSelect func(string
 
 func (m *Model) updateSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "j", "down":
+	case "l":
 		if m.selectIdx < len(m.selectOptions)-1 {
 			m.selectIdx++
 		}
-	case "k", "up":
+	case "h":
 		if m.selectIdx > 0 {
 			m.selectIdx--
 		}
@@ -1637,9 +1648,9 @@ func (m *Model) viewSelect() string {
 			opt = ansi.Truncate(opt, perOption, "…")
 		}
 		if i == m.selectIdx {
-			parts = append(parts, selectedMarker.Render(" * "+opt))
+			parts = append(parts, selectedMarker.Render(fmt.Sprintf("*%-2s", opt)))
 		} else {
-			parts = append(parts, helpStyle.Render("   "+opt))
+			parts = append(parts, helpStyle.Render(opt))
 		}
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, parts...)
@@ -2118,6 +2129,7 @@ func (m *Model) renderArchiveMeta(t *model.Ticket, maxWidth int) string {
 
 	parts := []string{
 		lipgloss.NewStyle().Foreground(statusColor).Bold(true).Render(statusText),
+		priorityStyle.Render(fmt.Sprintf("P%d", t.Priority)),
 		lipgloss.NewStyle().Foreground(midGray).Render("archived " + archivedText),
 	}
 	if tagsText != "" {
@@ -2133,10 +2145,11 @@ func (m *Model) renderArchiveMeta(t *model.Ticket, maxWidth int) string {
 // ─── Add popup ──────────────────────────────────────────────────────
 
 // addFocusIdx values. The numeric order is also the tab cycle order:
-// assign → tags → title → description → (wrap).
+// assign → tags → priority → title → description → (wrap).
 const (
 	addFocusAssign = iota
 	addFocusTags
+	addFocusPriority
 	addFocusTitle
 	addFocusDesc
 )
@@ -2164,6 +2177,7 @@ func (m *Model) enterAddPopup() (tea.Model, tea.Cmd) {
 	assignIn.Blur()
 	m.addAssign = assignIn
 
+	m.addPriority = 0
 	m.addFocusIdx = addFocusTitle
 	m.addDescEditing = false
 	m.addConfirmQuit = false
@@ -2236,6 +2250,16 @@ func (m *Model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.addFocusIdx == addFocusPriority {
+		switch msg.String() {
+		case "enter", "l", "j":
+			m.addPriority = (m.addPriority + 1) % 4
+		case "h", "k":
+			m.addPriority = (m.addPriority + 3) % 4
+		}
+		return m, nil
+	}
+
 	if m.addFocusIdx == addFocusDesc {
 		switch msg.String() {
 		case "enter":
@@ -2298,7 +2322,7 @@ func (m *Model) cycleAddField(dir int) {
 		m.addDesc.Blur()
 		m.addDescEditing = false
 	}
-	m.addFocusIdx = (m.addFocusIdx + dir + 4) % 4
+	m.addFocusIdx = (m.addFocusIdx + dir + 5) % 5
 	switch m.addFocusIdx {
 	case addFocusAssign:
 		m.addAssign.Focus()
@@ -2327,7 +2351,7 @@ func (m *Model) submitAdd() {
 	assign := strings.TrimSpace(m.addAssign.Value())
 	status := model.ColumnOrder[m.focusedCol]
 
-	added, err := m.store.Add(title, desc, status, tags, assign, "tui")
+	added, err := m.store.Add(title, desc, status, tags, assign, "tui", m.addPriority)
 	if err != nil {
 		m.err = err
 		return
@@ -2555,8 +2579,13 @@ func (m *Model) renderAddMeta() string {
 	}
 
 	statusRender := lipgloss.NewStyle().Foreground(statusColor).Bold(true).Render(statusText)
+	priority := fmt.Sprintf("P%d", m.addPriority)
+	priorityRender := priorityStyle.Render(priority)
+	if m.addFocusIdx == addFocusPriority {
+		priorityRender = selectedFieldStyle.Render(priority)
+	}
 
-	return strings.Join([]string{statusRender, assignRender, tagsRender}, "  ")
+	return strings.Join([]string{statusRender, priorityRender, assignRender, tagsRender}, "  ")
 }
 
 func (m *Model) addHelpLine() string {
@@ -2571,6 +2600,9 @@ func (m *Model) addHelpLine() string {
 	parts := []string{
 		"tab/shift-tab: field",
 		"enter: save",
+	}
+	if m.addFocusIdx == addFocusPriority {
+		parts = []string{"tab/shift-tab: field", "enter/h/l: priority"}
 	}
 	if m.addFocusIdx == addFocusDesc && !m.addDescEditing {
 		parts = append(parts, "enter: edit", "h/l: field")
@@ -3580,10 +3612,11 @@ func (m *Model) renderTicketLine(t model.Ticket, selected bool, width int, accen
 		badge = ansi.Truncate(badge, maxBadge, "…")
 	}
 
+	priority := fmt.Sprintf("P%d ", t.Priority)
 	title := t.Title
-	maxTitle := width - 1 - lipgloss.Width(badge)
+	maxTitle := width - 1 - lipgloss.Width(badge) - lipgloss.Width(priority)
 	if selected {
-		maxTitle = width - 3 - lipgloss.Width(badge)
+		maxTitle = width - 2 - lipgloss.Width(badge) - lipgloss.Width(priority)
 	}
 	if t.AssignedTo != "" && selected {
 		maxTitle -= 2
@@ -3600,7 +3633,7 @@ func (m *Model) renderTicketLine(t model.Ticket, selected bool, width int, accen
 
 	if selected {
 		marker := lipgloss.NewStyle().Foreground(accentColor).Bold(true).Render(" * ")
-		titleRendered := foreignBoardStyle.Render(badge) +
+		titleRendered := priorityStyle.Render(priority) + foreignBoardStyle.Render(badge) +
 			lipgloss.NewStyle().Bold(true).Foreground(white).Render(title)
 		line := marker + titleRendered
 		if t.AssignedTo != "" {
@@ -3610,7 +3643,7 @@ func (m *Model) renderTicketLine(t model.Ticket, selected bool, width int, accen
 	}
 
 	return lipgloss.NewStyle().PaddingLeft(1).Render(
-		foreignBoardStyle.Render(badge) + lipgloss.NewStyle().Foreground(softWhite).Render(title))
+		priorityStyle.Render(priority) + foreignBoardStyle.Render(badge) + lipgloss.NewStyle().Foreground(softWhite).Render(title))
 }
 
 // viewBoardRows renders the board as stacked full-width rows — one per status.
@@ -3907,8 +3940,9 @@ func (m *Model) viewColumn() string {
 		// badge of its own — without it a foreign card here is
 		// indistinguishable from one of this board's.
 		badge := m.boardBadge(t.ID)
+		priority := fmt.Sprintf("P%d ", t.Priority)
 
-		maxTitle := innerWidth - 3 - len([]rune(suffix)) - len([]rune(badge))
+		maxTitle := innerWidth - 3 - len([]rune(suffix)) - len([]rune(badge)) - len([]rune(priority))
 		if maxTitle < 3 {
 			maxTitle = 3
 		}
@@ -3916,7 +3950,7 @@ func (m *Model) viewColumn() string {
 			titleText = string([]rune(titleText)[:maxTitle-1]) + "…"
 		}
 
-		line := marker + foreignBoardStyle.Render(badge) + tStyle.Render(titleText)
+		line := marker + priorityStyle.Render(priority) + foreignBoardStyle.Render(badge) + tStyle.Render(titleText)
 		if len(t.Tags) > 0 {
 			line += tagStyle.Render(" #" + strings.Join(t.Tags, " #"))
 		}
@@ -4021,6 +4055,7 @@ func (m *Model) renderCompactMeta(t *model.Ticket, maxWidth int, navigable bool)
 	color := columnColor(status)
 
 	statusText := statusDisplay[t.Status]
+	priorityText := fmt.Sprintf("P%d", t.Priority)
 
 	assignText, assignEmpty := "+assign", true
 	if t.AssignedTo != "" {
@@ -4039,6 +4074,7 @@ func (m *Model) renderCompactMeta(t *model.Ticket, maxWidth int, navigable bool)
 		empty bool
 	}{
 		{statusText, lipgloss.NewStyle().Foreground(color).Bold(true), false},
+		{priorityText, priorityStyle, false},
 		{assignText, assigneeStyle, assignEmpty},
 		{tagsText, tagStyle, tagsEmpty},
 	}
@@ -4072,6 +4108,7 @@ func (m *Model) renderMetaBar(t *model.Ticket) string {
 	color := columnColor(status)
 
 	statusText := statusDisplay[t.Status]
+	priorityText := fmt.Sprintf("P%d", t.Priority)
 
 	assignText, assignEmpty := "+assign", true
 	if t.AssignedTo != "" {
@@ -4090,6 +4127,7 @@ func (m *Model) renderMetaBar(t *model.Ticket) string {
 		empty bool
 	}{
 		{statusText, lipgloss.NewStyle().Foreground(color).Bold(true), false},
+		{priorityText, priorityStyle, false},
 		{assignText, assigneeStyle, assignEmpty},
 		{tagsText, tagStyle, tagsEmpty},
 	}

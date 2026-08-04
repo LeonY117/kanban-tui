@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -364,5 +366,160 @@ func TestReopeningTheArchiveKeepsItsFilterAndLandsOnAVisibleCard(t *testing.T) {
 	}
 	if !strings.Contains(sel.Title, "zeta") {
 		t.Errorf("selected %q, want a card the filter actually shows", sel.Title)
+	}
+}
+
+// ─── Regressions found by the PR 10 review ───────────────────────────
+
+func TestSwitchingBoardDropsBothFilters(t *testing.T) {
+	// switchBoard reset the filter belonging to whichever surface happened to
+	// be on screen, leaving the other one standing. A filter belongs to the
+	// board it was typed on — both of them do.
+	m, _ := archiveWith(t, "arc: auth old|TODO")
+	withSprint(t, "demo", "unrelated|TODO")
+
+	typeSearch(m, "auth") // the archive's filter
+	searchKeys(m, "enter")
+	if !m.archiveSearch.active() {
+		t.Fatal("setup: archive filter not applied")
+	}
+
+	// Leave the archive with the filter still set — X does not clear it — so
+	// the switch happens with the board on screen. That is the path that left
+	// the archive's filter standing: it reset whichever filter the current
+	// view selected, and the archive was no longer the current view.
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")})
+	if m.view != boardView {
+		t.Fatalf("setup: view = %v, want the board", m.view)
+	}
+	if !m.archiveSearch.active() {
+		t.Fatal("setup: leaving the archive cleared its filter")
+	}
+
+	if err := m.switchBoard("demo"); err != nil {
+		t.Fatal(err)
+	}
+	if m.archiveSearch.active() {
+		t.Errorf("archive filter %q followed the board switch", m.archiveSearch.query)
+	}
+	if m.archiveSearch.query != "" || m.archiveSearch.input.Value() != "" {
+		t.Errorf("archive query/input survived: %q / %q", m.archiveSearch.query, m.archiveSearch.input.Value())
+	}
+	if m.archiveSearch.owners != nil {
+		t.Error("archive owners map survived — local rows would read as borrowed")
+	}
+}
+
+func TestJumpingHomeFromTheArchiveDropsTheBoardFilter(t *testing.T) {
+	// The mirror of the above: the jump happens with the archive on screen, so
+	// the board's filter was the one left behind, foreign rows and all.
+	m, _ := archiveWith(t, "arc: auth local|TODO", "auth live|TODO")
+	other := withSprint(t, "demo", "auth remote|TODO")
+	ob, _ := other.Load()
+	if err := other.ArchiveByID(ob.Tickets[0].ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// A board filter with borrowed cards, left standing behind the archive.
+	m.view = boardView
+	typeSearch(m, "auth")
+	searchKeys(m, "ctrl+g", "enter")
+	if m.search.owners == nil {
+		t.Fatal("setup: the board search borrowed nothing")
+	}
+
+	m.enterArchive()
+	typeSearch(m, "auth")
+	searchKeys(m, "ctrl+g", "enter")
+	for i, e := range m.visibleArchiveEntries() {
+		if !e.isHeader && strings.Contains(e.ticket.Title, "remote") {
+			m.archiveCursor = i
+		}
+	}
+	if sel := m.archiveSelected(); sel == nil || !strings.Contains(sel.Title, "remote") {
+		t.Fatalf("setup: selected %v, want the borrowed row", sel)
+	}
+
+	if !m.jumpToForeignArchive() {
+		t.Fatal("the jump did not fire")
+	}
+
+	if m.sprintName != "demo" {
+		t.Fatalf("landed on %q, want demo", m.sprintName)
+	}
+	if m.search.active() {
+		t.Errorf("board filter %q survived the jump", m.search.query)
+	}
+	if m.search.owners != nil || m.search.foreign != nil {
+		t.Error("the board's borrowed cards survived a switch to another board")
+	}
+}
+
+// breakArchive replaces a board's archive file with something unparseable.
+func breakArchive(t *testing.T, sprint string) {
+	t.Helper()
+	root := filepath.Dir(os.Getenv("KANBAN_FILE"))
+	path := filepath.Join(root, "archive.json")
+	if sprint != "" {
+		path = filepath.Join(root, "sprints", sprint, "archive.json")
+	}
+	if err := os.WriteFile(path, []byte("{ not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAnUnreadableArchiveKeepsYouOnTheBoard(t *testing.T) {
+	// Entering the view first and loading after meant a failed read opened an
+	// empty archive browser, which looks exactly like an archive with nothing
+	// in it.
+	m, _ := boardWith(t, "live one|TODO")
+	breakArchive(t, "")
+
+	m.enterArchive()
+
+	if m.view != boardView {
+		t.Errorf("view = %v, want to stay on the board when the archive cannot be read", m.view)
+	}
+	if m.err == nil {
+		t.Error("the read failure was swallowed")
+	}
+}
+
+func TestAFailedReloadKeepsBorrowedRowsBorrowed(t *testing.T) {
+	// Ownership was discarded before the read that could fail, so the previous
+	// rows stayed on screen with no owner: badge gone, enter dead, and the
+	// guard that stops this board unarchiving another board's card bypassed.
+	m, _ := archiveWith(t, "arc: auth local|TODO")
+	other := withSprint(t, "demo", "auth remote|TODO")
+	ob, _ := other.Load()
+	if err := other.ArchiveByID(ob.Tickets[0].ID); err != nil {
+		t.Fatal(err)
+	}
+
+	typeSearch(m, "auth")
+	searchKeys(m, "ctrl+g", "enter")
+	var remoteID string
+	for _, e := range m.visibleArchiveEntries() {
+		if !e.isHeader && strings.Contains(e.ticket.Title, "remote") {
+			remoteID = e.ticket.ID
+		}
+	}
+	if remoteID == "" {
+		t.Fatal("setup: nothing was borrowed")
+	}
+
+	// Now the local archive goes bad under us, and something triggers a reload.
+	breakArchive(t, "")
+	m.toggleSearchScope()
+
+	for _, e := range m.visibleArchiveEntries() {
+		if !e.isHeader && e.ticket.ID == remoteID {
+			if badge := m.boardBadge(remoteID); badge == "" {
+				t.Error("a borrowed row still on screen lost its badge, so it reads as local")
+			}
+			if _, ok := m.ticketOwner(remoteID); !ok {
+				t.Error("a borrowed row still on screen lost its owner, so unarchive would write this board")
+			}
+		}
 	}
 }

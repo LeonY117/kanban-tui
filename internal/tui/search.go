@@ -238,15 +238,25 @@ func (m *Model) cancelSearch() {
 // filter, not a separate mode: leaving it on after a clear would keep other
 // boards' cards on screen with nothing left to explain why.
 func (m *Model) clearSearch() {
-	st := m.activeSearch()
+	m.resetSearch(m.activeSearch())
+	m.loadActiveForeign()
+	m.refreshActiveSelection()
+}
+
+// resetSearch puts one filter back to nothing — query, scope, completion and
+// the borrowed rows it had pulled in. Separate from clearSearch because a
+// board switch has to reset both filters, not just the one whose surface
+// happens to be on screen.
+func (m *Model) resetSearch(st *searchState) {
 	st.open = false
 	st.input.Blur()
 	st.input.SetValue("")
-	m.setQuery("")
+	st.query = ""
+	st.parsed = model.ParseQuery("")
 	st.tagIdx = 0
 	st.global = false
-	m.loadActiveForeign()
-	m.refreshActiveSelection()
+	st.foreign = nil
+	st.owners = nil
 }
 
 // refreshDetailIfOpen re-seeds the detail editors from whatever the cursor is
@@ -749,15 +759,18 @@ func (m *Model) focusArchiveTicket(id string) {
 // The borrowed rows are merged into archiveEntries rather than kept beside
 // them: the archive is one list sorted by date, so a card from another board
 // belongs at its own date rather than in a clump at the end.
-func (m *Model) loadForeignArchive() {
-	m.archiveSearch.foreign = nil
-	m.archiveSearch.owners = nil
-
+func (m *Model) loadForeignArchive() bool {
+	// Read before discarding anything. Clearing owners first and then failing
+	// left the previous rows on screen with no ownership: a borrowed one lost
+	// its badge, enter stopped following it home, and the unarchive guard that
+	// keeps this board from writing another board's card was bypassed.
 	local, err := m.store.LoadArchive()
 	if err != nil {
 		m.err = err
-		return
+		return false
 	}
+	m.archiveSearch.foreign = nil
+	m.archiveSearch.owners = nil
 	tickets := local.Tickets
 
 	if m.archiveSearch.global {
@@ -791,6 +804,7 @@ func (m *Model) loadForeignArchive() {
 
 	m.archiveEntries = buildArchiveEntries(tickets)
 	m.clampArchiveCursor()
+	return true
 }
 
 // jumpToForeignArchive follows a borrowed archive row home, landing in that
@@ -813,7 +827,6 @@ func (m *Model) jumpToForeignArchive() bool {
 	}
 	// switchBoard lands on the board; the row was in an archive, so follow it
 	// into that board's archive rather than leaving the user somewhere else.
-	m.archiveSearch.global = false
 	m.archiveSearch.query = query
 	m.archiveSearch.parsed = model.ParseQuery(query)
 	m.archiveSearch.input.SetValue(query)

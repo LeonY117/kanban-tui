@@ -1860,15 +1860,20 @@ func (m *Model) viewInput() string {
 // ─── Archive view ───────────────────────────────────────────────────
 
 func (m *Model) enterArchive() {
-	// The view has to be set first: loadForeignArchive reads the archive's own
-	// filter through activeSearch, which picks the state by view.
-	m.view = archiveView
-	// Start at the top and let the one clamp find the first row that is
-	// actually a ticket. Picking the index here as well meant two places
-	// deciding where the cursor may rest, and the second one could not be
-	// told apart from the unfiltered read it was supposed to avoid.
+	// Load before switching view, so an unreadable archive leaves you on the
+	// board with the error rather than inside a panel that looks like an empty
+	// archive. Nothing here needs the view set first: loadForeignArchive and
+	// visibleArchiveEntries read m.archiveSearch directly rather than through
+	// activeSearch.
+	//
+	// The cursor starts at the top and the one clamp finds the first row that
+	// is actually a ticket. Picking the index here as well meant two places
+	// deciding where the cursor may rest.
 	m.archiveCursor = 0
-	m.loadForeignArchive()
+	if !m.loadForeignArchive() {
+		return
+	}
+	m.view = archiveView
 }
 
 func (m *Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -3051,11 +3056,19 @@ func (m *Model) switchBoard(sprintName string) error {
 	m.focusedCol = 1
 	m.cursors = [5]int{}
 	m.scrollStart = [5]int{}
-	// A filter belongs to the board it was typed on. Carrying it across would
-	// land you on a new board showing three of its cards with no visible
-	// reason. jumpToForeign is the deliberate exception and re-applies its own
-	// query after calling this.
-	m.clearSearch()
+	// A filter belongs to the board it was typed on — and so does the other
+	// one. Carrying the board's across would land you on a new board showing
+	// three of its cards with no visible reason; carrying the archive's across
+	// would filter the next archive by a query typed for the last one, with an
+	// owners map still relative to the board it was built from, so local rows
+	// would read as borrowed. Resetting only the filter whose surface happens
+	// to be on screen left whichever one was not.
+	//
+	// jumpToForeign and jumpToForeignArchive are the deliberate exceptions and
+	// re-apply their own query after calling this.
+	m.resetSearch(&m.search)
+	m.resetSearch(&m.archiveSearch)
+	m.archiveEntries = nil
 	m.clampCursors()
 
 	if info, err := os.Stat(newStore.BoardPath()); err == nil {

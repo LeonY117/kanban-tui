@@ -181,7 +181,7 @@ func (m *Model) commitMove(targetBoard string, status model.Status) {
 		dst = s
 	}
 
-	if err := store.MoveTicket(m.store, dst, m.moveTicketID, status); err != nil {
+	if err := store.MoveTicket(m.store, dst, m.moveTicketID, &status); err != nil {
 		m.err = err
 		m.notice = err.Error()
 		return

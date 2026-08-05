@@ -15,6 +15,9 @@ func sandboxRoot(t *testing.T) {
 	t.Setenv("KANBAN_FILE", filepath.Join(t.TempDir(), "board.json"))
 }
 
+// landIn wraps a status for MoveTicket, whose nil means "keep the current one".
+func landIn(s model.Status) *model.Status { return &s }
+
 func TestMoveTicketAcrossBoards(t *testing.T) {
 	sandboxRoot(t)
 	src := New("")
@@ -31,7 +34,7 @@ func TestMoveTicketAcrossBoards(t *testing.T) {
 		t.Fatalf("add: %v", err)
 	}
 
-	if err := MoveTicket(src, dst, ticket.ID, model.StatusDoing); err != nil {
+	if err := MoveTicket(src, dst, ticket.ID, landIn(model.StatusDoing)); err != nil {
 		t.Fatalf("move: %v", err)
 	}
 
@@ -73,7 +76,7 @@ func TestMoveTicketSameBoardIsStatusChange(t *testing.T) {
 		t.Fatalf("add: %v", err)
 	}
 
-	if err := MoveTicket(s, s, ticket.ID, model.StatusDone); err != nil {
+	if err := MoveTicket(s, s, ticket.ID, landIn(model.StatusDone)); err != nil {
 		t.Fatalf("move: %v", err)
 	}
 
@@ -123,7 +126,7 @@ func TestRetryingAnInterruptedMoveDoesNotDuplicate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := MoveTicket(src, dst, ticket.ShortID, model.StatusDoing); err != nil {
+	if err := MoveTicket(src, dst, ticket.ShortID, landIn(model.StatusDoing)); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 
@@ -176,7 +179,7 @@ func TestRetryingAnInterruptedMoveRefreshesTheCopy(t *testing.T) {
 	}
 
 	unblock := blockWrites(t, src.boardPath())
-	if err := MoveTicket(src, dst, ticket.ShortID, model.StatusDoing); err == nil {
+	if err := MoveTicket(src, dst, ticket.ShortID, landIn(model.StatusDoing)); err == nil {
 		t.Fatal("expected the source write to fail")
 	}
 	unblock()
@@ -196,7 +199,7 @@ func TestRetryingAnInterruptedMoveRefreshesTheCopy(t *testing.T) {
 	if err := src.Update(ticket.ID, func(tk *model.Ticket) { tk.Title = "v2 title" }); err != nil {
 		t.Fatal(err)
 	}
-	if err := MoveTicket(src, dst, ticket.ShortID, model.StatusDoing); err != nil {
+	if err := MoveTicket(src, dst, ticket.ShortID, landIn(model.StatusDoing)); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 
@@ -244,7 +247,7 @@ func TestRetryingAnInterruptedMoveKeepsADestinationEdit(t *testing.T) {
 	}
 
 	unblock := blockWrites(t, src.boardPath())
-	if err := MoveTicket(src, dst, ticket.ShortID, model.StatusDoing); err == nil {
+	if err := MoveTicket(src, dst, ticket.ShortID, landIn(model.StatusDoing)); err == nil {
 		t.Fatal("expected the source write to fail")
 	}
 	unblock()
@@ -255,7 +258,7 @@ func TestRetryingAnInterruptedMoveKeepsADestinationEdit(t *testing.T) {
 	// A different status from the first attempt, so the assertion below can only
 	// pass if the retry actually reapplies it. Asking for DOING again would be
 	// satisfied by the copy the failed attempt already left in DOING.
-	if err := MoveTicket(src, dst, ticket.ShortID, model.StatusHold); err != nil {
+	if err := MoveTicket(src, dst, ticket.ShortID, landIn(model.StatusHold)); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 
@@ -302,7 +305,7 @@ func TestRetryingAnInterruptedMoveKeepsTheDestinationOnATie(t *testing.T) {
 	}
 
 	unblock := blockWrites(t, src.boardPath())
-	if err := MoveTicket(src, dst, ticket.ShortID, model.StatusDoing); err == nil {
+	if err := MoveTicket(src, dst, ticket.ShortID, landIn(model.StatusDoing)); err == nil {
 		t.Fatal("expected the source write to fail")
 	}
 	unblock()
@@ -334,7 +337,7 @@ func TestRetryingAnInterruptedMoveKeepsTheDestinationOnATie(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := MoveTicket(src, dst, ticket.ShortID, model.StatusHold); err != nil {
+	if err := MoveTicket(src, dst, ticket.ShortID, landIn(model.StatusHold)); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 
@@ -371,7 +374,7 @@ func TestRetryingAnInterruptedMoveDoesNotStampTheCopyBackwards(t *testing.T) {
 	}
 
 	unblock := blockWrites(t, src.boardPath())
-	if err := MoveTicket(src, dst, ticket.ShortID, model.StatusDoing); err == nil {
+	if err := MoveTicket(src, dst, ticket.ShortID, landIn(model.StatusDoing)); err == nil {
 		t.Fatal("expected the source write to fail")
 	}
 	unblock()
@@ -410,7 +413,7 @@ func TestRetryingAnInterruptedMoveDoesNotStampTheCopyBackwards(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := MoveTicket(src, dst, ticket.ShortID, model.StatusHold); err != nil {
+	if err := MoveTicket(src, dst, ticket.ShortID, landIn(model.StatusHold)); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 
@@ -428,6 +431,71 @@ func TestRetryingAnInterruptedMoveDoesNotStampTheCopyBackwards(t *testing.T) {
 	if moved.UpdatedAt.Before(srcStamp) {
 		t.Errorf("stamped back to %v, below the source's %v — a second retry would flip the winner",
 			moved.UpdatedAt, srcStamp)
+	}
+}
+
+// A move without an explicit status promises to keep the ticket's current
+// one, and after an interrupted move the current status lives on whichever
+// copy survives the retry. Reading it off the stale source copy instead used
+// to demote work the user had advanced on the destination in the meantime.
+func TestRetryingAnInterruptedMoveWithoutAStatusKeepsTheSurvivorsStatus(t *testing.T) {
+	sandboxRoot(t)
+	src := New("")
+	if err := CreateSprint("demo", ""); err != nil {
+		t.Fatal(err)
+	}
+	dst, err := NewSprint("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket, err := src.Add("hello", "", model.StatusTodo, nil, "", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unblock := blockWrites(t, src.boardPath())
+	if err := MoveTicket(src, dst, ticket.ShortID, nil); err == nil {
+		t.Fatal("expected the source write to fail")
+	}
+	unblock()
+
+	dstBoard, err := dst.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	landed, _ := dstBoard.FindByUUID(ticket.ID)
+	if landed == nil {
+		t.Fatal("the failed attempt should have left a copy on the destination")
+	}
+	if landed.Status != model.StatusTodo {
+		t.Fatalf("defaulted move landed in %s, want the source's todo", landed.Status)
+	}
+
+	// The user finds the ticket where they wanted it and advances it there.
+	if err := dst.Update(ticket.ID, func(tk *model.Ticket) { tk.Status = model.StatusDone }); err != nil {
+		t.Fatal(err)
+	}
+	if err := MoveTicket(src, dst, ticket.ShortID, nil); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+
+	dstBoard, err = dst.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, _ := dstBoard.FindByUUID(ticket.ID)
+	if moved == nil {
+		t.Fatal("ticket on neither board")
+	}
+	if moved.Status != model.StatusDone {
+		t.Errorf("status = %s, want done — the defaulted retry demoted the destination's status", moved.Status)
+	}
+	srcBoard, err := src.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(srcBoard.Tickets) != 0 {
+		t.Errorf("source still holds the ticket after the retry: %+v", srcBoard.Tickets)
 	}
 }
 
@@ -466,7 +534,7 @@ func TestMoveKeepsIDWhenOnlyAUUIDPrefixMatches(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := MoveTicket(src, dst, ticket.ShortID, model.StatusDoing); err != nil {
+	if err := MoveTicket(src, dst, ticket.ShortID, landIn(model.StatusDoing)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -512,8 +580,8 @@ func TestOppositeMovesDoNotDeadlock(t *testing.T) {
 	}
 
 	done := make(chan error, 2)
-	go func() { done <- MoveTicket(alpha, beta, there.ShortID, model.StatusDoing) }()
-	go func() { done <- MoveTicket(beta, alpha, back.ShortID, model.StatusDoing) }()
+	go func() { done <- MoveTicket(alpha, beta, there.ShortID, landIn(model.StatusDoing)) }()
+	go func() { done <- MoveTicket(beta, alpha, back.ShortID, landIn(model.StatusDoing)) }()
 
 	for i := 0; i < 2; i++ {
 		select {

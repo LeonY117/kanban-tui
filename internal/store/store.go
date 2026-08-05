@@ -212,6 +212,17 @@ func (s *Store) Update(id string, apply func(*model.Ticket)) error {
 	})
 }
 
+// upsertArchivedTicket refreshes a copy left by an interrupted archive instead
+// of creating duplicate UUIDs. The newer board copy wins because it stayed
+// editable.
+func upsertArchivedTicket(archive *model.Board, ticket model.Ticket) {
+	if existing, _ := archive.FindByUUID(ticket.ID); existing != nil {
+		*existing = ticket
+		return
+	}
+	archive.Tickets = append(archive.Tickets, ticket)
+}
+
 // ArchiveByID moves a single ticket to archive.json regardless of status.
 func (s *Store) ArchiveByID(id string) error {
 	return s.WithLock(func() error {
@@ -232,23 +243,12 @@ func (s *Store) ArchiveByID(id string) error {
 		now := time.Now()
 		archived := *t
 		archived.ArchivedAt = &now
-		// An interrupted earlier attempt already wrote this UUID to the archive.
-		// Refresh that entry rather than appending beside it: two entries sharing
-		// a UUID is a state no lookup can tell apart, and the board copy is the
-		// newer of the two — it stayed editable while the archived one was frozen.
-		if existing, _ := archive.FindByUUID(archived.ID); existing != nil {
-			*existing = archived
-		} else {
-			archive.Tickets = append(archive.Tickets, archived)
-		}
+		upsertArchivedTicket(archive, archived)
 		board.Tickets = append(board.Tickets[:idx], board.Tickets[idx+1:]...)
 
-		// The copy lands before the original goes: two files, no transaction
-		// between them, so a failed or interrupted second write leaves the ticket
-		// in both places rather than neither, and re-running the command
-		// collapses it. A ticket dropped from board.json and archive.json alike
-		// is gone for good. Deleting or moving the surviving board copy instead
-		// of retrying leaves the archive entry with nothing to collapse it.
+		// Write the gaining file first: without a transaction, a failed second
+		// write duplicates the ticket instead of dropping it. Retrying collapses
+		// the duplicate; deleting or moving the board copy strands the archive copy.
 		if err := s.saveArchive(archive); err != nil {
 			return err
 		}
@@ -287,9 +287,8 @@ func (s *Store) Unarchive(id string) error {
 		}
 		archive.Tickets = append(archive.Tickets[:idx], archive.Tickets[idx+1:]...)
 
-		// Board first here — same rule as ArchiveByID, mirrored: the board is
-		// the side gaining the ticket, so it gets written before the archive
-		// gives it up.
+		// Write the gaining file first so a failed second write duplicates the
+		// ticket instead of dropping it.
 		if err := s.Save(board); err != nil {
 			return err
 		}
@@ -316,19 +315,13 @@ func (s *Store) Archive(before *time.Time) (int, error) {
 		// Split tickets into keep and archive
 		var keep []model.Ticket
 		now := time.Now()
-		// A ticket the archive already holds from an interrupted attempt is only
-		// reconciled here if it still matches. Pull it out of DONE first, or past
-		// the same cutoff, and the retry skips it — leaving the same UUID live and
-		// archived until `kanban archive <id>` is run on it.
+		// A retry only reconciles copies that still match. Changing the status or
+		// updating past the cutoff leaves it in both files until archived by ID.
 		for _, t := range board.Tickets {
 			if t.Status == model.StatusDone {
 				if before == nil || t.UpdatedAt.Before(*before) {
 					t.ArchivedAt = &now
-					if existing, _ := archive.FindByUUID(t.ID); existing != nil {
-						*existing = t
-					} else {
-						archive.Tickets = append(archive.Tickets, t)
-					}
+					upsertArchivedTicket(archive, t)
 					count++
 					continue
 				}
@@ -345,7 +338,7 @@ func (s *Store) Archive(before *time.Time) (int, error) {
 		}
 		board.Tickets = keep
 
-		// Archive first, then the board — see ArchiveByID.
+		// Write the gaining file first; see ArchiveByID.
 		if err := s.saveArchive(archive); err != nil {
 			return err
 		}

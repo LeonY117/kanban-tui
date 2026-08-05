@@ -49,6 +49,19 @@ func copiesOf(t *testing.T, load func() (*model.Board, error), id string) int {
 	return n
 }
 
+var archiveOperations = []struct {
+	name    string
+	archive func(*Store, string) error
+}{
+	{"ArchiveByID", func(s *Store, id string) error {
+		return s.ArchiveByID(id)
+	}},
+	{"Archive", func(s *Store, _ string) error {
+		_, err := s.Archive(nil)
+		return err
+	}},
+}
+
 // A failed archive write must leave the board untouched, or the ticket is gone
 // from board.json and archive.json alike — with no backup to recover it from.
 func TestArchiveByIDKeepsTicketWhenArchiveWriteFails(t *testing.T) {
@@ -111,43 +124,28 @@ func TestUnarchiveKeepsTicketWhenBoardWriteFails(t *testing.T) {
 // run the command again. The retry must finish the job rather than append a
 // second entry sharing the first one's UUID.
 func TestRetryingAnInterruptedArchiveDoesNotDuplicate(t *testing.T) {
-	sandboxRoot(t)
-	s := New("")
-	ticket := addDone(t, s, "archive me twice")
+	for _, operation := range archiveOperations {
+		t.Run(operation.name, func(t *testing.T) {
+			sandboxRoot(t)
+			s := New("")
+			ticket := addDone(t, s, "archive me twice")
 
-	unblock := blockWrites(t, s.boardPath())
-	if err := s.ArchiveByID(ticket.ID); err == nil {
-		t.Fatal("ArchiveByID succeeded despite the board write failing")
-	}
-	unblock()
+			unblock := blockWrites(t, s.boardPath())
+			if err := operation.archive(s, ticket.ID); err == nil {
+				t.Fatalf("%s succeeded despite the board write failing", operation.name)
+			}
+			unblock()
 
-	if err := s.ArchiveByID(ticket.ID); err != nil {
-		t.Fatalf("retry: %v", err)
-	}
-	if n := copiesOf(t, s.LoadArchive, ticket.ID); n != 1 {
-		t.Errorf("archive holds %d copies after the retry, want 1", n)
-	}
-	if n := copiesOf(t, s.Load, ticket.ID); n != 0 {
-		t.Errorf("board still holds %d copies after the retry, want 0", n)
-	}
-}
-
-func TestRetryingAnInterruptedBulkArchiveDoesNotDuplicate(t *testing.T) {
-	sandboxRoot(t)
-	s := New("")
-	ticket := addDone(t, s, "bulk me twice")
-
-	unblock := blockWrites(t, s.boardPath())
-	if _, err := s.Archive(nil); err == nil {
-		t.Fatal("Archive succeeded despite the board write failing")
-	}
-	unblock()
-
-	if _, err := s.Archive(nil); err != nil {
-		t.Fatalf("retry: %v", err)
-	}
-	if n := copiesOf(t, s.LoadArchive, ticket.ID); n != 1 {
-		t.Errorf("archive holds %d copies after the retry, want 1", n)
+			if err := operation.archive(s, ticket.ID); err != nil {
+				t.Fatalf("retry: %v", err)
+			}
+			if n := copiesOf(t, s.LoadArchive, ticket.ID); n != 1 {
+				t.Errorf("archive holds %d copies after the retry, want 1", n)
+			}
+			if n := copiesOf(t, s.Load, ticket.ID); n != 0 {
+				t.Errorf("board still holds %d copies after the retry, want 0", n)
+			}
+		})
 	}
 }
 
@@ -155,64 +153,37 @@ func TestRetryingAnInterruptedBulkArchiveDoesNotDuplicate(t *testing.T) {
 // retry runs it can be the newer of the two. The retry must carry that version
 // into the archive rather than keep the snapshot the first attempt froze.
 func TestRetryingAnInterruptedArchiveRefreshesTheEntry(t *testing.T) {
-	sandboxRoot(t)
-	s := New("")
-	ticket := addDone(t, s, "v1 title")
+	for _, operation := range archiveOperations {
+		t.Run(operation.name, func(t *testing.T) {
+			sandboxRoot(t)
+			s := New("")
+			ticket := addDone(t, s, "v1 title")
 
-	unblock := blockWrites(t, s.boardPath())
-	if err := s.ArchiveByID(ticket.ID); err == nil {
-		t.Fatal("ArchiveByID succeeded despite the board write failing")
-	}
-	unblock()
+			unblock := blockWrites(t, s.boardPath())
+			if err := operation.archive(s, ticket.ID); err == nil {
+				t.Fatalf("%s succeeded despite the board write failing", operation.name)
+			}
+			unblock()
 
-	if err := s.Update(ticket.ID, func(tk *model.Ticket) { tk.Title = "v2 title" }); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.ArchiveByID(ticket.ID); err != nil {
-		t.Fatalf("retry: %v", err)
-	}
+			if err := s.Update(ticket.ID, func(tk *model.Ticket) { tk.Title = "v2 title" }); err != nil {
+				t.Fatal(err)
+			}
+			if err := operation.archive(s, ticket.ID); err != nil {
+				t.Fatalf("retry: %v", err)
+			}
 
-	archive, err := s.LoadArchive()
-	if err != nil {
-		t.Fatal(err)
-	}
-	found, _ := archive.FindByUUID(ticket.ID)
-	if found == nil {
-		t.Fatal("ticket is in neither file")
-	}
-	if found.Title != "v2 title" {
-		t.Errorf("archive holds %q, want %q — the retry kept the stale copy", found.Title, "v2 title")
-	}
-}
-
-func TestRetryingAnInterruptedBulkArchiveRefreshesTheEntry(t *testing.T) {
-	sandboxRoot(t)
-	s := New("")
-	ticket := addDone(t, s, "v1 title")
-
-	unblock := blockWrites(t, s.boardPath())
-	if _, err := s.Archive(nil); err == nil {
-		t.Fatal("Archive succeeded despite the board write failing")
-	}
-	unblock()
-
-	if err := s.Update(ticket.ID, func(tk *model.Ticket) { tk.Title = "v2 title" }); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Archive(nil); err != nil {
-		t.Fatalf("retry: %v", err)
-	}
-
-	archive, err := s.LoadArchive()
-	if err != nil {
-		t.Fatal(err)
-	}
-	found, _ := archive.FindByUUID(ticket.ID)
-	if found == nil {
-		t.Fatal("ticket is in neither file")
-	}
-	if found.Title != "v2 title" {
-		t.Errorf("archive holds %q, want %q — the retry kept the stale copy", found.Title, "v2 title")
+			archive, err := s.LoadArchive()
+			if err != nil {
+				t.Fatal(err)
+			}
+			found, _ := archive.FindByUUID(ticket.ID)
+			if found == nil {
+				t.Fatal("ticket is in neither file")
+			}
+			if found.Title != "v2 title" {
+				t.Errorf("archive holds %q, want %q — the retry kept the stale copy", found.Title, "v2 title")
+			}
+		})
 	}
 }
 

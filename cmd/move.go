@@ -30,16 +30,20 @@ var moveCmd = &cobra.Command{
 			return fmt.Errorf("ticket not found: %s", id)
 		}
 
-		status := ticket.Status
+		// nil keeps the ticket's current status — resolved by the store, not
+		// here: after an interrupted move the current status lives on whichever
+		// copy survives the retry, which this stale read cannot know.
+		var status *model.Status
 		if cmd.Flags().Changed("status") {
 			s, _ := cmd.Flags().GetString("status")
-			status, err = model.ParseStatus(s)
+			parsed, err := model.ParseStatus(s)
 			if err != nil {
 				return err
 			}
+			status = &parsed
 		}
 
-		if st.BoardPath() == dst.BoardPath() && status == ticket.Status {
+		if st.BoardPath() == dst.BoardPath() && (status == nil || *status == ticket.Status) {
 			return fmt.Errorf("%s is already on %s", ticket.ShortID, dstName)
 		}
 

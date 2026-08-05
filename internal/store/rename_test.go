@@ -315,7 +315,7 @@ func TestPrefixChangeRefusesIDsHeldByTheBoardItself(t *testing.T) {
 
 	moved := addTicket(t, alpha, "born on alpha") // AL1
 	addTicket(t, kanban, "ka one")                // KA1
-	if err := MoveTicket(alpha, kanban, moved.ID, model.StatusTodo); err != nil {
+	if err := MoveTicket(alpha, kanban, moved.ID, landIn(model.StatusTodo)); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := shortIDs(t, kanban), []string{"KA1", "AL1"}; !equalStrings(got, want) {

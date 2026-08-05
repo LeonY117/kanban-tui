@@ -70,12 +70,22 @@ func moveLocked(src, dst *Store, id string, newStatus model.Status) error {
 		// source. The short id this board minted stays either way, since anything
 		// referring to the ticket here already uses it.
 		t := ticket
-		if existing.UpdatedAt.After(ticket.UpdatedAt) {
+		if !existing.UpdatedAt.Before(ticket.UpdatedAt) {
+			// Equal stamps go to the destination: an edit through Update always
+			// bumps UpdatedAt, so a tie means nothing here says the source is the
+			// newer one, and the destination's copy is the one already committed
+			// at the target.
 			t = *existing
 		}
 		t.ShortID = existing.ShortID
 		t.Status = newStatus
-		t.UpdatedAt = time.Now()
+		// Never stamp it backwards. A copy dated in the future — hand-edited
+		// JSON, a clock walked back — would otherwise be lowered below the
+		// source here, and a second interrupted retry would then read the source
+		// as the newer one and overwrite the copy this one just chose to keep.
+		if now := time.Now(); now.After(t.UpdatedAt) {
+			t.UpdatedAt = now
+		}
 		*existing = t
 	} else {
 		t := ticket

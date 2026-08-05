@@ -3,6 +3,7 @@ package store
 import (
 	"os"
 	"testing"
+	"time"
 
 	"github.com/LeonY117/kanban-tui/internal/model"
 )
@@ -165,9 +166,10 @@ func TestRetryingAnInterruptedArchiveRefreshesTheEntry(t *testing.T) {
 			}
 			unblock()
 
-			// The date the failed attempt stamped. The archive browser groups by
-			// it, so a refresh that kept it would file the entry under the day
-			// the archive failed rather than the day it succeeded.
+			// Backdate what the failed attempt left, rather than trusting two
+			// clock reads to differ. The archive browser groups by ArchivedAt, so
+			// a refresh that kept this date would file the entry under the day the
+			// archive failed rather than the day it succeeded.
 			frozen, err := s.LoadArchive()
 			if err != nil {
 				t.Fatal(err)
@@ -176,7 +178,11 @@ func TestRetryingAnInterruptedArchiveRefreshesTheEntry(t *testing.T) {
 			if stale == nil || stale.ArchivedAt == nil {
 				t.Fatal("the failed attempt should have left a dated archive entry")
 			}
-			staleDate := *stale.ArchivedAt
+			staleDate := time.Date(2001, time.January, 1, 0, 0, 0, 0, time.UTC)
+			stale.ArchivedAt = &staleDate
+			if err := s.saveArchive(frozen); err != nil {
+				t.Fatal(err)
+			}
 
 			if err := s.Update(ticket.ID, func(tk *model.Ticket) { tk.Title = "v2 title" }); err != nil {
 				t.Fatal(err)

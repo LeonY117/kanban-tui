@@ -252,7 +252,10 @@ func TestRetryingAnInterruptedMoveKeepsADestinationEdit(t *testing.T) {
 	if err := dst.Update(ticket.ID, func(tk *model.Ticket) { tk.Title = "edited on the destination" }); err != nil {
 		t.Fatal(err)
 	}
-	if err := MoveTicket(src, dst, ticket.ShortID, model.StatusDoing); err != nil {
+	// A different status from the first attempt, so the assertion below can only
+	// pass if the retry actually reapplies it. Asking for DOING again would be
+	// satisfied by the copy the failed attempt already left in DOING.
+	if err := MoveTicket(src, dst, ticket.ShortID, model.StatusHold); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 
@@ -267,8 +270,8 @@ func TestRetryingAnInterruptedMoveKeepsADestinationEdit(t *testing.T) {
 	if moved.Title != "edited on the destination" {
 		t.Errorf("destination holds %q, want %q — the retry overwrote it from the stale source", moved.Title, "edited on the destination")
 	}
-	if moved.Status != model.StatusDoing {
-		t.Errorf("status = %s, want doing — the move's status still applies", moved.Status)
+	if moved.Status != model.StatusHold {
+		t.Errorf("status = %s, want hold — the retry has to reapply the move's status", moved.Status)
 	}
 	srcBoard, err := src.Load()
 	if err != nil {
@@ -276,6 +279,155 @@ func TestRetryingAnInterruptedMoveKeepsADestinationEdit(t *testing.T) {
 	}
 	if len(srcBoard.Tickets) != 0 {
 		t.Errorf("source still holds the ticket after the retry: %+v", srcBoard.Tickets)
+	}
+}
+
+// Timestamps can tie: an Update always bumps UpdatedAt, so the two copies never
+// tie through the API, but a hand-edited board or one written by an older
+// version can. A tie is no evidence that the source is the newer copy, so the
+// destination — already committed at the target — has to keep its content.
+func TestRetryingAnInterruptedMoveKeepsTheDestinationOnATie(t *testing.T) {
+	sandboxRoot(t)
+	src := New("")
+	if err := CreateSprint("demo", ""); err != nil {
+		t.Fatal(err)
+	}
+	dst, err := NewSprint("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket, err := src.Add("v1 title", "", model.StatusTodo, nil, "", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unblock := blockWrites(t, src.boardPath())
+	if err := MoveTicket(src, dst, ticket.ShortID, model.StatusDoing); err == nil {
+		t.Fatal("expected the source write to fail")
+	}
+	unblock()
+
+	if err := dst.Update(ticket.ID, func(tk *model.Ticket) { tk.Title = "edited on the destination" }); err != nil {
+		t.Fatal(err)
+	}
+
+	// Force the tie the API cannot produce: give the source copy exactly the
+	// destination's timestamp.
+	dstBoard, err := dst.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	landed, _ := dstBoard.FindByUUID(ticket.ID)
+	if landed == nil {
+		t.Fatal("the failed attempt should have left a copy on the destination")
+	}
+	srcBoard, err := src.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stranded, _ := srcBoard.FindByUUID(ticket.ID)
+	if stranded == nil {
+		t.Fatal("the failed attempt should have left the source copy in place")
+	}
+	stranded.UpdatedAt = landed.UpdatedAt
+	if err := src.Save(srcBoard); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := MoveTicket(src, dst, ticket.ShortID, model.StatusHold); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+
+	dstBoard, err = dst.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, _ := dstBoard.FindByUUID(ticket.ID)
+	if moved == nil {
+		t.Fatal("ticket on neither board")
+	}
+	if moved.Title != "edited on the destination" {
+		t.Errorf("destination holds %q, want %q — a tie handed it to the source", moved.Title, "edited on the destination")
+	}
+}
+
+// A copy dated in the future — hand-edited JSON, a clock walked back — must not
+// be stamped backwards by the retry that keeps it. Lowering it under the copy it
+// just beat would hand a second interrupted retry the opposite winner, undoing
+// the edit this one preserved.
+func TestRetryingAnInterruptedMoveDoesNotStampTheCopyBackwards(t *testing.T) {
+	sandboxRoot(t)
+	src := New("")
+	if err := CreateSprint("demo", ""); err != nil {
+		t.Fatal(err)
+	}
+	dst, err := NewSprint("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket, err := src.Add("v1 title", "", model.StatusTodo, nil, "", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unblock := blockWrites(t, src.boardPath())
+	if err := MoveTicket(src, dst, ticket.ShortID, model.StatusDoing); err == nil {
+		t.Fatal("expected the source write to fail")
+	}
+	unblock()
+
+	if err := dst.Update(ticket.ID, func(tk *model.Ticket) { tk.Title = "edited on the destination" }); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both copies dated ahead of the clock, the destination the later of the two.
+	// Written straight to the boards: Update stamps UpdatedAt itself after apply
+	// runs, so it cannot be used to plant a date.
+	now := time.Now()
+	srcStamp := now.Add(time.Hour)
+	dstBoard, err := dst.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	landed, _ := dstBoard.FindByUUID(ticket.ID)
+	if landed == nil {
+		t.Fatal("the failed attempt should have left a copy on the destination")
+	}
+	landed.UpdatedAt = now.Add(24 * time.Hour)
+	if err := dst.Save(dstBoard); err != nil {
+		t.Fatal(err)
+	}
+	srcBoard, err := src.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stranded, _ := srcBoard.FindByUUID(ticket.ID)
+	if stranded == nil {
+		t.Fatal("the failed attempt should have left the source copy in place")
+	}
+	stranded.UpdatedAt = srcStamp
+	if err := src.Save(srcBoard); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := MoveTicket(src, dst, ticket.ShortID, model.StatusHold); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+
+	dstBoard, err = dst.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, _ := dstBoard.FindByUUID(ticket.ID)
+	if moved == nil {
+		t.Fatal("ticket on neither board")
+	}
+	if moved.Title != "edited on the destination" {
+		t.Errorf("destination holds %q, want the destination's edit", moved.Title)
+	}
+	if moved.UpdatedAt.Before(srcStamp) {
+		t.Errorf("stamped back to %v, below the source's %v — a second retry would flip the winner",
+			moved.UpdatedAt, srcStamp)
 	}
 }
 

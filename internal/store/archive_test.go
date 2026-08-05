@@ -165,6 +165,19 @@ func TestRetryingAnInterruptedArchiveRefreshesTheEntry(t *testing.T) {
 			}
 			unblock()
 
+			// The date the failed attempt stamped. The archive browser groups by
+			// it, so a refresh that kept it would file the entry under the day
+			// the archive failed rather than the day it succeeded.
+			frozen, err := s.LoadArchive()
+			if err != nil {
+				t.Fatal(err)
+			}
+			stale, _ := frozen.FindByUUID(ticket.ID)
+			if stale == nil || stale.ArchivedAt == nil {
+				t.Fatal("the failed attempt should have left a dated archive entry")
+			}
+			staleDate := *stale.ArchivedAt
+
 			if err := s.Update(ticket.ID, func(tk *model.Ticket) { tk.Title = "v2 title" }); err != nil {
 				t.Fatal(err)
 			}
@@ -182,6 +195,9 @@ func TestRetryingAnInterruptedArchiveRefreshesTheEntry(t *testing.T) {
 			}
 			if found.Title != "v2 title" {
 				t.Errorf("archive holds %q, want %q — the retry kept the stale copy", found.Title, "v2 title")
+			}
+			if found.ArchivedAt == nil || !found.ArchivedAt.After(staleDate) {
+				t.Errorf("ArchivedAt is %v, want later than the failed attempt's %v", found.ArchivedAt, staleDate)
 			}
 		})
 	}
@@ -205,8 +221,12 @@ func TestArchivingByIDReconcilesATicketTheBulkRetrySkipped(t *testing.T) {
 	if err := s.Update(ticket.ID, func(tk *model.Ticket) { tk.Status = model.StatusDoing }); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Archive(nil); err != nil {
+	// Nothing matches, so nothing is reconciled and the count says so — which is
+	// what `kanban archive` prints back.
+	if n, err := s.Archive(nil); err != nil {
 		t.Fatalf("bulk retry: %v", err)
+	} else if n != 0 {
+		t.Errorf("bulk retry archived %d, want 0 — nothing still matched", n)
 	}
 	if copiesOf(t, s.Load, ticket.ID) != 1 || copiesOf(t, s.LoadArchive, ticket.ID) != 1 {
 		t.Fatal("expected the documented ghost: live on the board and in the archive")
@@ -237,6 +257,11 @@ func TestRetryingAnInterruptedUnarchiveDoesNotDuplicate(t *testing.T) {
 	}
 	unblock()
 
+	// The restored copy is live on the board before the retry runs, so an edit
+	// to it must survive — the archive's copy is the older of the two here.
+	if err := s.Update(ticket.ID, func(tk *model.Ticket) { tk.Title = "edited while restored" }); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.Unarchive(ticket.ID); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
@@ -245,5 +270,19 @@ func TestRetryingAnInterruptedUnarchiveDoesNotDuplicate(t *testing.T) {
 	}
 	if n := copiesOf(t, s.LoadArchive, ticket.ID); n != 0 {
 		t.Errorf("archive still holds %d copies after the retry, want 0", n)
+	}
+	board, err := s.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, _ := board.FindByUUID(ticket.ID)
+	if restored == nil {
+		t.Fatal("ticket on neither board")
+	}
+	if restored.Title != "edited while restored" {
+		t.Errorf("board holds %q, want %q — the retry took the archive's older copy", restored.Title, "edited while restored")
+	}
+	if restored.ArchivedAt != nil {
+		t.Error("restored ticket still carries an ArchivedAt")
 	}
 }

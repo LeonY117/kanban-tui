@@ -223,6 +223,62 @@ func TestRetryingAnInterruptedMoveRefreshesTheCopy(t *testing.T) {
 	}
 }
 
+// The mirror of the case above: an interrupted move leaves the ticket live on
+// two ordinary boards, so the destination copy can be the edited one — the user
+// finds it where they wanted it and works on it there. Whichever side carries
+// the newer edit has to survive the retry, so the retry cannot simply prefer
+// the direction the move runs in.
+func TestRetryingAnInterruptedMoveKeepsADestinationEdit(t *testing.T) {
+	sandboxRoot(t)
+	src := New("")
+	if err := CreateSprint("demo", ""); err != nil {
+		t.Fatal(err)
+	}
+	dst, err := NewSprint("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket, err := src.Add("v1 title", "", model.StatusTodo, nil, "", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unblock := blockWrites(t, src.boardPath())
+	if err := MoveTicket(src, dst, ticket.ShortID, model.StatusDoing); err == nil {
+		t.Fatal("expected the source write to fail")
+	}
+	unblock()
+
+	if err := dst.Update(ticket.ID, func(tk *model.Ticket) { tk.Title = "edited on the destination" }); err != nil {
+		t.Fatal(err)
+	}
+	if err := MoveTicket(src, dst, ticket.ShortID, model.StatusDoing); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+
+	dstBoard, err := dst.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, _ := dstBoard.FindByUUID(ticket.ID)
+	if moved == nil {
+		t.Fatal("ticket on neither board")
+	}
+	if moved.Title != "edited on the destination" {
+		t.Errorf("destination holds %q, want %q — the retry overwrote it from the stale source", moved.Title, "edited on the destination")
+	}
+	if moved.Status != model.StatusDoing {
+		t.Errorf("status = %s, want doing — the move's status still applies", moved.Status)
+	}
+	srcBoard, err := src.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(srcBoard.Tickets) != 0 {
+		t.Errorf("source still holds the ticket after the retry: %+v", srcBoard.Tickets)
+	}
+}
+
 // Collision detection must compare short ids exactly. FindByID also matches
 // UUID prefixes, so moving a ticket whose short id is "1" into a board holding
 // an unrelated ticket whose UUID merely starts with "1" used to look like a

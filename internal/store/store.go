@@ -263,7 +263,10 @@ func (s *Store) LoadArchive() (*model.Board, error) {
 }
 
 // Unarchive moves a ticket out of archive.json back to the board with its
-// original status. Clears ArchivedAt and bumps UpdatedAt.
+// original status. Clears ArchivedAt and bumps UpdatedAt. A retry after an
+// interrupted attempt keeps the copy already sitting on the board — status and
+// edits included — rather than the archive's older one, so the status it lands
+// on is the restored copy's own once it has been changed.
 func (s *Store) Unarchive(id string) error {
 	return s.WithLock(func() error {
 		archive, err := s.loadArchive()

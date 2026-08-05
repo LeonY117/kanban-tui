@@ -143,6 +143,86 @@ func TestRetryingAnInterruptedMoveDoesNotDuplicate(t *testing.T) {
 	}
 }
 
+// The source copy stays editable after an interrupted move, so by the time the
+// retry runs it can be the newer of the two. The retry must carry that version
+// across rather than keep the copy the first attempt left on the destination —
+// while keeping the short id that board already minted.
+func TestRetryingAnInterruptedMoveRefreshesTheCopy(t *testing.T) {
+	sandboxRoot(t)
+	src := New("")
+	if err := CreateSprint("demo", ""); err != nil {
+		t.Fatal(err)
+	}
+	dst, err := NewSprint("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ticket, err := src.Add("v1 title", "", model.StatusTodo, nil, "", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Park the source's short id on the destination, so arriving there forces a
+	// renumber and the retry has a minted id it must not clobber.
+	blocker := addTicket(t, dst, "already here")
+	dstBoard, err := dst.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, _ := dstBoard.FindByUUID(blocker.ID)
+	held.ShortID = ticket.ShortID
+	if err := dst.Save(dstBoard); err != nil {
+		t.Fatal(err)
+	}
+
+	unblock := blockWrites(t, src.boardPath())
+	if err := MoveTicket(src, dst, ticket.ShortID, model.StatusDoing); err == nil {
+		t.Fatal("expected the source write to fail")
+	}
+	unblock()
+
+	minted := ""
+	dstBoard, err = dst.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if arrived, _ := dstBoard.FindByUUID(ticket.ID); arrived != nil {
+		minted = arrived.ShortID
+	}
+	if minted == "" || minted == ticket.ShortID {
+		t.Fatalf("setup: destination should have minted a fresh id, got %q", minted)
+	}
+
+	if err := src.Update(ticket.ID, func(tk *model.Ticket) { tk.Title = "v2 title" }); err != nil {
+		t.Fatal(err)
+	}
+	if err := MoveTicket(src, dst, ticket.ShortID, model.StatusDoing); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+
+	dstBoard, err = dst.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, _ := dstBoard.FindByUUID(ticket.ID)
+	if moved == nil {
+		t.Fatal("ticket on neither board")
+	}
+	if moved.Title != "v2 title" {
+		t.Errorf("destination holds %q, want %q — the retry kept the stale copy", moved.Title, "v2 title")
+	}
+	if moved.ShortID != minted {
+		t.Errorf("short id changed to %q on the retry, want the minted %q", moved.ShortID, minted)
+	}
+	srcBoard, err := src.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(srcBoard.Tickets) != 0 {
+		t.Errorf("source still holds the ticket after the retry: %+v", srcBoard.Tickets)
+	}
+}
+
 // Collision detection must compare short ids exactly. FindByID also matches
 // UUID prefixes, so moving a ticket whose short id is "1" into a board holding
 // an unrelated ticket whose UUID merely starts with "1" used to look like a

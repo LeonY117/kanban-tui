@@ -61,10 +61,17 @@ func moveLocked(src, dst *Store, id string, newStatus model.Status) error {
 	// earlier write by UUID makes that retry finish the move instead of
 	// appending a second copy sharing the first one's UUID — which no lookup
 	// could tell apart afterwards.
-	if existing, _ := dstBoard.FindByUUID(ticket.ID); existing == nil {
-		t := ticket
-		t.Status = newStatus
-		t.UpdatedAt = time.Now()
+	t := ticket
+	t.Status = newStatus
+	t.UpdatedAt = time.Now()
+	if existing, _ := dstBoard.FindByUUID(ticket.ID); existing != nil {
+		// Refresh it rather than leave the copy the interrupted attempt froze:
+		// the src copy stayed editable in the meantime, so it is the newer of
+		// the two. The short id this board already minted stays as it is —
+		// anything referring to the ticket here already uses it.
+		t.ShortID = existing.ShortID
+		*existing = t
+	} else {
 		// The ticket keeps its id — references to it in commits and notes stay
 		// good — unless the destination already uses that id, in which case it
 		// takes a fresh one from the destination's own prefix.
@@ -76,9 +83,9 @@ func moveLocked(src, dst *Store, id string, newStatus model.Status) error {
 			t.ShortID = newID
 		}
 		dstBoard.Tickets = append(dstBoard.Tickets, t)
-		if err := dst.Save(dstBoard); err != nil {
-			return err
-		}
+	}
+	if err := dst.Save(dstBoard); err != nil {
+		return err
 	}
 
 	// By UUID, not by what the user typed: the id they gave resolves against a

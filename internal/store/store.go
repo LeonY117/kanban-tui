@@ -232,19 +232,23 @@ func (s *Store) ArchiveByID(id string) error {
 		now := time.Now()
 		archived := *t
 		archived.ArchivedAt = &now
-		// Already there from an interrupted earlier attempt: appending again
-		// would put two entries sharing a UUID in the archive, which no lookup
-		// could tell apart afterwards. Same reasoning as MoveTicket.
-		if existing, _ := archive.FindByUUID(archived.ID); existing == nil {
+		// An interrupted earlier attempt already wrote this UUID to the archive.
+		// Refresh that entry rather than appending beside it: two entries sharing
+		// a UUID is a state no lookup can tell apart, and the board copy is the
+		// newer of the two — it stayed editable while the archived one was frozen.
+		if existing, _ := archive.FindByUUID(archived.ID); existing != nil {
+			*existing = archived
+		} else {
 			archive.Tickets = append(archive.Tickets, archived)
 		}
 		board.Tickets = append(board.Tickets[:idx], board.Tickets[idx+1:]...)
 
 		// The copy lands before the original goes: two files, no transaction
-		// between them, so a failed or interrupted second write leaves the
-		// ticket in both places rather than neither. A duplicate is visible and
-		// recoverable — and the retry above collapses it — where a ticket
-		// dropped from board.json and archive.json alike is gone for good.
+		// between them, so a failed or interrupted second write leaves the ticket
+		// in both places rather than neither, and re-running the command
+		// collapses it. A ticket dropped from board.json and archive.json alike
+		// is gone for good. Deleting or moving the surviving board copy instead
+		// of retrying leaves the archive entry with nothing to collapse it.
 		if err := s.saveArchive(archive); err != nil {
 			return err
 		}
@@ -276,6 +280,8 @@ func (s *Store) Unarchive(id string) error {
 		restored := *t
 		restored.ArchivedAt = nil
 		restored.UpdatedAt = time.Now()
+		// The board may already hold it from an interrupted earlier attempt. Keep
+		// that copy rather than the archive's — it is the one that stayed editable.
 		if existing, _ := board.FindByUUID(restored.ID); existing == nil {
 			board.Tickets = append(board.Tickets, restored)
 		}
@@ -310,11 +316,17 @@ func (s *Store) Archive(before *time.Time) (int, error) {
 		// Split tickets into keep and archive
 		var keep []model.Ticket
 		now := time.Now()
+		// A ticket the archive already holds from an interrupted attempt is only
+		// reconciled here if it still matches. Pull it out of DONE first, or past
+		// the same cutoff, and the retry skips it — leaving the same UUID live and
+		// archived until `kanban archive <id>` is run on it.
 		for _, t := range board.Tickets {
 			if t.Status == model.StatusDone {
 				if before == nil || t.UpdatedAt.Before(*before) {
 					t.ArchivedAt = &now
-					if existing, _ := archive.FindByUUID(t.ID); existing == nil {
+					if existing, _ := archive.FindByUUID(t.ID); existing != nil {
+						*existing = t
+					} else {
 						archive.Tickets = append(archive.Tickets, t)
 					}
 					count++

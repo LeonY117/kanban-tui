@@ -151,6 +151,107 @@ func TestRetryingAnInterruptedBulkArchiveDoesNotDuplicate(t *testing.T) {
 	}
 }
 
+// The board copy stays editable after a partial failure, so by the time the
+// retry runs it can be the newer of the two. The retry must carry that version
+// into the archive rather than keep the snapshot the first attempt froze.
+func TestRetryingAnInterruptedArchiveRefreshesTheEntry(t *testing.T) {
+	sandboxRoot(t)
+	s := New("")
+	ticket := addDone(t, s, "v1 title")
+
+	unblock := blockWrites(t, s.boardPath())
+	if err := s.ArchiveByID(ticket.ID); err == nil {
+		t.Fatal("ArchiveByID succeeded despite the board write failing")
+	}
+	unblock()
+
+	if err := s.Update(ticket.ID, func(tk *model.Ticket) { tk.Title = "v2 title" }); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ArchiveByID(ticket.ID); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+
+	archive, err := s.LoadArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found, _ := archive.FindByUUID(ticket.ID)
+	if found == nil {
+		t.Fatal("ticket is in neither file")
+	}
+	if found.Title != "v2 title" {
+		t.Errorf("archive holds %q, want %q — the retry kept the stale copy", found.Title, "v2 title")
+	}
+}
+
+func TestRetryingAnInterruptedBulkArchiveRefreshesTheEntry(t *testing.T) {
+	sandboxRoot(t)
+	s := New("")
+	ticket := addDone(t, s, "v1 title")
+
+	unblock := blockWrites(t, s.boardPath())
+	if _, err := s.Archive(nil); err == nil {
+		t.Fatal("Archive succeeded despite the board write failing")
+	}
+	unblock()
+
+	if err := s.Update(ticket.ID, func(tk *model.Ticket) { tk.Title = "v2 title" }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Archive(nil); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+
+	archive, err := s.LoadArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found, _ := archive.FindByUUID(ticket.ID)
+	if found == nil {
+		t.Fatal("ticket is in neither file")
+	}
+	if found.Title != "v2 title" {
+		t.Errorf("archive holds %q, want %q — the retry kept the stale copy", found.Title, "v2 title")
+	}
+}
+
+// A ticket that stops matching the bulk filter between the failed attempt and
+// the retry is left live and archived at once — accepted, because archiving it
+// by id reconciles it. That escape hatch is what this pins.
+func TestArchivingByIDReconcilesATicketTheBulkRetrySkipped(t *testing.T) {
+	sandboxRoot(t)
+	s := New("")
+	ticket := addDone(t, s, "ghost me")
+
+	unblock := blockWrites(t, s.boardPath())
+	if _, err := s.Archive(nil); err == nil {
+		t.Fatal("Archive succeeded despite the board write failing")
+	}
+	unblock()
+
+	// Out of DONE, so the bulk retry no longer selects it.
+	if err := s.Update(ticket.ID, func(tk *model.Ticket) { tk.Status = model.StatusDoing }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Archive(nil); err != nil {
+		t.Fatalf("bulk retry: %v", err)
+	}
+	if copiesOf(t, s.Load, ticket.ID) != 1 || copiesOf(t, s.LoadArchive, ticket.ID) != 1 {
+		t.Fatal("expected the documented ghost: live on the board and in the archive")
+	}
+
+	if err := s.ArchiveByID(ticket.ID); err != nil {
+		t.Fatalf("archive by id: %v", err)
+	}
+	if n := copiesOf(t, s.Load, ticket.ID); n != 0 {
+		t.Errorf("board still holds %d copies, want 0", n)
+	}
+	if n := copiesOf(t, s.LoadArchive, ticket.ID); n != 1 {
+		t.Errorf("archive holds %d copies, want 1", n)
+	}
+}
+
 func TestRetryingAnInterruptedUnarchiveDoesNotDuplicate(t *testing.T) {
 	sandboxRoot(t)
 	s := New("")

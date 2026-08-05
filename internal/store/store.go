@@ -247,8 +247,9 @@ func (s *Store) ArchiveByID(id string) error {
 		board.Tickets = append(board.Tickets[:idx], board.Tickets[idx+1:]...)
 
 		// Write the gaining file first: without a transaction, a failed second
-		// write duplicates the ticket instead of dropping it. Retrying collapses
-		// the duplicate; deleting or moving the board copy strands the archive copy.
+		// write duplicates the ticket instead of dropping it from both files, and
+		// there is no backup to get it back from. Retrying collapses the
+		// duplicate; deleting or moving the board copy strands the archive copy.
 		if err := s.saveArchive(archive); err != nil {
 			return err
 		}

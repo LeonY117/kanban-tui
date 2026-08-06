@@ -9,27 +9,50 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
-// The move popup is a three-stage funnel: pick a column on this board, or
-// step out to pick another board and then a column on it.
-type moveStage int
+// The move popup is two lists side by side: every board on the left, the
+// highlighted board's columns on the right. It replaced a three-stage funnel
+// (this board's columns → "other board…" → that board's columns) where the
+// destination board was a mode you were in rather than something on screen:
+// picking the wrong one meant walking back out through esc, and the column list
+// never said whose columns it was showing.
+//
+// The board you are standing on is in the left list like any other, so a plain
+// column move costs the same two keys it always did — the popup opens on the
+// columns pane with that board already highlighted.
+
+type movePane int
 
 const (
-	moveStageColumn moveStage = iota
-	moveStageBoard
-	moveStageTargetColumn
+	movePaneBoards movePane = iota
+	movePaneColumns
 )
 
-// moveRow is one selectable line in the move popup.
-type moveRow struct {
-	label    string
-	status   model.Status // set for column rows
-	board    string       // sprint name for board rows ("" = main board)
-	isStatus bool
-	isBoard  bool
-	isOther  bool // "other board…" — advances to the board list
-	current  bool // the ticket's current column / the board we're on
+// moveSep separates the two panes on every row. Its width is part of the popup
+// sizing, so it is named rather than inlined.
+const moveSep = " │ "
+
+const moveCurrentTag = "(current)"
+
+type moveState struct {
+	ticketID string
+	shortID  string
+	status   model.Status // the column the ticket is in now
+
+	boards   []pickerEntry
+	boardIdx int
+	colIdx   int // index into model.ColumnOrder
+	pane     movePane
+}
+
+// board is the destination currently highlighted on the left.
+func (s *moveState) board() (pickerEntry, bool) {
+	if s.boardIdx < 0 || s.boardIdx >= len(s.boards) {
+		return pickerEntry{}, false
+	}
+	return s.boards[s.boardIdx], true
 }
 
 func (m *Model) enterMovePopup() (tea.Model, tea.Cmd) {
@@ -40,68 +63,54 @@ func (m *Model) enterMovePopup() (tea.Model, tea.Cmd) {
 	if t == nil {
 		return m, nil
 	}
-	m.moveTicketID = t.ID
-	m.moveTicketStatus = t.Status
-	m.moveStage = moveStageColumn
-	m.moveTargetBoard = ""
-	m.buildMoveRows()
+
+	// Archived sprints stay out: they are hidden from the picker until asked
+	// for, and a board the TUI refuses to write to is not a destination.
+	boards, err := loadPickerEntries(false)
+	if err != nil {
+		m.err = err
+		m.notice = err.Error()
+		return m, nil
+	}
+
+	m.move = moveState{
+		ticketID: t.ID,
+		shortID:  t.ShortID,
+		status:   t.Status,
+		boards:   boards,
+		// The columns pane holds the keyboard from the start. Most moves are to
+		// another column of the board you are already on, and that shouldn't
+		// cost a keystroke spent walking past a list you aren't using.
+		pane: movePaneColumns,
+	}
+	for i, e := range boards {
+		if e.name == m.sprintName {
+			m.move.boardIdx = i
+		}
+	}
+	for i, s := range model.ColumnOrder {
+		if s == t.Status {
+			m.move.colIdx = i
+		}
+	}
+
 	m.popupReturnView = m.view
 	m.view = moveView
 	return m, nil
 }
 
-func (m *Model) buildMoveRows() {
-	switch m.moveStage {
-	case moveStageColumn, moveStageTargetColumn:
-		m.moveRows = nil
-		for _, s := range model.ColumnOrder {
-			row := moveRow{
-				label:    statusDisplay[s],
-				status:   s,
-				isStatus: true,
-			}
-			if m.moveStage == moveStageColumn {
-				row.current = s == m.moveTicketStatus
-			}
-			m.moveRows = append(m.moveRows, row)
-		}
-		if m.moveStage == moveStageColumn {
-			m.moveRows = append(m.moveRows, moveRow{label: "Other board…", isOther: true})
-		}
-		m.moveIdx = 0
-		for i, r := range m.moveRows {
-			if r.current {
-				m.moveIdx = i
-			}
-		}
-
-	case moveStageBoard:
-		entries, err := loadPickerEntries(false)
-		if err != nil {
-			m.err = err
-			return
-		}
-		m.moveRows = nil
-		for _, e := range entries {
-			if e.name == m.sprintName {
-				continue // moving to the board you're already on is the stage-0 path
-			}
-			m.moveRows = append(m.moveRows, moveRow{
-				label:   boardDisplayName(e.name),
-				board:   e.name,
-				isBoard: true,
-			})
-		}
-		m.moveIdx = 0
-	}
-}
-
+// moveMoveCursor walks the focused pane. The other pane keeps its own cursor —
+// stepping through columns must not disturb the board they were picked for.
 func (m *Model) moveMoveCursor(dir int) {
-	next := m.moveIdx + dir
-	if next < 0 || next >= len(m.moveRows) {
+	if m.move.pane == movePaneBoards {
+		if next := m.move.boardIdx + dir; next >= 0 && next < len(m.move.boards) {
+			m.move.boardIdx = next
+		}
 		return
 	}
-	m.moveIdx = next
+	if next := m.move.colIdx + dir; next >= 0 && next < len(model.ColumnOrder) {
+		m.move.colIdx = next
+	}
 }
 
 func (m *Model) updateMove(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -109,61 +118,55 @@ func (m *Model) updateMove(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
 	case key.Matches(msg, keys.Esc):
-		// esc walks back a stage before closing the popup.
-		switch m.moveStage {
-		case moveStageTargetColumn:
-			m.moveStage = moveStageBoard
-			m.buildMoveRows()
-		case moveStageBoard:
-			m.moveStage = moveStageColumn
-			m.buildMoveRows()
-		default:
-			m.restorePopupView(moveView)
-		}
+		// One press, one exit, from either pane (Leon, 2026-08-06). Both lists
+		// are on screen the whole time, so stepping back to the boards undoes
+		// nothing you can't see — it just puts a second key between `m` pressed
+		// by mistake and the board. `h` is the way back to the boards.
+		m.restorePopupView(moveView)
 	case key.Matches(msg, keys.Move):
 		m.restorePopupView(moveView)
 	case key.Matches(msg, keys.Up):
 		m.moveMoveCursor(-1)
 	case key.Matches(msg, keys.Down):
 		m.moveMoveCursor(1)
-	case key.Matches(msg, keys.Enter), key.Matches(msg, keys.Right):
-		return m.moveActivate()
 	case key.Matches(msg, keys.Left):
-		if m.moveStage != moveStageColumn {
-			m.moveStage--
-			m.buildMoveRows()
-		}
+		m.move.pane = movePaneBoards
+	case key.Matches(msg, keys.Right), key.Matches(msg, keys.Enter):
+		return m.moveActivate()
 	}
 	return m, nil
 }
 
-// moveActivate applies the highlighted row: a column move commits, a board
-// row advances to that board's column list.
+// moveActivate is enter, and the second click on an already-selected row: on
+// the boards pane it hands over to that board's columns, on the columns pane it
+// performs the move.
 func (m *Model) moveActivate() (tea.Model, tea.Cmd) {
-	if m.moveIdx < 0 || m.moveIdx >= len(m.moveRows) {
+	if m.move.pane == movePaneBoards {
+		m.move.pane = movePaneColumns
 		return m, nil
 	}
-	row := m.moveRows[m.moveIdx]
+	e, ok := m.move.board()
+	if !ok || m.move.colIdx < 0 || m.move.colIdx >= len(model.ColumnOrder) {
+		return m, nil
+	}
+	m.commitMove(e.name, model.ColumnOrder[m.move.colIdx])
+	return m, nil
+}
 
-	switch {
-	case row.isOther:
-		m.moveStage = moveStageBoard
-		m.buildMoveRows()
-		if len(m.moveRows) == 0 {
-			m.moveStage = moveStageColumn
-			m.buildMoveRows()
-			m.notice = "no other boards — create one with `kanban sprints new <name>`"
-		}
-	case row.isBoard:
-		m.moveTargetBoard = row.board
-		m.moveStage = moveStageTargetColumn
-		m.buildMoveRows()
-	case row.isStatus:
-		targetBoard := m.moveTargetBoard
-		if m.moveStage == moveStageColumn {
-			targetBoard = m.sprintName
-		}
-		m.commitMove(targetBoard, row.status)
+// moveClick selects what was clicked and activates it on a second click of the
+// same row — the rule every list in the TUI follows. repeat is what makes the
+// rule hold here: the popup opens with the ticket's own column selected, so
+// without it the first click on that column would commit the move.
+func (m *Model) moveClick(z *hitZone, repeat bool) (tea.Model, tea.Cmd) {
+	pane := movePane(z.col)
+	if pane == movePaneBoards {
+		m.move.boardIdx = z.idx
+	} else {
+		m.move.colIdx = z.idx
+	}
+	m.move.pane = pane
+	if repeat {
+		return m.moveActivate()
 	}
 	return m, nil
 }
@@ -181,7 +184,7 @@ func (m *Model) commitMove(targetBoard string, status model.Status) {
 		dst = s
 	}
 
-	if err := store.MoveTicket(m.store, dst, m.moveTicketID, &status); err != nil {
+	if err := store.MoveTicket(m.store, dst, m.move.ticketID, &status); err != nil {
 		m.err = err
 		m.notice = err.Error()
 		return
@@ -198,7 +201,7 @@ func (m *Model) commitMove(targetBoard string, status model.Status) {
 			}
 		}
 		for i, t := range m.visibleTickets(status) {
-			if t.ID == m.moveTicketID {
+			if t.ID == m.move.ticketID {
 				m.cursors[m.focusedCol] = i
 			}
 		}
@@ -221,113 +224,244 @@ func boardStore(sprintName string) (*store.Store, error) {
 	return store.NewSprint(sprintName)
 }
 
-func (m *Model) viewMove() string {
-	title, rows := m.moveTitle(), m.moveRows
+// ─── Render ──────────────────────────────────────────────────────────
 
-	width := 34
-	for _, r := range rows {
-		if w := lipgloss.Width(r.label) + 8; w > width {
-			width = w
-		}
-	}
+func (m *Model) viewMove() string {
+	title := "Move " + m.move.shortID
+
+	leftWidth, rightWidth := m.movePaneWidths()
+	width := leftWidth + lipgloss.Width(moveSep) + rightWidth + 4
 	if w := lipgloss.Width(title) + 6; w > width {
 		width = w
 	}
 	if width > m.width-4 {
 		width = m.width - 4
 	}
-	height := len(rows) + 2
-	if m.moveStage == moveStageColumn {
-		height++ // separator line above "Other board…"
-	}
+
+	// One header row above the two lists; the taller pane sets the rest.
+	height := 3 + max(len(m.moveBoardLines()), len(model.ColumnOrder))
 	if height > m.height-4 {
 		height = m.height - 4
 	}
-	if height < 5 {
-		height = 5
+	if height < 6 {
+		height = 6
 	}
 
 	backdrop := m.popupBackdrop(m.popupReturnView)
 	m.resetZones()
 
 	origin := m.popupOrigin(width, height)
-	popup := m.renderMovePopup(width, height, origin)
+	popup := m.renderMovePopup(title, width, height, origin)
 	return overlayAt(backdrop, popup, origin.x, origin.y)
 }
 
-func (m *Model) moveTitle() string {
-	switch m.moveStage {
-	case moveStageBoard:
-		return "Move to board"
-	case moveStageTargetColumn:
-		return "Move to " + boardDisplayName(m.moveTargetBoard)
-	default:
-		return "Move ticket"
+// movePaneWidths sizes the two lists: the widest board name on the left, and on
+// the right the widest column label with room for the count that sits off the
+// same edge on every row.
+func (m *Model) movePaneWidths() (left, right int) {
+	const marker = 2
+	left = lipgloss.Width("Boards")
+	for _, e := range m.move.boards {
+		if w := lipgloss.Width(boardDisplayName(e.name)) + marker; w > left {
+			left = w
+		}
 	}
+
+	for _, s := range model.ColumnOrder {
+		if w := lipgloss.Width(statusDisplay[s]); w > right {
+			right = w
+		}
+	}
+	// marker + label + gap + "(current)" + gap + up to a three-digit count.
+	right += marker + 2 + lipgloss.Width(moveCurrentTag) + 2 + 3
+	if w := lipgloss.Width(m.moveColumnsHeader()); w > right {
+		right = w
+	}
+	return left, right
 }
 
-func (m *Model) renderMovePopup(width, height int, origin point) string {
+func (m *Model) moveColumnsHeader() string {
+	if e, ok := m.move.board(); ok {
+		return "Columns · " + boardDisplayName(e.name)
+	}
+	return "Columns"
+}
+
+// moveBoardLines lays the left pane out through the same rule as the board
+// picker: pinned boards, a divider, then the rest.
+func (m *Model) moveBoardLines() []pickerLine {
+	return boardLines(m.move.boards)
+}
+
+func (m *Model) renderMovePopup(title string, width, height int, origin point) string {
 	innerWidth := width - 4
 	if innerWidth < 10 {
 		innerWidth = 10
 	}
-
-	// Content starts one row below the top border and one col in from the
-	// left border plus the block's own left padding.
-	rowY := origin.y + 1
-	rowX := origin.x + 2
-
-	// renderPanel clips content to its inner height. Registering a zone for a
-	// row it drops would put a click target over the popup's bottom border and
-	// the backdrop below it, so clicking apparently empty space would pick a
-	// board that was never shown.
-	visible := height - 2
-	if visible < 0 {
-		visible = 0
+	leftWidth, rightWidth := m.movePaneWidths()
+	// A terminal too narrow for both panes takes it out of the boards, whose
+	// names the eye can finish from a few letters; a column row carries its
+	// count on the same line and goes unreadable first.
+	if over := leftWidth + lipgloss.Width(moveSep) + rightWidth - innerWidth; over > 0 {
+		leftWidth = max(leftWidth-over, 6)
+		rightWidth = max(innerWidth-leftWidth-lipgloss.Width(moveSep), 6)
 	}
 
-	var lines []string
-	for i, r := range m.moveRows {
-		if r.isOther && len(lines) > 0 && len(lines) < visible {
-			lines = append(lines, dimStyle.Render(strings.Repeat("─", innerWidth)))
-		}
-		if len(lines) >= visible {
-			break
-		}
-		m.addZone(hitZone{
-			kind: zoneMoveRow,
-			x:    rowX,
-			y:    rowY + len(lines),
-			w:    innerWidth,
-			h:    1,
-			idx:  i,
-		})
-		lines = append(lines, m.renderMoveRow(r, i == m.moveIdx))
+	rowX, rowY := origin.x+2, origin.y+1
+	// renderPanel clips content to its inner height, so a zone registered for a
+	// row it drops would sit over the popup's bottom border and the backdrop
+	// below it. Both panes render at most this many rows.
+	body := height - 3
+	if body < 1 {
+		body = 1
 	}
-	if len(m.moveRows) == 0 {
-		lines = append(lines, dimStyle.Render("(no other boards)"))
+
+	left := m.renderMoveBoards(leftWidth, body, point{x: rowX, y: rowY + 1})
+	right := m.renderMoveColumns(rightWidth, body, point{x: rowX + leftWidth + lipgloss.Width(moveSep), y: rowY + 1})
+
+	lines := []string{
+		padTo(paneHeader("Boards", leftWidth, m.move.pane == movePaneBoards), leftWidth) +
+			strings.Repeat(" ", lipgloss.Width(moveSep)) +
+			paneHeader(m.moveColumnsHeader(), rightWidth, m.move.pane == movePaneColumns),
+	}
+	for i := 0; i < body; i++ {
+		l, r := "", ""
+		if i < len(left) {
+			l = left[i]
+		}
+		if i < len(right) {
+			r = right[i]
+		}
+		lines = append(lines, padTo(l, leftWidth)+dimStyle.Render(moveSep)+r)
 	}
 
 	content := lipgloss.NewStyle().PaddingLeft(1).Render(strings.Join(lines, "\n"))
-	return renderPanel(m.moveTitle(), content, width, height, green, true)
+	return renderPanel(title, content, width, height, green, true)
 }
 
-func (m *Model) renderMoveRow(r moveRow, selected bool) string {
-	marker := "  "
-	if selected {
-		marker = selectedMarker.Render("* ")
+// paneHeader names a list and says whether it holds the keyboard — with the
+// cursor markers, the popup's focus cue.
+func paneHeader(label string, width int, focused bool) string {
+	style := dimStyle
+	if focused {
+		style = lipgloss.NewStyle().Foreground(green).Bold(true)
 	}
+	return style.Render(ansi.Truncate(label, max(width, 1), "…"))
+}
 
-	style := lipgloss.NewStyle()
+// windowStart is the first row to draw so that cursor stays on screen, for a
+// list of count rows shown height rows at a time. Both panes scroll: a pane
+// that cannot reach its own cursor draws no cursor at all, and on a short
+// terminal that left the column the ticket was about to move to off the list
+// while enter still committed to it.
+func windowStart(cursor, count, height int) int {
+	if count <= height {
+		return 0
+	}
+	start := cursor - height/2
+	if start+height > count {
+		start = count - height
+	}
+	if start < 0 {
+		start = 0
+	}
+	return start
+}
+
+// padTo right-fills a rendered string to width, measuring what it draws rather
+// than the escape sequences it carries.
+func padTo(s string, width int) string {
+	if gap := width - lipgloss.Width(s); gap > 0 {
+		return s + strings.Repeat(" ", gap)
+	}
+	return s
+}
+
+// renderMoveBoards draws the left pane, windowed on the cursor the way the
+// board picker windows its own list, and registers a zone per board row.
+func (m *Model) renderMoveBoards(width, height int, origin point) []string {
+	lines := m.moveBoardLines()
+	start := windowStart(pickerLineOf(lines, m.move.boardIdx), len(lines), height)
+
+	focused := m.move.pane == movePaneBoards
+	var out []string
+	for i := start; i < len(lines) && len(out) < height; i++ {
+		if lines[i].boardIdx < 0 {
+			out = append(out, dimStyle.Render(strings.Repeat("─", width)))
+			continue
+		}
+		e := m.move.boards[lines[i].boardIdx]
+		m.addZone(hitZone{
+			kind: zoneMoveRow,
+			x:    origin.x,
+			y:    origin.y + len(out),
+			w:    width,
+			h:    1,
+			col:  int(movePaneBoards),
+			idx:  lines[i].boardIdx,
+		})
+
+		style := lipgloss.NewStyle()
+		if e.name == m.sprintName {
+			// The board the ticket is on now, marked the way the picker marks
+			// the board you are standing on.
+			style = style.Foreground(green).Bold(true)
+		}
+		name := ansi.Truncate(boardDisplayName(e.name), max(width-2, 1), "…")
+		out = append(out, moveMarker(lines[i].boardIdx == m.move.boardIdx, focused)+style.Render(name))
+	}
+	return out
+}
+
+// renderMoveColumns draws the right pane: the highlighted board's columns, each
+// with the number of cards already sitting in it.
+func (m *Model) renderMoveColumns(width, height int, origin point) []string {
+	e, _ := m.move.board()
+	focused := m.move.pane == movePaneColumns
+
+	start := windowStart(m.move.colIdx, len(model.ColumnOrder), height)
+
+	var out []string
+	for i := start; i < len(model.ColumnOrder) && len(out) < height; i++ {
+		s := model.ColumnOrder[i]
+		m.addZone(hitZone{
+			kind: zoneMoveRow,
+			x:    origin.x,
+			y:    origin.y + len(out),
+			w:    width,
+			h:    1,
+			col:  int(movePaneColumns),
+			idx:  i,
+		})
+
+		label := lipgloss.NewStyle().Foreground(columnColor(s)).Render(statusDisplay[s])
+		if e.name == m.sprintName && s == m.move.status {
+			label += dimStyle.Render("  " + moveCurrentTag)
+		}
+		count, countStyle := fmt.Sprintf("%d", e.counts[s]), dimStyle
+		if e.counts[s] > 0 {
+			countStyle = statusCountStyles[s]
+		}
+
+		left := moveMarker(i == m.move.colIdx, focused) + label
+		gap := width - lipgloss.Width(left) - lipgloss.Width(count)
+		if gap < 1 {
+			gap = 1
+		}
+		out = append(out, left+strings.Repeat(" ", gap)+countStyle.Render(count))
+	}
+	return out
+}
+
+// moveMarker is the cursor. Both panes keep one, so the popup never loses track
+// of what a click would land on, but only the focused pane's is lit.
+func moveMarker(selected, focused bool) string {
 	switch {
-	case r.isStatus:
-		style = style.Foreground(columnColor(r.status))
-	case r.isOther:
-		style = style.Foreground(midGray)
+	case selected && focused:
+		return selectedMarker.Render("* ")
+	case selected:
+		return dimStyle.Render("* ")
+	default:
+		return "  "
 	}
-	rendered := style.Render(r.label)
-	if r.current {
-		rendered += dimStyle.Render("  (current)")
-	}
-	return marker + rendered
 }

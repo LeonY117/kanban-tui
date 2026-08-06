@@ -238,12 +238,12 @@ func TestStatusChoicesMapARenamedLabelBackToItsStatus(t *testing.T) {
 
 func TestAnOverrideBeatsANewDefault(t *testing.T) {
 	// A default added in a later release must not take a key the config has
-	// already claimed. board.tags gaining `t` reverted an existing t binding
-	// and told the user about it at startup, which is a config silently
-	// changing meaning on upgrade.
-	resolved, refused := sanitizeBindings(map[string]string{"board.picker": "t"})
+	// already claimed. board.tags gaining a default key reverted an existing
+	// binding on it and told the user about it at startup, which is a config
+	// silently changing meaning on upgrade.
+	resolved, refused := sanitizeBindings(map[string]string{"board.picker": "#"})
 
-	if got := resolved["board.picker"]; got != "t" {
+	if got := resolved["board.picker"]; got != "#" {
 		t.Errorf("board.picker = %q, want the override honoured", got)
 	}
 	if got, bound := resolved["board.tags"]; bound {
@@ -256,17 +256,44 @@ func TestAnOverrideBeatsANewDefault(t *testing.T) {
 	}
 }
 
+// The tag list answers to `t` as well as `#`, and no settings row says so. A
+// config that could claim `t` would be handed a key that silently loses to the
+// alias, so the alias is reserved like the column jumps.
+func TestTheTagAliasCannotBeClaimed(t *testing.T) {
+	resolved, refused := sanitizeBindings(map[string]string{"board.rename": tagPickerAlias})
+
+	if got := resolved["board.rename"]; got == tagPickerAlias {
+		t.Errorf("board.rename = %q, want the alias refused", got)
+	}
+	if len(refused) != 1 || refused[0] != "board.rename" {
+		t.Errorf("refused = %v, want just board.rename", refused)
+	}
+}
+
+// Rebinding an action moves its primary key and keeps its alias. Dropping the
+// alias would take `t` away from the tag list while reservedKeys still held it
+// for that action — a key that opens nothing and can be given to nothing.
+func TestRebindingKeepsTheAlias(t *testing.T) {
+	t.Cleanup(func() { applyKeyBindings(nil) })
+	applyKeyBindings(map[string]string{"board.tags": "T"})
+
+	got := keys.TagPicker.Keys()
+	if len(got) != 2 || got[0] != "T" || got[1] != tagPickerAlias {
+		t.Errorf("tag list answers to %v, want the new key and the alias", got)
+	}
+}
+
 func TestUnboundActionDoesNotKeepItsDefaultKey(t *testing.T) {
 	// The keymap is rebuilt from the defaults, so an action left unbound has
 	// to be actively cleared — otherwise it keeps the very key the override
 	// was just given, and both fire.
 	t.Cleanup(func() { applyKeyBindings(nil) })
-	applyKeyBindings(map[string]string{"board.picker": "t"})
+	applyKeyBindings(map[string]string{"board.picker": "#"})
 
 	if keys.TagPicker.Enabled() && len(keys.TagPicker.Keys()) > 0 {
 		t.Errorf("board.tags still bound to %v after its default was taken", keys.TagPicker.Keys())
 	}
-	if got := keys.BoardPicker.Keys(); len(got) != 1 || got[0] != "t" {
-		t.Errorf("board.picker = %v, want t", got)
+	if got := keys.BoardPicker.Keys(); len(got) != 1 || got[0] != "#" {
+		t.Errorf("board.picker = %v, want #", got)
 	}
 }

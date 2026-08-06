@@ -512,10 +512,27 @@ func (m *Model) moveTagCursor(dir int) {
 // ─── Keys ────────────────────────────────────────────────────────────
 
 func (m *Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	st := m.activeSearch()
 	switch msg.Type {
 	case tea.KeyEsc:
 		m.cancelSearch()
 		return m, nil
+	// Both spellings of the key: bubbles' own textinput deletes on either, so
+	// answering to only one would make ctrl+h delete the query but refuse to
+	// delete the slash.
+	case tea.KeyBackspace, tea.KeyCtrlH:
+		// `/` is a character like any other: backspacing past the start of the
+		// query deletes the slash too and drops you back on the board. esc still
+		// works, but the way out of a filter you opened by typing shouldn't be a
+		// key you can only learn from the hint line (Leon, 2026-08-06).
+		//
+		// It commits rather than cancels: an empty input is showing the whole
+		// board already, and restoring the query it replaced would put back a
+		// filter the user just finished deleting.
+		if st.input.Value() == "" {
+			m.commitSearch()
+			return m, nil
+		}
 	case tea.KeyEnter:
 		m.commitSearch()
 		return m, nil
@@ -536,7 +553,6 @@ func (m *Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	var cmd tea.Cmd
-	st := m.activeSearch()
 	st.input, cmd = st.input.Update(msg)
 	m.syncQuery()
 	return m, cmd

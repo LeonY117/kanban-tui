@@ -39,8 +39,8 @@ func bindingTargets(km *keyMap) map[string]*key.Binding {
 		"board.unarchive":   &km.Unarchive,
 		"board.pin":         &km.Pin,
 		"board.rename":      &km.Rename,
-		"board.layout":      &km.Layout,
-		"board.rowLayout":   &km.RowLayout,
+		"board.layout":      &km.Bigger,
+		"board.layoutDown":  &km.Smaller,
 		"board.zoom":        &km.Zoom,
 		"board.unzoom":      &km.Unzoom,
 		"board.panelNext":   &km.PanelNext,
@@ -62,8 +62,8 @@ func bindingTargets(km *keyMap) map[string]*key.Binding {
 // stops working, so settings can never be reopened.
 //
 // It also covers bindings that are handled but deliberately not offered for
-// rebinding (the 0-4 column jumps, and the newline chord in the description
-// editor), for the same reason.
+// rebinding (the 0-4 column jumps, the newline chord in the description editor,
+// and the tag list's `t` alias), for the same reason.
 func reservedKeys() map[string]bool {
 	km := defaultKeyMap()
 	targets := bindingTargets(&km)
@@ -80,6 +80,11 @@ func reservedKeys() map[string]bool {
 	bindings = append(bindings, km.Zero, km.One, km.Two, km.Three, km.Four, km.NewLine)
 
 	out := map[string]bool{}
+	for _, a := range bindActions {
+		if a.alias != "" {
+			out[a.alias] = true
+		}
+	}
 	for _, b := range bindings {
 		for _, k := range b.Keys() {
 			out[k] = true
@@ -242,7 +247,15 @@ func applyKeyBindings(overrides map[string]string) (refused, unbound []string) {
 		if k == a.def {
 			continue
 		}
-		*t = key.NewBinding(key.WithKeys(k), key.WithHelp(k, a.label))
+		// A rebound action keeps its alias. The alias is a second key no
+		// settings row mentions, so losing it on a rebind would take a working
+		// key away silently — and reservedKeys holds it for this action either
+		// way, so nothing else could have claimed it.
+		bindingKeys := []string{k}
+		if a.alias != "" {
+			bindingKeys = append(bindingKeys, a.alias)
+		}
+		*t = key.NewBinding(key.WithKeys(bindingKeys...), key.WithHelp(k, a.label))
 	}
 	sort.Strings(unbound)
 	return refused, unbound

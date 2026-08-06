@@ -7,7 +7,6 @@ import (
 
 	"github.com/LeonY117/kanban-tui/internal/model"
 	"github.com/LeonY117/kanban-tui/internal/store"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -18,16 +17,8 @@ func sandboxRoot(t *testing.T) {
 	t.Setenv("KANBAN_FILE", filepath.Join(t.TempDir(), "board.json"))
 }
 
-// moveKey sends one key to the open popup.
 func moveKey(m *Model, k string) {
-	switch k {
-	case "enter":
-		m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	case "esc":
-		m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	default:
-		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)})
-	}
+	m.Update(keyPress(k))
 }
 
 func TestMovePopupOpensOnThisBoardsColumns(t *testing.T) {
@@ -177,25 +168,25 @@ func TestMovePopupClicksSelectBeforeActing(t *testing.T) {
 	m.View() // register zones
 
 	demoRow := zoneOf(t, m, zoneMoveRow, int(movePaneBoards), 1)
-	m.mouseClick(clickAt(demoRow.x, demoRow.y))
+	m.mouseClick(mouseAt(demoRow.x, demoRow.y))
 	if m.move.pane != movePaneBoards || m.move.boardIdx != 1 {
 		t.Fatalf("pane %v board %d, want the first click to select demo", m.move.pane, m.move.boardIdx)
 	}
 	if m.view != moveView {
 		t.Fatal("the first click acted instead of selecting")
 	}
-	m.mouseClick(clickAt(demoRow.x, demoRow.y))
+	m.mouseClick(mouseAt(demoRow.x, demoRow.y))
 	if m.move.pane != movePaneColumns {
 		t.Fatalf("pane = %v, want the second click to hand over to the columns", m.move.pane)
 	}
 
 	m.View()
 	done := zoneOf(t, m, zoneMoveRow, int(movePaneColumns), 3)
-	m.mouseClick(clickAt(done.x, done.y))
+	m.mouseClick(mouseAt(done.x, done.y))
 	if m.view != moveView {
 		t.Fatal("a first click on a column committed the move")
 	}
-	m.mouseClick(clickAt(done.x, done.y))
+	m.mouseClick(mouseAt(done.x, done.y))
 	if m.view == moveView {
 		t.Fatal("the second click did not commit")
 	}
@@ -218,7 +209,7 @@ func TestMovePopupFirstClickOnThePreselectedColumnOnlySelects(t *testing.T) {
 	}
 
 	current := zoneOf(t, m, zoneMoveRow, int(movePaneColumns), m.move.colIdx)
-	m.mouseClick(clickAt(current.x, current.y))
+	m.mouseClick(mouseAt(current.x, current.y))
 
 	if m.view != moveView {
 		t.Fatalf("view = %v, want the popup still open after one click", m.view)
@@ -232,7 +223,7 @@ func TestMovePopupFirstClickOnThePreselectedColumnOnlySelects(t *testing.T) {
 	}
 
 	// And the second click on it still commits.
-	m.mouseClick(clickAt(current.x, current.y))
+	m.mouseClick(mouseAt(current.x, current.y))
 	if m.view == moveView {
 		t.Error("the second click did not commit")
 	}
@@ -298,8 +289,4 @@ func zoneOf(t *testing.T, m *Model, kind zoneKind, col, idx int) hitZone {
 	}
 	t.Fatalf("no zone for kind %v col %d idx %d", kind, col, idx)
 	return hitZone{}
-}
-
-func clickAt(x, y int) tea.MouseMsg {
-	return tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}
 }

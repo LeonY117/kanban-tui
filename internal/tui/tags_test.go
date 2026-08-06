@@ -9,8 +9,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// openTags walks the real route: tab opens the board picker, t switches it to
-// the tag list.
 func openTags(m *Model) {
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("#")})
 }

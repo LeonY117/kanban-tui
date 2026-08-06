@@ -34,7 +34,6 @@ const (
 // sizing, so it is named rather than inlined.
 const moveSep = " │ "
 
-// moveCurrentTag marks the column the ticket is in now, on the board it is on.
 const moveCurrentTag = "(current)"
 
 type moveState struct {

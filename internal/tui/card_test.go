@@ -121,7 +121,7 @@ func TestCardSizeKeysWalkTheLadderBothWays(t *testing.T) {
 	m := testModel(t, "first")
 
 	press := func(k string) ticketLayout {
-		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)})
+		m.Update(keyPress(k))
 		return m.layout
 	}
 	if got := press("v"); got != layoutLarge {

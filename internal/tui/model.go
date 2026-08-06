@@ -31,7 +31,7 @@ const (
 	archiveView           // archive browser (split: list + read-only detail)
 	addView               // floating popup for new ticket
 	pickerView            // floating board picker (main + sprints)
-	moveView              // floating move-ticket picker (column / other board)
+	moveView              // floating move-ticket picker (board / column)
 	settingsView          // floating settings popup
 	tagView               // floating tag picker, feeds the search
 )
@@ -3522,7 +3522,6 @@ func renderPanel(title string, content string, width, height int, borderColor li
 	return result
 }
 
-// viewBoard renders the board view: the five columns side by side.
 func (m *Model) viewBoard() string {
 	availHeight := m.height - 1 // just help bar
 	availWidth := m.width

@@ -39,7 +39,7 @@ Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden
 | `j` `k` | Move between tickets |
 | `H` `L` | Move selected ticket to adjacent column |
 | `J` `K` | Reorder selected ticket up/down within its column |
-| `m` | Move ticket — pick a column, or another board and its column |
+| `m` | Move ticket — boards on the left, that board's columns on the right |
 | `c` | Copy to clipboard — the ticket id from a list, or the focused title / description |
 | `a` | Add a new ticket (floating popup) |
 | `e` / `enter` | Edit selected field |
@@ -49,8 +49,9 @@ Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden
 | `0`-`4` | Jump to column (Backlog / Todo / Doing / Done / Hold) |
 | `+` / `-` | Zoom in / out (board → split → column / detail) |
 | `[` / `]` | Switch panels in split view |
-| `v` | Ticket size — cards (default) → large → condensed |
-| `V` | Toggle columns / rows layout |
+| `v` / `V` | Bigger / smaller cards — condensed → cards (default) → large |
+| `/` | Filter the board in place |
+| `#` | Filter by tag, picked off a list |
 | `x` | Archive selected ticket |
 | `X` | Open archive browser |
 | `u` | Unarchive (in archive browser) |
@@ -67,9 +68,10 @@ a fallback.
 
 ### Ticket sizes
 
-`v` cycles three densities. **Cards** (default) show the title and a
-`shortid #tags ● assignee` line. **Large** adds a three-line description
-preview and the last-edited date. **Condensed** is one line per ticket.
+`v` and `V` walk three densities, bigger and smaller. **Cards** (default) show
+the title and a `shortid #tags ● assignee` line. **Large** adds a three-line
+description preview and the last-edited date. **Condensed** is one line per
+ticket. The pair stops at each end rather than wrapping round.
 
 At card size, each ticket is a row in one continuous table with shared borders.
 The selected row closes into its own rounded box. Large gives every ticket its
@@ -89,10 +91,15 @@ so the column always reads as continuing past the fold.
 
 ### Mouse
 
-The mouse is live: click a ticket to select it, click a column to focus it,
-click a field in the detail pane to jump to it. The wheel moves through tickets
-in a list or scrolls the description body under the pointer. Hold `shift` to
-select text as usual.
+The mouse is live, and every list works the same way: **one click selects, a
+second click on the same row acts** — opening a ticket, switching board,
+applying a tag, committing a move, editing the title or description. Nothing
+commits on a click that was only meant to look.
+
+Clicks reach the small targets too: the status, assignee and tag fields in the
+Info bar, each field of the add popup, the rename form's inputs. The wheel moves
+through tickets in a list or scrolls the description body under the pointer.
+Hold `shift` to select text as usual.
 
 ### Views
 
@@ -210,4 +217,4 @@ The TUI polls `board.json` every couple of seconds. Changes from the CLI, agents
 
 ## License
 
-TBD — see issue tracker.
+MIT — see [LICENSE](LICENSE).

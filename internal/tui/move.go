@@ -119,12 +119,10 @@ func (m *Model) updateMove(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
 	case key.Matches(msg, keys.Esc):
-		// esc steps back to the boards before it closes, so a wrong turn costs
-		// one key rather than reopening the popup.
-		if m.move.pane == movePaneColumns {
-			m.move.pane = movePaneBoards
-			return m, nil
-		}
+		// One press, one exit, from either pane (Leon, 2026-08-06). Both lists
+		// are on screen the whole time, so stepping back to the boards undoes
+		// nothing you can't see — it just puts a second key between `m` pressed
+		// by mistake and the board. `h` is the way back to the boards.
 		m.restorePopupView(moveView)
 	case key.Matches(msg, keys.Move):
 		m.restorePopupView(moveView)

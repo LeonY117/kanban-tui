@@ -3377,7 +3377,7 @@ func (m *Model) helpText() string {
 		if m.move.pane == movePaneBoards {
 			return "j/k board | enter/l columns | esc close"
 		}
-		return "j/k column | h boards | enter move | esc back"
+		return "j/k column | h boards | enter move | esc close"
 	case pickerView:
 		if m.confirmArchive != "" {
 			return fmt.Sprintf("archive %q? y / n", m.confirmArchive)

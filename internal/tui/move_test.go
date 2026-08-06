@@ -120,19 +120,20 @@ func TestMovePopupWalksToAnotherBoard(t *testing.T) {
 	}
 }
 
-// esc walks back to the boards before it closes, so a wrong turn costs one key
-// rather than reopening the popup.
-func TestMovePopupEscStepsBackThenCloses(t *testing.T) {
-	m, _ := boardWith(t, "ship it|TODO")
+// One press, one exit, from either pane. Both lists are on screen the whole
+// time, so an esc that stepped back to the boards only put a second key between
+// a mistaken `m` and the board.
+func TestMovePopupEscClosesFromEitherPane(t *testing.T) {
+	for _, pane := range []movePane{movePaneColumns, movePaneBoards} {
+		m, _ := boardWith(t, "ship it|TODO")
 
-	m.enterMovePopup()
-	moveKey(m, "esc")
-	if m.view != moveView || m.move.pane != movePaneBoards {
-		t.Fatalf("view %v pane %v, want the popup open on the boards", m.view, m.move.pane)
-	}
-	moveKey(m, "esc")
-	if m.view != boardView {
-		t.Errorf("view = %v, want the board", m.view)
+		m.enterMovePopup()
+		m.move.pane = pane
+		moveKey(m, "esc")
+
+		if m.view != boardView {
+			t.Errorf("pane %v: view = %v, want the board in one press", pane, m.view)
+		}
 	}
 }
 

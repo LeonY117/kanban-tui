@@ -1,6 +1,10 @@
 package tui
 
-import "testing"
+import (
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
 
 // Every list selects on the first click and acts on a second click of the row
 // already under the cursor. One click that did both meant the mouse could never
@@ -172,7 +176,57 @@ func TestClickPicksARenameFormField(t *testing.T) {
 	prefix := zoneOf(t, m, zoneRenameField, 0, renameFocusPrefix)
 	m.mouseClick(clickAt(prefix.x, prefix.y))
 	if m.renameFocus != renameFocusPrefix {
-		t.Errorf("focus = %d, want the prefix field", m.renameFocus)
+		t.Fatalf("focus = %d, want the prefix field", m.renameFocus)
+	}
+	// The highlight is not the point — a blurred input drops every key it is
+	// handed, so moving the label alone left the user typing into nothing.
+	before := m.renamePrefix.Value()
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Z")})
+	if m.renamePrefix.Value() == before {
+		t.Errorf("prefix still %q after typing — the clicked field never took the keyboard", before)
+	}
+}
+
+// The Info panel's fields are only clickable while it holds the keyboard.
+// Focusing it fills its empty slots with `+assign` / `+tag` prompts, which
+// shifts the fields right of them: a zone registered before that reflow put the
+// second click of a pair on the field next door.
+func TestMetaFieldsAreClickableOnlyWhileTheyHoldStill(t *testing.T) {
+	m := testModel(t, "first")
+	m.enterSplit()
+	m.View()
+
+	for _, z := range m.zones {
+		if z.kind == zoneMetaField {
+			t.Fatalf("meta field %d is a click target while the list has focus", z.idx)
+		}
+	}
+
+	m.splitFocus = 1
+	m.View()
+	found := false
+	for _, z := range m.zones {
+		if z.kind == zoneMetaField {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("no meta fields are clickable once the panel has focus")
+	}
+}
+
+// Nothing acts on a first click, however the surface happened to open. Popups
+// that preselect a row — the move popup's current column, the picker's current
+// board, the tag list's active filter — would otherwise act on click one.
+func TestAFirstClickNeverActs(t *testing.T) {
+	m, _ := boardWith(t, "a|TODO|cli", "b|TODO|ui")
+
+	openTags(m)
+	m.View()
+	active := zoneOf(t, m, zoneTagRow, 0, m.tags.idx)
+	m.mouseClick(clickAt(active.x, active.y))
+	if m.view != tagView {
+		t.Errorf("the tag list acted on the first click of its preselected row")
 	}
 }
 

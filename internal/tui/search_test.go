@@ -183,6 +183,24 @@ func TestBackspacePastTheSlashLeavesTheSearch(t *testing.T) {
 	}
 }
 
+// Some terminals send ASCII BS for the backspace key, and bubbles' own input
+// deletes on either — so answering to only one spelling made ctrl+h delete the
+// query but refuse to delete the slash.
+func TestCtrlHLeavesTheSearchLikeBackspace(t *testing.T) {
+	m, _ := boardWith(t, "auth refresh|TODO")
+
+	typeSearch(m, "a")
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlH})
+	if !m.search.open || m.search.input.Value() != "" {
+		t.Fatalf("open %v value %q, want the query deleted and the input still open",
+			m.search.open, m.search.input.Value())
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlH})
+	if m.search.open {
+		t.Error("ctrl+h on an empty query left the input open")
+	}
+}
+
 // Deleting the query and then backspacing out leaves the board unfiltered —
 // restoring what the input had replaced would put back a filter the user just
 // finished deleting.

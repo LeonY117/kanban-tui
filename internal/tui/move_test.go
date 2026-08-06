@@ -8,6 +8,7 @@ import (
 	"github.com/LeonY117/kanban-tui/internal/model"
 	"github.com/LeonY117/kanban-tui/internal/store"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // sandboxRoot points every board path (main + sprints) at a temp dir so tests
@@ -199,6 +200,62 @@ func TestMovePopupClicksSelectBeforeActing(t *testing.T) {
 	}
 	if board, err := main.Load(); err != nil || len(board.Tickets) != 0 {
 		t.Errorf("ticket did not leave main (err %v)", err)
+	}
+}
+
+// The popup opens with the ticket's own column under the cursor. Reading the
+// selection alone made that first click commit the move — a write, from the one
+// click that is supposed to only look.
+func TestMovePopupFirstClickOnThePreselectedColumnOnlySelects(t *testing.T) {
+	m, main := boardWith(t, "ship it|TODO")
+
+	m.enterMovePopup()
+	m.View()
+	before, err := main.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	current := zoneOf(t, m, zoneMoveRow, int(movePaneColumns), m.move.colIdx)
+	m.mouseClick(clickAt(current.x, current.y))
+
+	if m.view != moveView {
+		t.Fatalf("view = %v, want the popup still open after one click", m.view)
+	}
+	after, err := main.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.Tickets[0].UpdatedAt.Equal(before.Tickets[0].UpdatedAt) {
+		t.Error("a single click rewrote the ticket")
+	}
+
+	// And the second click on it still commits.
+	m.mouseClick(clickAt(current.x, current.y))
+	if m.view == moveView {
+		t.Error("the second click did not commit")
+	}
+}
+
+// Both panes scroll to their cursor. A pane that cannot reach its own cursor
+// draws no cursor at all, which on a short terminal left the destination column
+// off the list while enter still committed to it.
+func TestMovePopupColumnsScrollToTheCursor(t *testing.T) {
+	m, _ := boardWith(t, "ship it|HOLD")
+	m.focusedCol = 4
+	m.enterMovePopup()
+
+	// Three rows of body is what the minimum supported terminal height leaves.
+	rows := m.renderMoveColumns(30, 3, point{})
+	if len(rows) != 3 {
+		t.Fatalf("rendered %d rows, want 3", len(rows))
+	}
+	joined := strings.Join(rows, "\n")
+	if !strings.Contains(ansi.Strip(joined), statusDisplay[model.StatusHold]) {
+		t.Errorf("the selected column is not on screen:\n%s", ansi.Strip(joined))
+	}
+	if !strings.Contains(ansi.Strip(joined), "*") {
+		t.Errorf("no cursor drawn in the focused pane:\n%s", ansi.Strip(joined))
 	}
 }
 

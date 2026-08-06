@@ -157,19 +157,18 @@ func (m *Model) moveActivate() (tea.Model, tea.Cmd) {
 }
 
 // moveClick selects what was clicked and activates it on a second click of the
-// row already under the cursor — the rule every list in the TUI follows.
-func (m *Model) moveClick(z *hitZone) (tea.Model, tea.Cmd) {
+// same row — the rule every list in the TUI follows. repeat is what makes the
+// rule hold here: the popup opens with the ticket's own column selected, so
+// without it the first click on that column would commit the move.
+func (m *Model) moveClick(z *hitZone, repeat bool) (tea.Model, tea.Cmd) {
 	pane := movePane(z.col)
-	var already bool
 	if pane == movePaneBoards {
-		already = m.move.pane == pane && m.move.boardIdx == z.idx
 		m.move.boardIdx = z.idx
 	} else {
-		already = m.move.pane == pane && m.move.colIdx == z.idx
 		m.move.colIdx = z.idx
 	}
 	m.move.pane = pane
-	if already {
+	if repeat {
 		return m.moveActivate()
 	}
 	return m, nil
@@ -353,6 +352,25 @@ func paneHeader(label string, width int, focused bool) string {
 	return style.Render(ansi.Truncate(label, max(width, 1), "…"))
 }
 
+// windowStart is the first row to draw so that cursor stays on screen, for a
+// list of count rows shown height rows at a time. Both panes scroll: a pane
+// that cannot reach its own cursor draws no cursor at all, and on a short
+// terminal that left the column the ticket was about to move to off the list
+// while enter still committed to it.
+func windowStart(cursor, count, height int) int {
+	if count <= height {
+		return 0
+	}
+	start := cursor - height/2
+	if start+height > count {
+		start = count - height
+	}
+	if start < 0 {
+		start = 0
+	}
+	return start
+}
+
 // padTo right-fills a rendered string to width, measuring what it draws rather
 // than the escape sequences it carries.
 func padTo(s string, width int) string {
@@ -366,16 +384,7 @@ func padTo(s string, width int) string {
 // board picker windows its own list, and registers a zone per board row.
 func (m *Model) renderMoveBoards(width, height int, origin point) []string {
 	lines := m.moveBoardLines()
-	start := 0
-	if len(lines) > height {
-		start = pickerLineOf(lines, m.move.boardIdx) - height/2
-		if start < 0 {
-			start = 0
-		}
-		if start+height > len(lines) {
-			start = len(lines) - height
-		}
-	}
+	start := windowStart(pickerLineOf(lines, m.move.boardIdx), len(lines), height)
 
 	focused := m.move.pane == movePaneBoards
 	var out []string
@@ -413,15 +422,15 @@ func (m *Model) renderMoveColumns(width, height int, origin point) []string {
 	e, _ := m.move.board()
 	focused := m.move.pane == movePaneColumns
 
+	start := windowStart(m.move.colIdx, len(model.ColumnOrder), height)
+
 	var out []string
-	for i, s := range model.ColumnOrder {
-		if len(out) >= height {
-			break
-		}
+	for i := start; i < len(model.ColumnOrder) && len(out) < height; i++ {
+		s := model.ColumnOrder[i]
 		m.addZone(hitZone{
 			kind: zoneMoveRow,
 			x:    origin.x,
-			y:    origin.y + i,
+			y:    origin.y + len(out),
 			w:    width,
 			h:    1,
 			col:  int(movePaneColumns),

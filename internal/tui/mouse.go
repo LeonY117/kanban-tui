@@ -37,6 +37,14 @@ type hitZone struct {
 	idx        int // ticket index, field index or row index
 }
 
+// clickTarget is what a click landed on, stripped of where it was drawn — the
+// same row keeps its identity when the list scrolls under it.
+type clickTarget struct {
+	kind zoneKind
+	col  int
+	idx  int
+}
+
 func (m *Model) resetZones() {
 	m.zones = m.zones[:0]
 }
@@ -188,6 +196,14 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// "A second click of the same row" has to mean a second *click*, not a
+	// click on whatever the surface happened to open with selected. The move
+	// popup opens with the ticket's own column under the cursor, so reading the
+	// selection alone made the very first click commit the move.
+	target := clickTarget{kind: z.kind, col: z.col, idx: z.idx}
+	repeat := target == m.lastClick
+	m.lastClick = target
+
 	// A click inside the editor already open is a no-op. Falling through would
 	// blur it, save, and reopen it — the same text, but with the cursor thrown
 	// back to where the editor puts it rather than where it was left.
@@ -206,7 +222,7 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		// In the split, a card counts as already selected only while the list
 		// holds the focus: clicking the list back from the detail pane is the
 		// click that selects, not the one that opens.
-		selected := m.focusedCol == z.col && m.cursors[z.col] == z.idx &&
+		selected := repeat && m.focusedCol == z.col && m.cursors[z.col] == z.idx &&
 			(m.view != splitView || m.splitFocus == 0)
 		m.focusedCol = z.col
 		m.cursors[z.col] = z.idx
@@ -228,7 +244,7 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		// In the split, a panel counts as already selected only while the
 		// detail side holds the focus — clicking it back from the list is the
 		// click that selects.
-		already := m.editField == z.idx && (m.view != splitView || m.splitFocus == 1)
+		already := repeat && m.editField == z.idx && (m.view != splitView || m.splitFocus == 1)
 		if m.view == splitView {
 			m.splitFocus = 1
 		}
@@ -237,7 +253,7 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m.editFocusedField()
 		}
 	case zoneMetaField:
-		already := m.editField == 0 && m.metaIdx == z.idx &&
+		already := repeat && m.editField == 0 && m.metaIdx == z.idx &&
 			(m.view != splitView || m.splitFocus == 1)
 		if m.view == splitView {
 			m.splitFocus = 1
@@ -251,14 +267,14 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.archiveCursor = z.idx
 		m.descScroll = 0
 	case zonePickerRow:
-		if m.pickerIdx == z.idx {
+		if repeat && m.pickerIdx == z.idx {
 			return m.pickerActivate()
 		}
 		m.pickerIdx = z.idx
 	case zoneMoveRow:
-		return m.moveClick(z)
+		return m.moveClick(z, repeat)
 	case zoneTagRow:
-		if m.tags.idx == z.idx {
+		if repeat && m.tags.idx == z.idx {
 			return m.tagPickerActivate()
 		}
 		m.tags.idx = z.idx
@@ -266,18 +282,18 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		// The description is the one field with two states — selected, then
 		// being typed into — so a second click on it opens the editor, which is
 		// what enter does there.
-		if m.addFocusIdx == z.idx && z.idx == addFocusDesc {
+		if repeat && m.addFocusIdx == z.idx && z.idx == addFocusDesc {
 			m.addDesc.Focus()
 			m.addDescEditing = true
 			return m, textarea.Blink
 		}
 		m.focusAddField(z.idx)
 	case zoneRenameField:
-		m.renameFocus = z.idx
+		m.setRenameFocus(z.idx)
 	case zoneSettingsRow:
 		// Where this rule started: a single click that began key capture
 		// swallowed the next thing the user pressed.
-		if m.settings.idx == z.idx {
+		if repeat && m.settings.idx == z.idx {
 			return m.settingsActivate()
 		}
 		m.settings.idx = z.idx

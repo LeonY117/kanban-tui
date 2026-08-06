@@ -159,6 +159,10 @@ type Model struct {
 	// Mouse hit-testing zones, rebuilt every render.
 	zones []hitZone
 
+	// What the previous click landed on, so acting can require a second click
+	// rather than a first click on something already selected.
+	lastClick clickTarget
+
 	// Wheel notches banked toward the next ticket step — a trackpad emits
 	// far more of them than there are tickets worth moving through.
 	wheelAccum int
@@ -2887,7 +2891,15 @@ func (m *Model) updatePickerRename(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) focusRenameField(dir int) {
-	m.renameFocus = (m.renameFocus + dir + 2) % 2
+	m.setRenameFocus((m.renameFocus + dir + 2) % 2)
+}
+
+// setRenameFocus moves the keyboard to one field of the rename form. The
+// highlight and the focused widget have to move together: a blurred textinput
+// drops every key it is handed, so setting the index alone leaves the form
+// looking focused while what you type goes nowhere.
+func (m *Model) setRenameFocus(idx int) {
+	m.renameFocus = idx
 	if m.renameFocus == renameFocusName {
 		m.renameName.Focus()
 		m.renamePrefix.Blur()
@@ -4014,7 +4026,16 @@ func (m *Model) renderMeta(t *model.Ticket, navigable, showCreated bool, origin 
 			rendered = f.style.Render(f.value)
 		}
 		width := lipgloss.Width(rendered)
-		m.addZone(hitZone{kind: zoneMetaField, x: x, y: origin.y, w: width, h: 1, idx: i})
+		// Only while the panel is navigable, because only then is the layout
+		// stable. Focusing it fills the empty slots with their `+assign` /
+		// `+tag` prompts, which shifts every field right of them: a zone
+		// registered before that reflow would put the second click of a
+		// two-click pair on the field next door. Unfocused, the click lands on
+		// the panel itself and focuses it, which is the same first step every
+		// other panel takes.
+		if navigable {
+			m.addZone(hitZone{kind: zoneMetaField, x: x, y: origin.y, w: width, h: 1, idx: i})
+		}
 		x += width + gap
 		parts = append(parts, rendered)
 	}

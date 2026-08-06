@@ -517,7 +517,10 @@ func (m *Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEsc:
 		m.cancelSearch()
 		return m, nil
-	case tea.KeyBackspace:
+	// Both spellings of the key: bubbles' own textinput deletes on either, so
+	// answering to only one would make ctrl+h delete the query but refuse to
+	// delete the slash.
+	case tea.KeyBackspace, tea.KeyCtrlH:
 		// `/` is a character like any other: backspacing past the start of the
 		// query deletes the slash too and drops you back on the board. esc still
 		// works, but the way out of a filter you opened by typing shouldn't be a

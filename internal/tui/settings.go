@@ -30,6 +30,7 @@ type bindAction struct {
 	group  string
 	label  string
 	def    string
+	alias  string // a second key, reserved but never listed as rebindable
 	locked bool
 }
 
@@ -68,7 +69,7 @@ var bindActions = []bindAction{
 	{id: "board.panelPrev", group: "Board", label: "previous panel", def: "["},
 	{id: "board.settings", group: "Board", label: "settings", def: "?"},
 	{id: "board.search", group: "Board", label: "search", def: "/"},
-	{id: "board.tags", group: "Board", label: "tag filter", def: "#"},
+	{id: "board.tags", group: "Board", label: "tag filter", def: "#", alias: tagPickerAlias},
 }
 
 var bindActionsByID = func() map[string]bindAction {

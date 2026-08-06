@@ -270,6 +270,19 @@ func TestTheTagAliasCannotBeClaimed(t *testing.T) {
 	}
 }
 
+// Rebinding an action moves its primary key and keeps its alias. Dropping the
+// alias would take `t` away from the tag list while reservedKeys still held it
+// for that action — a key that opens nothing and can be given to nothing.
+func TestRebindingKeepsTheAlias(t *testing.T) {
+	t.Cleanup(func() { applyKeyBindings(nil) })
+	applyKeyBindings(map[string]string{"board.tags": "T"})
+
+	got := keys.TagPicker.Keys()
+	if len(got) != 2 || got[0] != "T" || got[1] != tagPickerAlias {
+		t.Errorf("tag list answers to %v, want the new key and the alias", got)
+	}
+}
+
 func TestUnboundActionDoesNotKeepItsDefaultKey(t *testing.T) {
 	// The keymap is rebuilt from the defaults, so an action left unbound has
 	// to be actively cleared — otherwise it keeps the very key the override

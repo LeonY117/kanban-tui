@@ -230,6 +230,37 @@ func TestAFirstClickNeverActs(t *testing.T) {
 	}
 }
 
+// The archive browser is a list like any other: a borrowed row follows itself
+// home on the second click, which is what enter does to it.
+func TestClickAgainFollowsABorrowedArchiveRowHome(t *testing.T) {
+	m, _ := boardWith(t, "local|TODO")
+	s := withSprint(t, "demo", "remote|TODO")
+	remote, err := s.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ArchiveByID(remote.Tickets[0].ID); err != nil {
+		t.Fatal(err)
+	}
+
+	m.enterArchive()
+	m.archiveSearch.global = true
+	if !m.loadForeignArchive() {
+		t.Fatal("could not borrow the other board's archive")
+	}
+	m.View()
+
+	row := zoneOf(t, m, zoneArchiveRow, 0, m.archiveCursor)
+	m.mouseClick(clickAt(row.x, row.y))
+	if m.sprintName != "" {
+		t.Fatalf("board = %q, want the first click to select only", m.sprintName)
+	}
+	m.mouseClick(clickAt(row.x, row.y))
+	if m.sprintName != "demo" {
+		t.Errorf("board = %q, want the second click to follow the row home", m.sprintName)
+	}
+}
+
 // ticketZone finds the zone for a card in a column.
 func ticketZone(t *testing.T, m *Model, col, idx int) hitZone {
 	t.Helper()

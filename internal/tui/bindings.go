@@ -79,13 +79,27 @@ func reservedKeys() map[string]bool {
 	}
 	bindings = append(bindings, km.Zero, km.One, km.Two, km.Three, km.Four, km.NewLine)
 
-	out := map[string]bool{tagPickerAlias: true}
+	out := map[string]bool{}
+	for _, a := range bindActions {
+		if a.alias != "" {
+			out[a.alias] = true
+		}
+	}
 	for _, b := range bindings {
 		for _, k := range b.Keys() {
 			out[k] = true
 		}
 	}
 	return out
+}
+
+// actionKeys is every key an action answers to once it has been given k: the
+// key itself, then whatever alias it carries.
+func actionKeys(a bindAction, k string) []string {
+	if a.alias == "" {
+		return []string{k}
+	}
+	return []string{k, a.alias}
 }
 
 // activeBindings is the key each action currently answers to, defaults merged
@@ -242,7 +256,11 @@ func applyKeyBindings(overrides map[string]string) (refused, unbound []string) {
 		if k == a.def {
 			continue
 		}
-		*t = key.NewBinding(key.WithKeys(k), key.WithHelp(k, a.label))
+		// A rebound action keeps its alias. The alias is a second key no
+		// settings row mentions, so losing it on a rebind would take a working
+		// key away silently — and reservedKeys holds it for this action either
+		// way, so nothing else could have claimed it.
+		*t = key.NewBinding(key.WithKeys(actionKeys(a, k)...), key.WithHelp(k, a.label))
 	}
 	sort.Strings(unbound)
 	return refused, unbound

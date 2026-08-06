@@ -264,8 +264,15 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m.editMetaField()
 		}
 	case zoneArchiveRow:
+		already := repeat && m.archiveCursor == z.idx
 		m.archiveCursor = z.idx
 		m.descScroll = 0
+		if already {
+			// enter's job here: a row borrowed from another board's archive
+			// follows itself home. A local row has nothing to open, so this
+			// does nothing — which is the same answer enter gives.
+			m.jumpToForeignArchive()
+		}
 	case zonePickerRow:
 		if repeat && m.pickerIdx == z.idx {
 			return m.pickerActivate()

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -187,8 +188,14 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Clicking away from a field in progress commits it rather than losing it.
+	// A click inside the editor already open is a no-op. Falling through would
+	// blur it, save, and reopen it — the same text, but with the cursor thrown
+	// back to where the editor puts it rather than where it was left.
 	if m.editTitle.Focused() || m.editDesc.Focused() {
+		if z.kind == zoneField && z.idx == m.editField {
+			return m, nil
+		}
+		// Clicking away from a field in progress commits it rather than losing it.
 		m.editTitle.Blur()
 		m.editDesc.Blur()
 		m.saveEdit()
@@ -218,15 +225,23 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.refreshDetailEditors()
 		}
 	case zoneField:
+		// In the split, a panel counts as already selected only while the
+		// detail side holds the focus — clicking it back from the list is the
+		// click that selects.
+		already := m.editField == z.idx && (m.view != splitView || m.splitFocus == 1)
 		if m.view == splitView {
 			m.splitFocus = 1
 		}
 		m.editField = z.idx
+		if already {
+			return m.editFocusedField()
+		}
 	case zoneMetaField:
+		already := m.editField == 0 && m.metaIdx == z.idx &&
+			(m.view != splitView || m.splitFocus == 1)
 		if m.view == splitView {
 			m.splitFocus = 1
 		}
-		already := m.editField == 0 && m.metaIdx == z.idx
 		m.editField = 0
 		m.metaIdx = z.idx
 		if already {
@@ -269,6 +284,25 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.settings.notice = ""
 	case zoneSettingsTab:
 		m.setSettingsSection(settingsSection(z.idx))
+	}
+	return m, nil
+}
+
+// editFocusedField opens the editor for the detail panel the cursor is on —
+// what enter and `e` do there. The Info panel is left out: its three fields
+// carry their own zones, so a click that means "edit the status" lands on the
+// status rather than on the panel around it.
+func (m *Model) editFocusedField() (tea.Model, tea.Cmd) {
+	if !m.guardMutate() {
+		return m, nil
+	}
+	switch m.editField {
+	case 1:
+		m.editTitle.Focus()
+		return m, textinput.Blink
+	case 2:
+		m.editDesc.Focus()
+		return m, textarea.Blink
 	}
 	return m, nil
 }

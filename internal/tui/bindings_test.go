@@ -256,6 +256,20 @@ func TestAnOverrideBeatsANewDefault(t *testing.T) {
 	}
 }
 
+// The tag list answers to `t` as well as `#`, and no settings row says so. A
+// config that could claim `t` would be handed a key that silently loses to the
+// alias, so the alias is reserved like the column jumps.
+func TestTheTagAliasCannotBeClaimed(t *testing.T) {
+	resolved, refused := sanitizeBindings(map[string]string{"board.rename": tagPickerAlias})
+
+	if got := resolved["board.rename"]; got == tagPickerAlias {
+		t.Errorf("board.rename = %q, want the alias refused", got)
+	}
+	if len(refused) != 1 || refused[0] != "board.rename" {
+		t.Errorf("refused = %v, want just board.rename", refused)
+	}
+}
+
 func TestUnboundActionDoesNotKeepItsDefaultKey(t *testing.T) {
 	// The keymap is rebuilt from the defaults, so an action left unbound has
 	// to be actively cleared — otherwise it keeps the very key the override

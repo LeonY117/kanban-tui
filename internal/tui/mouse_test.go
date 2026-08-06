@@ -95,6 +95,46 @@ func TestClickPicksAMetaField(t *testing.T) {
 	}
 }
 
+// Title and description take a second click into the editor, the way they take
+// enter — and a click inside an editor already open leaves it alone rather than
+// saving and reopening it under the cursor.
+func TestClickAgainEditsTitleAndDescription(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		field   int
+		editing func(m *Model) bool
+	}{
+		{"title", 1, func(m *Model) bool { return m.editTitle.Focused() }},
+		{"description", 2, func(m *Model) bool { return m.editDesc.Focused() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := testModel(t, "first")
+			m.enterSplit()
+			m.View()
+
+			panel := zoneOf(t, m, zoneField, 0, tc.field)
+			m.mouseClick(clickAt(panel.x+1, panel.y+1))
+			if m.splitFocus != 1 || m.editField != tc.field {
+				t.Fatalf("splitFocus %d editField %d, want the panel selected from the list",
+					m.splitFocus, m.editField)
+			}
+			if tc.editing(m) {
+				t.Fatal("the click that crossed from the list started editing")
+			}
+
+			m.mouseClick(clickAt(panel.x+1, panel.y+1))
+			if !tc.editing(m) {
+				t.Fatal("the second click did not open the editor")
+			}
+
+			m.mouseClick(clickAt(panel.x+1, panel.y+1))
+			if !tc.editing(m) {
+				t.Error("a click inside the open editor closed it")
+			}
+		})
+	}
+}
+
 func TestClickFocusesAnAddPopupField(t *testing.T) {
 	m := testModel(t, "first")
 	m.enterAddPopup()

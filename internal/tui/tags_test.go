@@ -251,16 +251,21 @@ func TestTagListAndBoardListAreTheSameShape(t *testing.T) {
 	}
 }
 
-// The tag list is one action on one key, reachable from wherever a filter makes
-// sense — the board itself and the board picker. It used to be picker-only on
-// `t`, which put two keystrokes between a board and the tags filtering it.
-func TestTagPickerOpensOnHashFromBoardAndPicker(t *testing.T) {
+// The tag list is one action reachable from wherever a filter makes sense: the
+// board itself and the board picker. It used to be picker-only, which put two
+// keystrokes between a board and the tags filtering it — `#` is the way in the
+// help lines name, and `t` stays as the alias the picker taught (Leon,
+// 2026-08-06).
+func TestTagPickerOpensFromBoardAndPicker(t *testing.T) {
+	openPicker := func(m *Model) { m.Update(tea.KeyMsg{Type: tea.KeyTab}) }
 	for _, tc := range []struct {
 		name string
 		open func(m *Model)
+		key  string
 	}{
-		{"board", func(m *Model) {}},
-		{"picker", func(m *Model) { m.Update(tea.KeyMsg{Type: tea.KeyTab}) }},
+		{"board", func(m *Model) {}, "#"},
+		{"picker", openPicker, "#"},
+		{"picker alias", openPicker, "t"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, _ := boardWith(t, "a|TODO|cli")
@@ -269,7 +274,7 @@ func TestTagPickerOpensOnHashFromBoardAndPicker(t *testing.T) {
 			if help := m.helpText(); !strings.Contains(help, "# tags") {
 				t.Errorf("help %q does not offer #", help)
 			}
-			m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("#")})
+			m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tc.key)})
 			if m.view != tagView {
 				t.Fatalf("view = %v, want the tag list", m.view)
 			}

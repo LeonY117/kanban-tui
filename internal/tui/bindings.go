@@ -62,8 +62,8 @@ func bindingTargets(km *keyMap) map[string]*key.Binding {
 // stops working, so settings can never be reopened.
 //
 // It also covers bindings that are handled but deliberately not offered for
-// rebinding (the 0-4 column jumps, and the newline chord in the description
-// editor), for the same reason.
+// rebinding (the 0-4 column jumps, the newline chord in the description editor,
+// and the tag list's `t` alias), for the same reason.
 func reservedKeys() map[string]bool {
 	km := defaultKeyMap()
 	targets := bindingTargets(&km)
@@ -79,7 +79,7 @@ func reservedKeys() map[string]bool {
 	}
 	bindings = append(bindings, km.Zero, km.One, km.Two, km.Three, km.Four, km.NewLine)
 
-	out := map[string]bool{}
+	out := map[string]bool{tagPickerAlias: true}
 	for _, b := range bindings {
 		for _, k := range b.Keys() {
 			out[k] = true

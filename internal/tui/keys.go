@@ -46,6 +46,11 @@ type keyMap struct {
 
 var keys = defaultKeyMap()
 
+// tagPickerAlias is the second key the tag list answers to, alongside the `#`
+// the help lines name. It is reserved rather than rebindable: an alias no
+// settings row mentions must not be something another action can be given.
+const tagPickerAlias = "t"
+
 // defaultKeyMap is the built-in keymap. It is a function, not a var, so a
 // rebind can rebuild from a clean slate rather than undoing edits in place.
 func defaultKeyMap() keyMap {
@@ -95,9 +100,11 @@ func defaultKeyMap() keyMap {
 		Pin:         key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pin board")),
 		Rename:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rename board")),
 		Search:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
-		// One key, not `#` plus a `t` alias: a rebind hands this action a single
-		// key, so the alias would survive only in the default keymap and then
-		// shadow whatever the config had moved onto `t`.
-		TagPicker: key.NewBinding(key.WithKeys("#"), key.WithHelp("#", "tags")),
+		// `#` is what the board advertises; `t` stays because the tag list was
+		// reached with it from the picker for long enough to be muscle memory.
+		// A rebind hands an action one key, so the alias would otherwise only
+		// exist in the default keymap and shadow whatever a config moved onto
+		// `t` — which is why tagPickerAlias is reserved (see reservedKeys).
+		TagPicker: key.NewBinding(key.WithKeys("#", tagPickerAlias), key.WithHelp("#", "tags")),
 	}
 }

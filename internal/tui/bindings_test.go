@@ -238,12 +238,12 @@ func TestStatusChoicesMapARenamedLabelBackToItsStatus(t *testing.T) {
 
 func TestAnOverrideBeatsANewDefault(t *testing.T) {
 	// A default added in a later release must not take a key the config has
-	// already claimed. board.tags gaining `t` reverted an existing t binding
-	// and told the user about it at startup, which is a config silently
-	// changing meaning on upgrade.
-	resolved, refused := sanitizeBindings(map[string]string{"board.picker": "t"})
+	// already claimed. board.tags gaining a default key reverted an existing
+	// binding on it and told the user about it at startup, which is a config
+	// silently changing meaning on upgrade.
+	resolved, refused := sanitizeBindings(map[string]string{"board.picker": "#"})
 
-	if got := resolved["board.picker"]; got != "t" {
+	if got := resolved["board.picker"]; got != "#" {
 		t.Errorf("board.picker = %q, want the override honoured", got)
 	}
 	if got, bound := resolved["board.tags"]; bound {
@@ -261,12 +261,12 @@ func TestUnboundActionDoesNotKeepItsDefaultKey(t *testing.T) {
 	// to be actively cleared — otherwise it keeps the very key the override
 	// was just given, and both fire.
 	t.Cleanup(func() { applyKeyBindings(nil) })
-	applyKeyBindings(map[string]string{"board.picker": "t"})
+	applyKeyBindings(map[string]string{"board.picker": "#"})
 
 	if keys.TagPicker.Enabled() && len(keys.TagPicker.Keys()) > 0 {
 		t.Errorf("board.tags still bound to %v after its default was taken", keys.TagPicker.Keys())
 	}
-	if got := keys.BoardPicker.Keys(); len(got) != 1 || got[0] != "t" {
-		t.Errorf("board.picker = %v, want t", got)
+	if got := keys.BoardPicker.Keys(); len(got) != 1 || got[0] != "#" {
+		t.Errorf("board.picker = %v, want #", got)
 	}
 }

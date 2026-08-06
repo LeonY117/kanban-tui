@@ -33,8 +33,8 @@ type keyMap struct {
 	PanelNext   key.Binding
 	PanelPrev   key.Binding
 	Archive     key.Binding
-	Layout      key.Binding
-	RowLayout   key.Binding
+	Bigger      key.Binding
+	Smaller     key.Binding
 	ArchiveView key.Binding
 	Unarchive   key.Binding
 	BoardPicker key.Binding
@@ -87,14 +87,17 @@ func defaultKeyMap() keyMap {
 		PanelNext:   key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "next panel")),
 		PanelPrev:   key.NewBinding(key.WithKeys("["), key.WithHelp("[", "prev panel")),
 		Archive:     key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "archive")),
-		Layout:      key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "ticket size")),
-		RowLayout:   key.NewBinding(key.WithKeys("V"), key.WithHelp("V", "rows/columns")),
+		Bigger:      key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "bigger cards")),
+		Smaller:     key.NewBinding(key.WithKeys("V"), key.WithHelp("V", "smaller cards")),
 		ArchiveView: key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "archive browser")),
 		Unarchive:   key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "unarchive")),
 		BoardPicker: key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "board picker")),
 		Pin:         key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pin board")),
 		Rename:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rename board")),
 		Search:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
-		TagPicker:   key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "tags")),
+		// One key, not `#` plus a `t` alias: a rebind hands this action a single
+		// key, so the alias would survive only in the default keymap and then
+		// shadow whatever the config had moved onto `t`.
+		TagPicker: key.NewBinding(key.WithKeys("#"), key.WithHelp("#", "tags")),
 	}
 }

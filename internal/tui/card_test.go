@@ -115,6 +115,32 @@ func TestSelectionMarkers(t *testing.T) {
 	}
 }
 
+// v and V are a size pair, not a cycle: v walks up the ladder and V back down,
+// and both stop at the end rather than wrapping round to the other extreme.
+func TestCardSizeKeysWalkTheLadderBothWays(t *testing.T) {
+	m := testModel(t, "first")
+
+	press := func(k string) ticketLayout {
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)})
+		return m.layout
+	}
+	if got := press("v"); got != layoutLarge {
+		t.Fatalf("v from cards gave %s, want large", got.label())
+	}
+	if got := press("v"); got != layoutLarge {
+		t.Errorf("v at the top gave %s, want it to stay on large", got.label())
+	}
+	if got := press("V"); got != layoutCard {
+		t.Fatalf("V from large gave %s, want cards", got.label())
+	}
+	if got := press("V"); got != layoutCondensed {
+		t.Fatalf("V from cards gave %s, want condensed", got.label())
+	}
+	if got := press("V"); got != layoutCondensed {
+		t.Errorf("V at the bottom gave %s, want it to stay on condensed", got.label())
+	}
+}
+
 // Heavy box-drawing glyphs overhang their cell in many terminal fonts, so a
 // heavy rule visibly spills past the sides of the box it belongs to. The frame
 // is light throughout and lets colour mark the selection.

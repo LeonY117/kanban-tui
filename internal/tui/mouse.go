@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -20,6 +21,9 @@ const (
 	zoneSettingsRow
 	zoneSettingsTab
 	zoneTagRow
+	zoneMetaField   // one field inside a detail Info panel: 0 status, 1 assign, 2 tags
+	zoneAddField    // one field of the new-ticket popup, an addFocus* value
+	zoneRenameField // one input of the sprint rename form, a renameFocus* value
 )
 
 // hitZone is a rectangle registered during render so mouse events can be
@@ -98,6 +102,10 @@ func (m *Model) mouseScroll(msg tea.MouseMsg, dir int) (tea.Model, tea.Cmd) {
 	case zonePickerRow:
 		m.movePickerCursor(dir)
 	case zoneMoveRow:
+		// The wheel acts on the pane it is over, which means focusing that pane
+		// first — scrolling one list while the cursor walks the other one is
+		// the kind of thing that looks like a rendering bug.
+		m.move.pane = movePane(z.col)
 		m.moveMoveCursor(dir)
 	case zoneTagRow:
 		m.moveTagPickerCursor(dir)
@@ -164,6 +172,14 @@ func (m *Model) scrollDescription(dir int) {
 	}
 }
 
+// mouseClick routes a left click to whatever was drawn under it.
+//
+// Every list here selects on the first click and acts on a second click of the
+// row already under the cursor (Leon, 2026-08-06). One click that both moved
+// the selection and committed meant the mouse could never be used to look
+// around: a misjudged row switched board, moved a ticket or started capturing
+// keys before you could see what you had picked. The settings list already
+// worked this way; the rest were the exception.
 func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	m.notice = ""
 	z := m.zoneAt(msg.X, msg.Y)
@@ -180,12 +196,20 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	switch z.kind {
 	case zoneTicket:
+		// In the split, a card counts as already selected only while the list
+		// holds the focus: clicking the list back from the detail pane is the
+		// click that selects, not the one that opens.
+		selected := m.focusedCol == z.col && m.cursors[z.col] == z.idx &&
+			(m.view != splitView || m.splitFocus == 0)
 		m.focusedCol = z.col
 		m.cursors[z.col] = z.idx
 		m.descScroll = 0
 		if m.view == splitView {
 			m.splitFocus = 0
-			m.refreshDetailEditors()
+		}
+		m.refreshDetailIfOpen()
+		if selected {
+			return m.openSelectedTicket()
 		}
 	case zoneColumn:
 		m.focusedCol = z.col
@@ -198,22 +222,46 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.splitFocus = 1
 		}
 		m.editField = z.idx
+	case zoneMetaField:
+		if m.view == splitView {
+			m.splitFocus = 1
+		}
+		already := m.editField == 0 && m.metaIdx == z.idx
+		m.editField = 0
+		m.metaIdx = z.idx
+		if already {
+			return m.editMetaField()
+		}
 	case zoneArchiveRow:
 		m.archiveCursor = z.idx
 		m.descScroll = 0
 	case zonePickerRow:
+		if m.pickerIdx == z.idx {
+			return m.pickerActivate()
+		}
 		m.pickerIdx = z.idx
-		return m.pickerActivate()
 	case zoneMoveRow:
-		m.moveIdx = z.idx
-		return m.moveActivate()
+		return m.moveClick(z)
 	case zoneTagRow:
+		if m.tags.idx == z.idx {
+			return m.tagPickerActivate()
+		}
 		m.tags.idx = z.idx
-		return m.tagPickerActivate()
+	case zoneAddField:
+		// The description is the one field with two states — selected, then
+		// being typed into — so a second click on it opens the editor, which is
+		// what enter does there.
+		if m.addFocusIdx == z.idx && z.idx == addFocusDesc {
+			m.addDesc.Focus()
+			m.addDescEditing = true
+			return m, textarea.Blink
+		}
+		m.focusAddField(z.idx)
+	case zoneRenameField:
+		m.renameFocus = z.idx
 	case zoneSettingsRow:
-		// Select first, act on a second click on the same row — the row is
-		// already highlighted, so a single click that starts key capture would
-		// swallow the next thing the user pressed.
+		// Where this rule started: a single click that began key capture
+		// swallowed the next thing the user pressed.
 		if m.settings.idx == z.idx {
 			return m.settingsActivate()
 		}
@@ -221,6 +269,30 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.settings.notice = ""
 	case zoneSettingsTab:
 		m.setSettingsSection(settingsSection(z.idx))
+	}
+	return m, nil
+}
+
+// openSelectedTicket is the second click on an already-selected card, and does
+// what enter does on the surface it was clicked on: the board opens the split,
+// the split's list hands over to its detail pane, and the zoomed column opens
+// the full detail view. A borrowed card follows itself home first, exactly as
+// enter would.
+func (m *Model) openSelectedTicket() (tea.Model, tea.Cmd) {
+	if m.jumpToForeign() {
+		return m, nil
+	}
+	if m.selectedTicket() == nil {
+		return m, nil
+	}
+	switch m.view {
+	case boardView:
+		m.enterSplit()
+	case splitView:
+		m.splitFocus = 1
+		m.refreshDetailEditors()
+	case columnView:
+		return m.enterDetail()
 	}
 	return m, nil
 }

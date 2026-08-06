@@ -58,15 +58,17 @@ var bindActions = []bindAction{
 	{id: "board.unarchive", group: "Board", label: "unarchive", def: "u"},
 	{id: "board.pin", group: "Board", label: "pin board", def: "p"},
 	{id: "board.rename", group: "Board", label: "rename board", def: "r"},
-	{id: "board.layout", group: "Board", label: "card size", def: "v"},
-	{id: "board.rowLayout", group: "Board", label: "rows / columns", def: "V"},
+	// board.layout keeps its id now that it only grows the cards: a config that
+	// had rebound card size still applies, instead of being refused as unknown.
+	{id: "board.layout", group: "Board", label: "bigger cards", def: "v"},
+	{id: "board.layoutDown", group: "Board", label: "smaller cards", def: "V"},
 	{id: "board.zoom", group: "Board", label: "zoom in", def: "+"},
 	{id: "board.unzoom", group: "Board", label: "zoom out", def: "-"},
 	{id: "board.panelNext", group: "Board", label: "next panel", def: "]"},
 	{id: "board.panelPrev", group: "Board", label: "previous panel", def: "["},
 	{id: "board.settings", group: "Board", label: "settings", def: "?"},
 	{id: "board.search", group: "Board", label: "search", def: "/"},
-	{id: "board.tags", group: "Board", label: "tag filter (in board picker)", def: "t"},
+	{id: "board.tags", group: "Board", label: "tag filter", def: "#"},
 }
 
 var bindActionsByID = func() map[string]bindAction {

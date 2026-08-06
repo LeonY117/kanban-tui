@@ -157,6 +157,50 @@ func TestCancellingRestoresThePreviousFilter(t *testing.T) {
 	}
 }
 
+// `/` is a character like any other: backspacing past the start of the query
+// deletes the slash too and hands the board back its keys.
+func TestBackspacePastTheSlashLeavesTheSearch(t *testing.T) {
+	m, _ := boardWith(t, "auth refresh|TODO", "billing page|TODO")
+
+	typeSearch(m, "au")
+	searchKeys(m, "backspace", "backspace")
+	if !m.search.open {
+		t.Fatal("the input closed while there was still a query to delete")
+	}
+
+	searchKeys(m, "backspace")
+	if m.search.open {
+		t.Error("the input is still open on an empty query")
+	}
+	if m.searchActive() {
+		t.Error("a filter survived the way out")
+	}
+	// And the board answers to board keys again rather than typing into a
+	// filter that is no longer there.
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("#")})
+	if m.view != tagView {
+		t.Errorf("view = %v, want the board's own keys back", m.view)
+	}
+}
+
+// Deleting the query and then backspacing out leaves the board unfiltered —
+// restoring what the input had replaced would put back a filter the user just
+// finished deleting.
+func TestBackspacingOutCommitsTheEmptyQuery(t *testing.T) {
+	m, _ := boardWith(t, "auth refresh|TODO", "billing page|TODO")
+
+	typeSearch(m, "auth")
+	searchKeys(m, "enter")
+
+	searchKeys(m, "/", "backspace", "backspace", "backspace", "backspace", "backspace")
+	if m.search.query != "" {
+		t.Errorf("query = %q, want the deletion to stand", m.search.query)
+	}
+	if got := titlesOf(m.visibleTickets(model.StatusTodo)); len(got) != 2 {
+		t.Errorf("Todo = %v, want the whole column back", got)
+	}
+}
+
 func TestReopeningPrefillsTheQuery(t *testing.T) {
 	m, _ := boardWith(t, "auth refresh|TODO")
 
@@ -250,7 +294,7 @@ func TestMovePopupFollowsTheCardPastHiddenNeighbours(t *testing.T) {
 	m.focusedCol, m.cursors[1] = 1, 0
 
 	m.enterMovePopup()
-	m.moveIdx = 2 // Doing
+	m.move.colIdx = 2 // Doing
 	m.moveActivate()
 
 	if m.focusedCol != 2 {
@@ -287,7 +331,6 @@ var surfaces = []struct {
 	enter func(m *Model)
 }{
 	{"board", func(m *Model) {}},
-	{"rows", func(m *Model) { m.rowLayout = true }},
 	{"split", func(m *Model) { m.enterSplit() }},
 	{"column", func(m *Model) { m.enterSplit(); m.view = columnView }},
 }

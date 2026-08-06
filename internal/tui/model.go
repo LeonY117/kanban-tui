@@ -144,9 +144,6 @@ type Model struct {
 	// Split view state
 	splitFocus int // 0 = list panel, 1 = detail panel
 
-	// Board layout toggle. false = columns (default), true = rows.
-	rowLayout bool
-
 	// How much of each ticket a list row shows (cards by default).
 	layout ticketLayout
 
@@ -193,13 +190,7 @@ type Model struct {
 	renamePrefix     textinput.Model
 	renameFocus      int // renameFocusName | renameFocusPrefix
 
-	// Move popup state
-	moveStage        moveStage
-	moveRows         []moveRow
-	moveIdx          int
-	moveTicketID     string
-	moveTicketStatus model.Status
-	moveTargetBoard  string
+	move moveState
 
 	settings settingsState
 
@@ -250,25 +241,30 @@ type pickerLine struct {
 	boardIdx int // index into pickerBoards; -1 for the divider
 }
 
-// pickerLines lays the picker out: pinned boards, a divider, then the rest.
+// boardLines lays a board list out: pinned boards, a divider, then the rest.
 // The divider is dropped when either side of it is empty — with nothing pinned
 // but main, a line under main is noise rather than structure.
-func (m *Model) pickerLines() []pickerLine {
-	lines := make([]pickerLine, 0, len(m.pickerBoards)+1)
+//
+// The board picker and the move popup both draw from this, so a board's pins
+// sit in the same place wherever the list is shown.
+func boardLines(entries []pickerEntry) []pickerLine {
+	lines := make([]pickerLine, 0, len(entries)+1)
 	pinnedSprints := 0
-	for _, e := range m.pickerBoards {
+	for _, e := range entries {
 		if e.pinned && e.name != "" {
 			pinnedSprints++
 		}
 	}
-	for i, e := range m.pickerBoards {
-		if !e.pinned && pinnedSprints > 0 && (i == 0 || m.pickerBoards[i-1].pinned) {
+	for i, e := range entries {
+		if !e.pinned && pinnedSprints > 0 && (i == 0 || entries[i-1].pinned) {
 			lines = append(lines, pickerLine{boardIdx: -1})
 		}
 		lines = append(lines, pickerLine{boardIdx: i})
 	}
 	return lines
 }
+
+func (m *Model) pickerLines() []pickerLine { return boardLines(m.pickerBoards) }
 
 // pickerLineOf returns the rendered line index showing a given board.
 func pickerLineOf(lines []pickerLine, boardIdx int) int {
@@ -606,9 +602,6 @@ func (m *Model) selectedTicket() *model.Ticket {
 // side-by-side. Below it, a 3-column sliding window centered on focus is used.
 const wideLayoutMinWidth = 150
 
-// tallLayoutMinHeight is the same idea for row layout, against height.
-const tallLayoutMinHeight = 30
-
 // Minimum terminal dimensions for a usable TUI render. Below this, we show a
 // placeholder instead of a mangled layout.
 const (
@@ -621,20 +614,10 @@ const (
 // that sits at [1,2,3] by default; only the edge columns (0 and 4) drag the
 // window sideways, giving a "peek" into Backlog or Hold.
 func (m *Model) visibleColumns() []int {
-	return slidingWindow(m.width >= wideLayoutMinWidth, m.focusedCol)
-}
-
-// visibleRows is the row-layout analogue of visibleColumns: tall terminals
-// show all 5 rows, shorter ones slide a 3-row window.
-func (m *Model) visibleRows() []int {
-	return slidingWindow(m.height >= tallLayoutMinHeight, m.focusedCol)
-}
-
-func slidingWindow(showAll bool, focused int) []int {
-	if showAll {
+	if m.width >= wideLayoutMinWidth {
 		return []int{0, 1, 2, 3, 4}
 	}
-	switch focused {
+	switch m.focusedCol {
 	case 0:
 		return []int{0, 1, 2}
 	case 4:
@@ -738,10 +721,10 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveTicketInColumn(1)
 	case key.Matches(msg, keys.Archive):
 		m.archiveTicket()
-	case key.Matches(msg, keys.Layout):
-		m.cycleTicketLayout()
-	case key.Matches(msg, keys.RowLayout):
-		m.rowLayout = !m.rowLayout
+	case key.Matches(msg, keys.Bigger):
+		m.resizeTickets(1)
+	case key.Matches(msg, keys.Smaller):
+		m.resizeTickets(-1)
 	case key.Matches(msg, keys.Move):
 		return m.enterMovePopup()
 	case key.Matches(msg, keys.Help):
@@ -752,6 +735,8 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.enterArchive()
 	case key.Matches(msg, keys.BoardPicker):
 		return m.enterPicker()
+	case key.Matches(msg, keys.TagPicker):
+		return m.enterTagPicker()
 	}
 	return m, nil
 }
@@ -989,8 +974,12 @@ func (m *Model) updateSplitList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.enterSettings()
 	case key.Matches(msg, keys.Copy):
 		m.copyFocused()
-	case key.Matches(msg, keys.Layout):
-		m.cycleTicketLayout()
+	case key.Matches(msg, keys.Bigger):
+		m.resizeTickets(1)
+	case key.Matches(msg, keys.Smaller):
+		m.resizeTickets(-1)
+	case key.Matches(msg, keys.TagPicker):
+		return m.enterTagPicker()
 	case key.Matches(msg, keys.ArchiveView):
 		m.enterArchive()
 	}
@@ -1257,6 +1246,8 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case key.Matches(msg, keys.Search):
 		m.enterSearch()
+	case key.Matches(msg, keys.TagPicker):
+		return m.enterTagPicker()
 	case key.Matches(msg, keys.Add):
 		return m.enterAddPopup()
 	case key.Matches(msg, keys.Zero):
@@ -2287,6 +2278,12 @@ func (m *Model) addHasContent() bool {
 }
 
 func (m *Model) cycleAddField(dir int) {
+	m.focusAddField((m.addFocusIdx + dir + 4) % 4)
+}
+
+// focusAddField hands the popup's keyboard to one field, blurring whichever had
+// it. Reached by tab and by a click on the field.
+func (m *Model) focusAddField(idx int) {
 	switch m.addFocusIdx {
 	case addFocusAssign:
 		m.addAssign.Blur()
@@ -2298,8 +2295,8 @@ func (m *Model) cycleAddField(dir int) {
 		m.addDesc.Blur()
 		m.addDescEditing = false
 	}
-	m.addFocusIdx = (m.addFocusIdx + dir + 4) % 4
-	switch m.addFocusIdx {
+	m.addFocusIdx = idx
+	switch idx {
 	case addFocusAssign:
 		m.addAssign.Focus()
 	case addFocusTags:
@@ -2375,8 +2372,9 @@ func (m *Model) viewAdd() string {
 	backdrop := m.popupBackdrop(m.popupReturnView)
 	// The backdrop's zones belong to a view the user can't reach right now.
 	m.resetZones()
-	popup := m.renderAddPopup(popupWidth, popupHeight)
-	return m.centerOverPopup(popup, backdrop, popupWidth, popupHeight)
+	origin := m.popupOrigin(popupWidth, popupHeight)
+	popup := m.renderAddPopup(popupWidth, popupHeight, origin)
+	return overlayAt(backdrop, popup, origin.x, origin.y)
 }
 
 // centerOverPopup overlays a popup on top of bg, centered. Vertical center
@@ -2462,7 +2460,7 @@ func overlayAt(bg, fg string, x, y int) string {
 	return strings.Join(bgLines, "\n")
 }
 
-func (m *Model) renderAddPopup(width, height int) string {
+func (m *Model) renderAddPopup(width, height int, origin point) string {
 	// width is the outer popup width. The outer border eats 2 cols; we also
 	// reserve 1 col of left pad + 1 col of right pad so inner panels sit
 	// symmetrically inside the popup.
@@ -2471,10 +2469,17 @@ func (m *Model) renderAddPopup(width, height int) string {
 		innerWidth = 10
 	}
 
+	// Content starts one row below the popup's top border, one column in from
+	// its left border, plus the left pad every line below carries. While the
+	// discard prompt is up no field is clickable: a click that moved focus
+	// would answer a [y/N] question with something else entirely.
+	live := !m.addConfirmQuit
+	rowX, rowY := origin.x+2, origin.y+1
+
 	status := model.ColumnOrder[m.focusedCol]
 	accent := columnColor(status)
 
-	meta := m.renderAddMeta()
+	meta := m.renderAddMeta(point{x: rowX, y: rowY}, live)
 
 	titleColor := softWhite
 	if m.addFocusIdx == addFocusTitle {
@@ -2482,6 +2487,9 @@ func (m *Model) renderAddPopup(width, height int) string {
 	}
 	m.addTitle.Width = innerWidth - 2
 	titlePanel := renderPanel("Title", m.addTitle.View(), innerWidth, 3, titleColor, m.addFocusIdx == addFocusTitle)
+	if live {
+		m.addZone(hitZone{kind: zoneAddField, x: rowX, y: rowY + 1, w: innerWidth, h: 3, idx: addFocusTitle})
+	}
 
 	descColor := softWhite
 	if m.addFocusIdx == addFocusDesc {
@@ -2496,6 +2504,9 @@ func (m *Model) renderAddPopup(width, height int) string {
 	setDescWidth(&m.addDesc, innerWidth-2)
 	m.addDesc.SetHeight(descHeight - 2)
 	descPanel := renderPanel("Description", m.addDesc.View(), innerWidth, descHeight, descColor, m.addFocusIdx == addFocusDesc)
+	if live {
+		m.addZone(hitZone{kind: zoneAddField, x: rowX, y: rowY + 4, w: innerWidth, h: descHeight, idx: addFocusDesc})
+	}
 
 	// lipgloss PaddingLeft on a multi-line block pads every line, so
 	// sub-panel borders don't collide with the outer popup's left border.
@@ -2517,7 +2528,10 @@ func (m *Model) renderAddPopup(width, height int) string {
 // static text even when a widget is focused (widget still captures keys
 // invisibly) because stacking styles on top of textinput.View() mangles its
 // internal cursor rendering.
-func (m *Model) renderAddMeta() string {
+// origin is where the line starts on screen, for the assign and tags click
+// zones. The status field carries no zone: it is the column the popup was
+// opened on, not something the form can change.
+func (m *Model) renderAddMeta(origin point, live bool) string {
 	status := model.ColumnOrder[m.focusedCol]
 	statusColor := columnColor(status)
 	statusText := statusDisplay[status]
@@ -2555,6 +2569,14 @@ func (m *Model) renderAddMeta() string {
 	}
 
 	statusRender := lipgloss.NewStyle().Foreground(statusColor).Bold(true).Render(statusText)
+
+	if live {
+		const gap = 2 // the "  " the parts are joined with
+		x := origin.x + lipgloss.Width(statusRender) + gap
+		m.addZone(hitZone{kind: zoneAddField, x: x, y: origin.y, w: lipgloss.Width(assignRender), h: 1, idx: addFocusAssign})
+		x += lipgloss.Width(assignRender) + gap
+		m.addZone(hitZone{kind: zoneAddField, x: x, y: origin.y, w: lipgloss.Width(tagsRender), h: 1, idx: addFocusTags})
+	}
 
 	return strings.Join([]string{statusRender, assignRender, tagsRender}, "  ")
 }
@@ -3193,6 +3215,22 @@ func (m *Model) renderPickerPopup(width, height int, origin point) string {
 		rowOffset = start
 	}
 
+	// The rename form's two inputs are the last rows in the list, and the window
+	// above is anchored to the bottom whenever it is open, so they are always on
+	// screen to be clicked.
+	if m.renameTarget != "" && len(rows) >= 2 {
+		for i, focus := range []int{renameFocusName, renameFocusPrefix} {
+			m.addZone(hitZone{
+				kind: zoneRenameField,
+				x:    origin.x + 2,
+				y:    origin.y + 1 + len(rows) - 2 + i,
+				w:    innerWidth,
+				h:    1,
+				idx:  focus,
+			})
+		}
+	}
+
 	// Board rows are clickable; the divider and the confirm prompt rows
 	// (appended after the boards) are not. While the rename form or the archive
 	// confirm owns the keyboard, no row is: moving the highlight would leave it
@@ -3309,8 +3347,8 @@ func (m *Model) helpText() string {
 		// search and settings lead: they are the two the board cannot teach you
 		// any other way, and fitHints drops from the end. The rest are either
 		// guessable or already on a card in front of you.
-		hints := fmt.Sprintf("h/l nav | j/k select | %s search | %s settings | %s/%s move | %s move | %s add | %s archive | %s quit",
-			hk("board.search"), hk("board.settings"), hk("card.moveLeft"), hk("card.moveRight"),
+		hints := fmt.Sprintf("h/l nav | j/k select | %s search | %s tags | %s settings | %s/%s move | %s move | %s add | %s archive | %s quit",
+			hk("board.search"), hk("board.tags"), hk("board.settings"), hk("card.moveLeft"), hk("card.moveRight"),
 			hk("card.move"), hk("card.add"), hk("card.archive"), "q")
 		if m.searchActive() {
 			// Only the board view frees esc for this — elsewhere it still
@@ -3324,12 +3362,10 @@ func (m *Model) helpText() string {
 	case tagView:
 		return "j/k select | enter filter by tag | esc close"
 	case moveView:
-		switch m.moveStage {
-		case moveStageColumn:
-			return "j/k select | enter move | esc cancel"
-		default:
-			return "j/k select | enter move | esc back"
+		if m.move.pane == movePaneBoards {
+			return "j/k board | enter/l columns | esc close"
 		}
+		return "j/k column | h boards | enter move | esc back"
 	case pickerView:
 		if m.confirmArchive != "" {
 			return fmt.Sprintf("archive %q? y / n", m.confirmArchive)
@@ -3474,11 +3510,8 @@ func renderPanel(title string, content string, width, height int, borderColor li
 	return result
 }
 
-// viewBoard renders the board view (column layout by default, row layout on toggle).
+// viewBoard renders the board view: the five columns side by side.
 func (m *Model) viewBoard() string {
-	if m.rowLayout {
-		return m.viewBoardRows()
-	}
 	availHeight := m.height - 1 // just help bar
 	availWidth := m.width
 
@@ -3613,93 +3646,6 @@ func (m *Model) renderTicketLine(t model.Ticket, selected bool, width int, accen
 		foreignBoardStyle.Render(badge) + lipgloss.NewStyle().Foreground(softWhite).Render(title))
 }
 
-// viewBoardRows renders the board as stacked full-width rows — one per status.
-// Tall terminals show all 5 rows; shorter ones show a 3-row sliding window
-// centered on the focused row (same logic as the horizontal layout, applied to height).
-func (m *Model) viewBoardRows() string {
-	availHeight := m.height - 1
-	availWidth := m.width
-
-	visRows := m.visibleRows()
-	numRows := len(visRows)
-
-	rowHeights := make([]int, numRows)
-	if availHeight < 24 && numRows > 2 {
-		focusedIdx := -1
-		for i, c := range visRows {
-			if c == m.focusedCol {
-				focusedIdx = i
-				break
-			}
-		}
-		focusedHeight := availHeight * 50 / 100
-		remaining := availHeight - focusedHeight
-		unfocusedHeight := remaining / (numRows - 1)
-		for i := range rowHeights {
-			if i == focusedIdx {
-				rowHeights[i] = focusedHeight
-			} else {
-				rowHeights[i] = unfocusedHeight
-			}
-		}
-	} else {
-		baseHeight := availHeight / numRows
-		for i := range rowHeights {
-			rowHeights[i] = baseHeight
-		}
-	}
-	total := 0
-	for _, h := range rowHeights {
-		total += h
-	}
-	rowHeights[numRows-1] += availHeight - total
-
-	rows := make([]string, numRows)
-	y := 0
-	for i, colIdx := range visRows {
-		status := model.ColumnOrder[colIdx]
-		rows[i] = m.renderRow(colIdx, status, availWidth, rowHeights[i], colIdx == m.focusedCol, point{x: 0, y: y})
-		y += rowHeights[i]
-	}
-	board := lipgloss.JoinVertical(lipgloss.Left, rows...)
-	return lipgloss.JoinVertical(lipgloss.Left, board, m.footerLine())
-}
-
-// renderRow draws one status as a full-width panel with its tickets as a
-// vertical list (one ticket per line, same shape as renderColumn content).
-func (m *Model) renderRow(colIdx int, status model.Status, width, height int, focused bool, origin point) string {
-	tickets := m.visibleTickets(status)
-	title := fmt.Sprintf("[%d] %s (%d)", colIdx, statusDisplay[status], len(tickets))
-
-	color := softWhite
-	if focused {
-		color = columnColor(status)
-	}
-
-	innerWidth := width - 2
-	if innerWidth < 3 {
-		innerWidth = 3
-	}
-	visibleCount := height - 2
-	if visibleCount < 1 {
-		visibleCount = 1
-	}
-
-	cursor := -1
-	if focused {
-		cursor = m.cursors[colIdx]
-	}
-
-	m.addZone(hitZone{kind: zoneColumn, x: origin.x, y: origin.y, w: width, h: height, col: colIdx})
-
-	content := m.renderTicketList(tickets, colIdx, innerWidth, visibleCount, cursor, color,
-		point{x: origin.x + 1, y: origin.y + 1})
-	if content == "" {
-		content = lipgloss.NewStyle().Foreground(subtle).Render("(empty)")
-	}
-	return renderPanel(title, content, width, height, color, focused)
-}
-
 // viewSplit renders the split view: list on left, detail on right.
 func (m *Model) viewSplit() string {
 	availHeight := m.height - 1
@@ -3770,9 +3716,11 @@ func (m *Model) renderSplitDetail(width, height int, focused bool, borderColor l
 	if focused && m.editField == 0 {
 		metaColor = borderColor
 	}
-	metaContent := m.renderCompactMeta(t, innerWidth, focused && m.editField == 0)
-	metaPanel := renderPanel("Info", metaContent, width, 3, metaColor, focused && m.editField == 0)
+	// The panel zone is registered before the field zones inside it, so a click
+	// on a field wins over the panel it sits in.
 	m.addZone(hitZone{kind: zoneField, x: origin.x, y: origin.y, w: width, h: 3, idx: 0})
+	metaContent := m.renderMeta(t, focused && m.editField == 0, false, point{x: origin.x + 1, y: origin.y + 1})
+	metaPanel := renderPanel("Info", metaContent, width, 3, metaColor, focused && m.editField == 0)
 
 	// Title panel — height 3
 	titleColor := softWhite
@@ -3965,9 +3913,9 @@ func (m *Model) viewDetail() string {
 	if m.editField == 0 {
 		metaBorderColor = color
 	}
-	metaContent := m.renderMetaBar(t)
-	metaPanel := renderPanel("Info", metaContent, innerWidth+2, 3, metaBorderColor, m.editField == 0)
 	m.addZone(hitZone{kind: zoneField, x: 0, y: 0, w: innerWidth + 2, h: 3, idx: 0})
+	metaContent := m.renderMeta(t, m.editField == 0, true, point{x: 1, y: 1})
+	metaPanel := renderPanel("Info", metaContent, innerWidth+2, 3, metaBorderColor, m.editField == 0)
 
 	// Title field
 	titleBorderColor := softWhite
@@ -4012,15 +3960,21 @@ func (m *Model) viewDetail() string {
 	)
 }
 
-// renderCompactMeta renders a compact metadata bar that fits within a given width.
-// When the Info panel is focused (navigable), empty assign/tag fields render as
-// dim "+assign" / "+tag" prompts so the user can tab to them and create a value.
-// When not focused, empty fields are hidden entirely to keep the bar uncluttered.
-func (m *Model) renderCompactMeta(t *model.Ticket, maxWidth int, navigable bool) string {
+// renderMeta draws the Info panel's one-line metadata bar and registers a click
+// zone over each field, so the mouse can pick status / assignee / tags directly
+// instead of walking to them with h and l.
+//
+// navigable means the panel currently holds the keyboard: the selected field
+// gets the highlight, and empty assign/tag slots show as dim "+assign" / "+tag"
+// prompts you can move onto to fill in. When it doesn't, empty fields are
+// hidden entirely to keep the bar uncluttered — and get no zone, since there is
+// nothing drawn to click.
+//
+// origin is where the panel's content starts on screen: one row below its top
+// border and one column in from its left one.
+func (m *Model) renderMeta(t *model.Ticket, navigable, showCreated bool, origin point) string {
 	status := model.ColumnOrder[m.focusedCol]
 	color := columnColor(status)
-
-	statusText := statusDisplay[t.Status]
 
 	assignText, assignEmpty := "+assign", true
 	if t.AssignedTo != "" {
@@ -4038,12 +3992,14 @@ func (m *Model) renderCompactMeta(t *model.Ticket, maxWidth int, navigable bool)
 		style lipgloss.Style
 		empty bool
 	}{
-		{statusText, lipgloss.NewStyle().Foreground(color).Bold(true), false},
+		{statusDisplay[t.Status], lipgloss.NewStyle().Foreground(color).Bold(true), false},
 		{assignText, assigneeStyle, assignEmpty},
 		{tagsText, tagStyle, tagsEmpty},
 	}
 
+	const gap = 2 // the "  " the parts are joined with
 	var parts []string
+	x := origin.x
 	for i, f := range fields {
 		if f.empty && !navigable {
 			continue
@@ -4057,62 +4013,15 @@ func (m *Model) renderCompactMeta(t *model.Ticket, maxWidth int, navigable bool)
 		default:
 			rendered = f.style.Render(f.value)
 		}
+		width := lipgloss.Width(rendered)
+		m.addZone(hitZone{kind: zoneMetaField, x: x, y: origin.y, w: width, h: 1, idx: i})
+		x += width + gap
 		parts = append(parts, rendered)
 	}
 	parts = append(parts, m.renderTicketID(*t, dim))
-
-	return strings.Join(parts, "  ")
-}
-
-// renderMetaBar renders the metadata fields with the selected one highlighted.
-func (m *Model) renderMetaBar(t *model.Ticket) string {
-	isMeta := m.editField == 0
-
-	status := model.ColumnOrder[m.focusedCol]
-	color := columnColor(status)
-
-	statusText := statusDisplay[t.Status]
-
-	assignText, assignEmpty := "+assign", true
-	if t.AssignedTo != "" {
-		assignText, assignEmpty = "● "+t.AssignedTo, false
+	if showCreated {
+		parts = append(parts, dim.Render(t.CreatedAt.Format("2006-01-02 15:04")))
 	}
-	tagsText, tagsEmpty := "+tag", true
-	if len(t.Tags) > 0 {
-		tagsText, tagsEmpty = "#"+strings.Join(t.Tags, " #"), false
-	}
-
-	dim := lipgloss.NewStyle().Foreground(midGray)
-
-	fields := []struct {
-		value string
-		style lipgloss.Style
-		empty bool
-	}{
-		{statusText, lipgloss.NewStyle().Foreground(color).Bold(true), false},
-		{assignText, assigneeStyle, assignEmpty},
-		{tagsText, tagStyle, tagsEmpty},
-	}
-
-	var parts []string
-	for i, f := range fields {
-		if f.empty && !isMeta {
-			continue
-		}
-		var rendered string
-		switch {
-		case isMeta && i == m.metaIdx:
-			rendered = selectedFieldStyle.Render(f.value)
-		case f.empty:
-			rendered = dim.Render(f.value)
-		default:
-			rendered = f.style.Render(f.value)
-		}
-		parts = append(parts, rendered)
-	}
-
-	parts = append(parts, m.renderTicketID(*t, dim))
-	parts = append(parts, lipgloss.NewStyle().Foreground(midGray).Render(t.CreatedAt.Format("2006-01-02 15:04")))
 
 	return strings.Join(parts, "  ")
 }

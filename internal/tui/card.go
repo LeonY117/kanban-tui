@@ -19,16 +19,25 @@ const (
 	layoutCondensed
 )
 
-// next walks the size ladder: card → large → condensed → card.
-func (l ticketLayout) next() ticketLayout {
-	switch l {
-	case layoutCard:
-		return layoutLarge
-	case layoutLarge:
-		return layoutCondensed
-	default:
-		return layoutCard
+// layoutLadder is the ladder in size order, smallest first — what v and V walk.
+// It is spelled out rather than read off the constants because layoutCard has
+// to keep the zero value: a Model that never touched the keys starts on cards.
+var layoutLadder = []ticketLayout{layoutCondensed, layoutCard, layoutLarge}
+
+// step walks the ladder by dir and stops at both ends. A pair of directional
+// keys that wrapped would make "bigger" mean smallest every third press, and
+// the notice already says which rung you are on.
+func (l ticketLayout) step(dir int) ticketLayout {
+	for i, rung := range layoutLadder {
+		if rung != l {
+			continue
+		}
+		if next := i + dir; next >= 0 && next < len(layoutLadder) {
+			return layoutLadder[next]
+		}
+		break
 	}
+	return l
 }
 
 func (l ticketLayout) label() string {
@@ -42,8 +51,9 @@ func (l ticketLayout) label() string {
 	}
 }
 
-func (m *Model) cycleTicketLayout() {
-	m.layout = m.layout.next()
+// resizeTickets grows the list rows (dir > 0) or shrinks them.
+func (m *Model) resizeTickets(dir int) {
+	m.layout = m.layout.step(dir)
 	m.notice = m.layout.label()
 }
 

@@ -12,8 +12,7 @@ import (
 // openTags walks the real route: tab opens the board picker, t switches it to
 // the tag list.
 func openTags(m *Model) {
-	m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("#")})
 }
 
 func TestTagPickerListsEveryTagWithItsCount(t *testing.T) {
@@ -252,27 +251,29 @@ func TestTagListAndBoardListAreTheSameShape(t *testing.T) {
 	}
 }
 
-func TestTagPickerIsReachedThroughTheBoardPicker(t *testing.T) {
-	m, _ := boardWith(t, "a|TODO|cli")
+// The tag list is one action on one key, reachable from wherever a filter makes
+// sense — the board itself and the board picker. It used to be picker-only on
+// `t`, which put two keystrokes between a board and the tags filtering it.
+func TestTagPickerOpensOnHashFromBoardAndPicker(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		open func(m *Model)
+	}{
+		{"board", func(m *Model) {}},
+		{"picker", func(m *Model) { m.Update(tea.KeyMsg{Type: tea.KeyTab}) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := boardWith(t, "a|TODO|cli")
+			tc.open(m)
 
-	// It is no longer a top-level key: t on the board does nothing.
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
-	if m.view != boardView {
-		t.Fatalf("view = %v, want t on the board to do nothing", m.view)
-	}
-
-	m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	if m.view != pickerView {
-		t.Fatalf("view = %v, want the board picker", m.view)
-	}
-	// And the picker's footer is where t is documented.
-	if help := m.helpText(); !strings.Contains(help, "t tags") {
-		t.Errorf("picker help %q does not offer t", help)
-	}
-
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
-	if m.view != tagView {
-		t.Errorf("view = %v, want the tag list", m.view)
+			if help := m.helpText(); !strings.Contains(help, "# tags") {
+				t.Errorf("help %q does not offer #", help)
+			}
+			m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("#")})
+			if m.view != tagView {
+				t.Fatalf("view = %v, want the tag list", m.view)
+			}
+		})
 	}
 }
 

@@ -175,7 +175,7 @@ kanban sprints prefix demo-may DM              # DA7 → DM7, board + archive
 kanban sprints rm demo-april                   # delete
 ```
 
-Sprint names: `[A-Za-z0-9_-]`, 1–64 chars. From the TUI, `tab` opens a board picker that switches between main and any active sprint. The bottom-left badge shows the current board and, as a dim hint beside it, the prefix its next ticket will carry — `kanban [KA]`, or `main [#]` for bare numbers.
+Sprint names: `[A-Za-z0-9_-]`, 1–64 chars. From the TUI, `tab` opens a board picker that switches between main and any active sprint. The bottom-left badge shows the current board and, as a dim hint beside it, the prefix its next ticket will carry — `kanban [KA]`, or `main [#]` for bare numbers. The terminal window title takes the board's name too, so a tab running the TUI reads as `demo-april` rather than as `kanban`.
 
 ### Pinned boards
 

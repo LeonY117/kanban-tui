@@ -219,6 +219,8 @@ type Model struct {
 	notice string
 
 	lastModTime time.Time // last known mod time of board.json
+
+	windowTitle string // board name last written to the terminal title
 }
 
 // archiveEntry is a single row in the archive browser — either a date header
@@ -475,10 +477,35 @@ func fitHints(text string, width int) string {
 }
 
 func (m *Model) Init() tea.Cmd {
-	return tickCmd()
+	return tea.Batch(tickCmd(), m.titleCmd())
 }
 
+// titleCmd names the terminal window after the board in view, so a tab running
+// kanban reads as the sprint rather than as the tool. It returns nil when the
+// title is already right: every Update runs through here, and re-announcing the
+// same title on each keystroke would be noise on the wire.
+//
+// Nothing restores the title on exit — the shell integration that put the
+// command name there in the first place rewrites it at the next prompt.
+func (m *Model) titleCmd() tea.Cmd {
+	title := boardDisplayName(m.sprintName)
+	if title == m.windowTitle {
+		return nil
+	}
+	m.windowTitle = title
+	return tea.SetWindowTitle(title)
+}
+
+// Update wraps the real update so that a board switch renames the window from
+// one place. switchBoard has five call sites across the picker and both global
+// search jumps; threading a title command out of each would leave the sixth to
+// remember.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	return next, tea.Batch(cmd, m.titleCmd())
+}
+
+func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tickMsg:
 		if info, err := os.Stat(m.store.BoardPath()); err == nil {

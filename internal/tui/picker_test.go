@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -635,5 +636,52 @@ func TestRenameFormSurvivesTheSmallestTerminal(t *testing.T) {
 			t.Errorf("line overflows the terminal: %d cells", lipgloss.Width(line))
 			break
 		}
+	}
+}
+
+// titleOf runs a command and reports the window title it announces, or "" if it
+// announces none. bubbletea keeps the message type unexported, so the match is
+// by type name. Never hand this a command that may carry a tick — running one
+// sleeps for the tick interval.
+func titleOf(cmd tea.Cmd) string {
+	if cmd == nil {
+		return ""
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, sub := range batch {
+			if title := titleOf(sub); title != "" {
+				return title
+			}
+		}
+		return ""
+	}
+	if fmt.Sprintf("%T", msg) != "tea.setWindowTitleMsg" {
+		return ""
+	}
+	return fmt.Sprint(msg)
+}
+
+// The terminal title tracks the board in view, so a tab running kanban reads as
+// the sprint rather than as the tool.
+func TestWindowTitleFollowsTheBoard(t *testing.T) {
+	m := pickerModel(t, "demo")
+
+	// Init's batch carries a tick, so read the title off the model rather than
+	// running it.
+	if m.Init(); m.windowTitle != "main" {
+		t.Errorf("title at launch = %q, want main", m.windowTitle)
+	}
+
+	if _, cmd := m.Update(keyPress("j")); titleOf(cmd) != "" {
+		t.Errorf("a keystroke re-announced the unchanged title as %q", titleOf(cmd))
+	}
+
+	if err := m.switchBoard("demo"); err != nil {
+		t.Fatal(err)
+	}
+	_, cmd := m.Update(keyPress("j"))
+	if got := titleOf(cmd); got != "demo" {
+		t.Errorf("title after switching to demo = %q, want demo", got)
 	}
 }

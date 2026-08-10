@@ -150,7 +150,7 @@ func (m *Model) infoPopupSize() (width, height int) {
 	if m.infoText != "" {
 		bodyLines = len(strings.Split(wrapDesc(m.infoText, width-4), "\n"))
 	}
-	height = bodyLines + 6 // border (2), heading, hint, and a blank beside each
+	height = bodyLines + 4 // border (2), a blank, the hint line
 	if height > m.height-4 {
 		height = m.height - 4
 	}
@@ -162,11 +162,14 @@ func (m *Model) infoPopupSize() (width, height int) {
 
 func (m *Model) renderInfoPopup(width, height int) string {
 	innerWidth := max(10, width-4)
-	bodyHeight := max(1, height-6)
+	bodyHeight := max(1, height-4)
 
-	heading := sprintBadgeStyle.Render(boardDisplayName(m.infoBoard))
+	// The board's name titles the box rather than heading its contents: the
+	// badge style's padding would set a heading one column right of the prose
+	// under it, and "which board is this" belongs on the frame anyway.
+	title := boardDisplayName(m.infoBoard)
 	if m.infoBoard != "" && store.IsSprintArchived(m.infoBoard) {
-		heading += " " + dimStyle.Render("[archived]")
+		title += " [archived]"
 	}
 
 	var body, hint string
@@ -180,8 +183,8 @@ func (m *Model) renderInfoPopup(width, height int) string {
 		hint = dimStyle.Render("e edit · j/k scroll · esc close")
 	}
 
-	content := strings.Join([]string{heading, "", body, "", hint}, "\n")
-	return renderPanel("Board", content, width, height, green, true)
+	content := strings.Join([]string{body, "", hint}, "\n")
+	return renderPanel(title, content, width, height, cyan, true)
 }
 
 // renderInfoBody wraps and vertically clips the description, tracking its own

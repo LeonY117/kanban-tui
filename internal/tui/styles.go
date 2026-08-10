@@ -88,6 +88,14 @@ var (
 				Bold(true).
 				Padding(0, 1)
 
+	// The same badge while the footer holds focus — prototype scaffolding (KA3),
+	// goes with footerfocus.go.
+	sprintBadgeFocusStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("0")).
+				Background(cyan).
+				Bold(true).
+				Padding(0, 1)
+
 	// Title bar — bold, default fg.
 	titleBar = lipgloss.NewStyle().
 			Bold(true).

@@ -231,6 +231,10 @@ type Model struct {
 	infoScrollMax int
 	infoEditing   bool
 	infoDesc      textarea.Model
+
+	// Prototype scaffolding (KA3) — see footerfocus.go.
+	navFallthrough bool
+	footerFocus    bool
 }
 
 // archiveEntry is a single row in the archive browser — either a date header
@@ -396,7 +400,11 @@ func (m *Model) guardBoardMutate() bool {
 }
 
 func (m *Model) footerLine() string {
-	badge := sprintBadgeStyle.Render(boardDisplayName(m.sprintName))
+	badgeStyle := sprintBadgeStyle
+	if m.footerFocus {
+		badgeStyle = sprintBadgeFocusStyle
+	}
+	badge := badgeStyle.Render(boardDisplayName(m.sprintName))
 	// The board's name is the thing on screen that identifies the board, so it
 	// is also where a click asking "what is this board?" lands. Registered on
 	// the name alone, not the chips beside it, which mean other things.
@@ -682,6 +690,8 @@ func (m *Model) moveFocus(dir int) {
 		return
 	}
 	m.focusedCol = next
+	// Moving sideways is a return to the cards — see footerfocus.go.
+	m.footerFocus = false
 }
 
 // moveCursor moves the selection cursor within the focused column's ticket list.
@@ -722,10 +732,21 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Right):
 		m.moveFocus(1)
 	case key.Matches(msg, keys.Up):
+		if m.footerFocusUp() {
+			return m, nil
+		}
 		m.moveCursor(-1)
 	case key.Matches(msg, keys.Down):
+		if m.footerFocusDown() {
+			return m, nil
+		}
 		m.moveCursor(1)
+	case msg.String() == "z":
+		m.toggleNavFallthrough()
 	case key.Matches(msg, keys.Enter):
+		if m.footerFocusEnter() {
+			return m, nil
+		}
 		// enter is the only key that follows a borrowed card home. Overloading
 		// zoom or panel-navigation with it made those keys do something their
 		// own help line doesn't describe.

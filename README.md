@@ -56,15 +56,25 @@ Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden
 | `X` | Open archive browser |
 | `u` | Unarchive (in archive browser) |
 | `tab` | Open board picker (main + sprints) |
+| `i` | Board description — the current board, or the highlighted one in the picker |
 | `p` | Pin / unpin the highlighted board (in board picker) |
 | `r` | Rename the highlighted sprint + its ticket-id prefix (in board picker) |
 | `d` | Delete ticket (in detail view) |
 | `?` | Help |
 | `q` | Quit |
+| `z` | Switch how the description is reached — see below (temporary) |
 
 `shift+enter` only reaches the TUI if your terminal sends an escape for it —
 in Ghostty, `keybind = shift+enter=text:\x1b\r`. `ctrl+j` works everywhere as
 a fallback.
+
+`i` opens the board's description read-only; `e` inside it edits, `enter` saves,
+`esc` discards. Clicking the board name in the footer opens the same thing.
+
+`z` is temporary. It switches between two ways of reaching that popup — `i` from
+anywhere, or `j` past the last card of a column moving focus to the board name so
+`enter` opens it — so the nicer one can be picked by feel. The loser and `z` both
+get deleted.
 
 ### Ticket sizes
 
@@ -131,6 +141,11 @@ kanban show abc123 --json
 kanban archive abc123
 kanban archive
 kanban archive --before 2026-04-07
+
+# The board's own description — what it's for, what belongs on it
+kanban describe                              # print (the board --sprint selects)
+kanban describe --set "Loose work lands here."
+kanban describe --set "$(cat notes.md)"       # for anything long
 ```
 
 ## Ticket ids
@@ -174,6 +189,11 @@ kanban sprints rename demo-april demo-may      # rename the board (ids untouched
 kanban sprints prefix demo-may DM              # DA7 → DM7, board + archive
 kanban sprints rm demo-april                   # delete
 ```
+
+Each board carries its own description too — context about the board rather than
+any one ticket, capped at 2000 characters. `kanban describe` reads it, `i` in the
+TUI shows it, and `kanban sprints --json` carries its first line so a survey of
+every board stays cheap. Point at a doc in the project repo for anything longer.
 
 Sprint names: `[A-Za-z0-9_-]`, 1–64 chars. From the TUI, `tab` opens a board picker that switches between main and any active sprint. The bottom-left badge shows the current board and, as a dim hint beside it, the prefix its next ticket will carry — `kanban [KA]`, or `main [#]` for bare numbers. The terminal window title takes the board's name too, so a tab running the TUI reads as `demo-april` rather than as `kanban`.
 

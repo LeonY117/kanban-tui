@@ -34,6 +34,7 @@ const (
 	moveView              // floating move-ticket picker (board / column)
 	settingsView          // floating settings popup
 	tagView               // floating tag picker, feeds the search
+	infoView              // floating board-description popup
 )
 
 // inputMode tracks what the user is typing into.
@@ -221,6 +222,15 @@ type Model struct {
 	lastModTime time.Time // last known mod time of board.json
 
 	windowTitle string // board name last written to the terminal title
+
+	// The board-description popup — see info.go. infoBoard is the board being
+	// described ("" for main), which is not always the one this Model is on.
+	infoBoard     string
+	infoText      string
+	infoScroll    int
+	infoScrollMax int
+	infoEditing   bool
+	infoDesc      textarea.Model
 }
 
 // archiveEntry is a single row in the archive browser — either a date header
@@ -387,6 +397,10 @@ func (m *Model) guardBoardMutate() bool {
 
 func (m *Model) footerLine() string {
 	badge := sprintBadgeStyle.Render(boardDisplayName(m.sprintName))
+	// The board's name is the thing on screen that identifies the board, so it
+	// is also where a click asking "what is this board?" lands. Registered on
+	// the name alone, not the chips beside it, which mean other things.
+	m.addZone(hitZone{kind: zoneBoardBadge, x: 0, y: m.height - 1, w: lipgloss.Width(badge), h: 1})
 	// The active filter rides next to the board's name, in green, because it
 	// changes what the board in front of you means. It sits inside the badge
 	// rather than in the hint text so it is never the thing that gets trimmed
@@ -567,6 +581,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateSettings(msg)
 		case tagView:
 			return m.updateTagPicker(msg)
+		case infoView:
+			return m.updateInfo(msg)
 		}
 	}
 	return m, nil
@@ -768,6 +784,8 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.enterPicker()
 	case key.Matches(msg, keys.TagPicker):
 		return m.enterTagPicker()
+	case key.Matches(msg, keys.Info):
+		m.enterInfo(m.sprintName)
 	}
 	return m, nil
 }
@@ -2451,6 +2469,8 @@ func (m *Model) renderView(v viewMode) string {
 		return m.viewSettings()
 	case tagView:
 		return m.viewTagPicker()
+	case infoView:
+		return m.viewInfo()
 	default:
 		return m.viewBoard()
 	}
@@ -2459,7 +2479,7 @@ func (m *Model) renderView(v viewMode) string {
 // popupBackdrop renders the source view as the backdrop behind a popup, but
 // avoids recursing into popup views themselves.
 func (m *Model) popupBackdrop(source viewMode) string {
-	if source == addView || source == pickerView || source == moveView || source == settingsView || source == tagView {
+	if source == addView || source == pickerView || source == moveView || source == settingsView || source == tagView || source == infoView {
 		return m.viewBoard()
 	}
 	return m.renderView(source)
@@ -2751,6 +2771,12 @@ func (m *Model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.pickerReorderPin(-1)
 	case key.Matches(msg, keys.MoveDown):
 		return m.pickerReorderPin(1)
+	case key.Matches(msg, keys.Info):
+		// The highlighted board, not the current one — reading what a sprint
+		// covers before switching into it is the point.
+		if e, ok := m.selectedPickerBoard(); ok {
+			m.enterInfo(e.name)
+		}
 	}
 	return m, nil
 }
@@ -3386,8 +3412,8 @@ func (m *Model) helpText() string {
 		// search and settings lead: they are the two the board cannot teach you
 		// any other way, and fitHints drops from the end. The rest are either
 		// guessable or already on a card in front of you.
-		hints := fmt.Sprintf("h/l nav | j/k select | %s search | %s tags | %s settings | %s/%s move | %s move | %s add | %s archive | %s quit",
-			hk("board.search"), hk("board.tags"), hk("board.settings"), hk("card.moveLeft"), hk("card.moveRight"),
+		hints := fmt.Sprintf("h/l nav | j/k select | %s search | %s tags | %s info | %s settings | %s/%s move | %s move | %s add | %s archive | %s quit",
+			hk("board.search"), hk("board.tags"), hk("board.info"), hk("board.settings"), hk("card.moveLeft"), hk("card.moveRight"),
 			hk("card.move"), hk("card.add"), hk("card.archive"), "q")
 		if m.searchActive() {
 			// Only the board view frees esc for this — elsewhere it still
@@ -3396,6 +3422,11 @@ func (m *Model) helpText() string {
 			return "esc clear | " + hints
 		}
 		return hints
+	case infoView:
+		if m.infoEditing {
+			return "enter save | esc discard | shift+enter newline"
+		}
+		return fmt.Sprintf("%s edit | j/k scroll | esc close", hk("card.edit"))
 	case settingsView:
 		return "j/k select | h/l section | enter change | esc close"
 	case tagView:
@@ -3413,12 +3444,12 @@ func (m *Model) helpText() string {
 			return "tab/↑↓ fields | enter apply | esc cancel"
 		}
 		if m.pickerShowArchived {
-			return fmt.Sprintf("j/k select | enter switch | %s tags | %s rename | %s pin | %s/%s reorder | %s archive | %s unarchive | %s hide archived | esc/%s close",
-				hk("board.tags"), hk("board.rename"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
+			return fmt.Sprintf("j/k select | enter switch | %s info | %s tags | %s rename | %s pin | %s/%s reorder | %s archive | %s unarchive | %s hide archived | esc/%s close",
+				hk("board.info"), hk("board.tags"), hk("board.rename"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
 				hk("card.archive"), hk("board.unarchive"), hk("board.archiveView"), hk("board.picker"))
 		}
-		return fmt.Sprintf("j/k select | enter switch | %s tags | %s rename | %s pin | %s/%s reorder | %s archive | %s show archived | esc/%s close",
-			hk("board.tags"), hk("board.rename"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
+		return fmt.Sprintf("j/k select | enter switch | %s info | %s tags | %s rename | %s pin | %s/%s reorder | %s archive | %s show archived | esc/%s close",
+			hk("board.info"), hk("board.tags"), hk("board.rename"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
 			hk("card.archive"), hk("board.archiveView"), hk("board.picker"))
 	case archiveView:
 		if m.archiveSearch.active() {

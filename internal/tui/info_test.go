@@ -1,0 +1,213 @@
+package tui
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/LeonY117/kanban-tui/internal/store"
+)
+
+// setDesc writes a description straight to a board's store, standing in for
+// whatever set it — the CLI, another agent, an earlier session.
+func setDesc(t *testing.T, sprintName, desc string) {
+	t.Helper()
+	s, err := boardStore(sprintName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetDescription(desc); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInfoOpensOnTheCurrentBoard(t *testing.T) {
+	m := testModel(t, "a ticket")
+	setDesc(t, "", "The main board.\n\nCatch-all for loose work.")
+	m.reload()
+
+	m.Update(keyPress("i"))
+	if m.view != infoView {
+		t.Fatalf("view = %v, want infoView", m.view)
+	}
+	view := m.View()
+	for _, want := range []string{"main", "Catch-all for loose work."} {
+		if !strings.Contains(view, want) {
+			t.Errorf("info popup missing %q:\n%s", want, view)
+		}
+	}
+}
+
+// A board with nothing said about it has to say so, rather than showing an
+// empty box that looks broken.
+func TestInfoOnAnUndescribedBoardInvitesOne(t *testing.T) {
+	m := testModel(t, "a ticket")
+	m.Update(keyPress("i"))
+	if !strings.Contains(m.View(), "no description") {
+		t.Errorf("expected an empty-state prompt:\n%s", m.View())
+	}
+}
+
+// The point of `i` in the picker is reading what a sprint covers before
+// switching into it, so it describes the highlighted board, not the current one.
+func TestInfoInPickerDescribesTheHighlightedBoard(t *testing.T) {
+	m := pickerModel(t, "demo")
+	setDesc(t, "", "main board")
+	setDesc(t, "demo", "The demo sprint.")
+	m.reload()
+
+	selectBoard(t, m, "demo")
+	m.Update(keyPress("i"))
+
+	if m.view != infoView {
+		t.Fatalf("view = %v, want infoView", m.view)
+	}
+	if m.infoBoard != "demo" {
+		t.Errorf("infoBoard = %q, want demo", m.infoBoard)
+	}
+	if m.sprintName != "" {
+		t.Errorf("sprintName = %q — reading a description must not switch board", m.sprintName)
+	}
+	if !strings.Contains(m.View(), "The demo sprint.") {
+		t.Errorf("popup did not show the highlighted board's description:\n%s", m.View())
+	}
+}
+
+func TestInfoEditSavesToTheBoard(t *testing.T) {
+	m := testModel(t, "a ticket")
+	m.Update(keyPress("i"))
+	m.Update(keyPress("e"))
+	if !m.infoEditing {
+		t.Fatal("e did not start an edit")
+	}
+
+	m.infoDesc.SetValue("Written from the TUI.")
+	m.Update(keyPress("enter"))
+
+	if m.infoEditing {
+		t.Error("still editing after enter")
+	}
+	s, err := boardStore("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	board, err := s.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if board.Description != "Written from the TUI." {
+		t.Errorf("persisted description = %q, want the edited text", board.Description)
+	}
+	if m.board.Description != "Written from the TUI." {
+		t.Errorf("in-memory board = %q — the open model must see its own write", m.board.Description)
+	}
+}
+
+// esc is discard, not save: the popup stays open on the text that is really
+// stored, so an abandoned edit can't look like it landed.
+func TestInfoEditEscapeDiscards(t *testing.T) {
+	m := testModel(t, "a ticket")
+	setDesc(t, "", "original")
+	m.reload()
+
+	m.Update(keyPress("i"))
+	m.Update(keyPress("e"))
+	m.infoDesc.SetValue("abandoned")
+	m.Update(keyPress("esc"))
+
+	if m.infoEditing {
+		t.Error("esc did not leave the editor")
+	}
+	if m.view != infoView {
+		t.Errorf("view = %v, want to stay on infoView", m.view)
+	}
+	if m.infoText != "original" {
+		t.Errorf("infoText = %q, want the stored text back", m.infoText)
+	}
+	s, _ := boardStore("")
+	board, err := s.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if board.Description != "original" {
+		t.Errorf("persisted = %q, want it untouched by a discarded edit", board.Description)
+	}
+}
+
+// An over-cap edit has to keep the editor open, or the rejected text is lost
+// along with the error.
+func TestInfoEditOverCapKeepsTheText(t *testing.T) {
+	m := testModel(t, "a ticket")
+	m.Update(keyPress("i"))
+	m.Update(keyPress("e"))
+
+	tooLong := strings.Repeat("x", store.MaxDescriptionLen+1)
+	m.infoDesc.SetValue(tooLong)
+	m.Update(keyPress("enter"))
+
+	if !m.infoEditing {
+		t.Error("editor closed on a rejected write — the text would be lost")
+	}
+	if m.notice == "" {
+		t.Error("no notice explaining the refusal")
+	}
+	if m.infoDesc.Value() != tooLong {
+		t.Error("the rejected text was cleared out of the editor")
+	}
+}
+
+func TestInfoEditRefusedOnArchivedSprint(t *testing.T) {
+	m := pickerModel(t, "demo")
+	setDesc(t, "demo", "frozen")
+	if err := store.ArchiveSprint("demo"); err != nil {
+		t.Fatal(err)
+	}
+	m.pickerShowArchived = true
+	m.reloadPickerEntries()
+	selectBoard(t, m, "demo")
+	m.notice = ""
+
+	m.Update(keyPress("i"))
+	if m.infoBoard != "demo" {
+		t.Fatalf("infoBoard = %q, want demo", m.infoBoard)
+	}
+	if !strings.Contains(m.View(), "frozen") {
+		t.Errorf("an archived board must still be readable:\n%s", m.View())
+	}
+
+	m.Update(keyPress("e"))
+	if m.infoEditing {
+		t.Error("an archived sprint's description was opened for editing")
+	}
+	if !strings.Contains(m.notice, "archived") {
+		t.Errorf("notice = %q, want it to mention the sprint is archived", m.notice)
+	}
+}
+
+// The board name in the footer is the other way in — no key to know about.
+func TestClickingTheBoardBadgeOpensInfo(t *testing.T) {
+	m := testModel(t, "a ticket")
+	setDesc(t, "", "reached by mouse")
+	m.reload()
+
+	m.View() // register zones
+	z := zoneOf(t, m, zoneBoardBadge, 0, 0)
+	m.mouseClick(mouseAt(z.x, z.y))
+
+	if m.view != infoView {
+		t.Fatalf("view = %v, want infoView after clicking the badge", m.view)
+	}
+	if !strings.Contains(m.View(), "reached by mouse") {
+		t.Errorf("popup did not show the description:\n%s", m.View())
+	}
+}
+
+// Closing returns to whatever the popup was opened over, not to a fixed view.
+func TestInfoClosesBackToItsSource(t *testing.T) {
+	m := pickerModel(t, "demo")
+	selectBoard(t, m, "demo")
+	m.Update(keyPress("i"))
+	m.Update(keyPress("esc"))
+	if m.view != pickerView {
+		t.Errorf("view = %v, want pickerView — info was opened from the picker", m.view)
+	}
+}

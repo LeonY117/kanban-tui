@@ -25,6 +25,7 @@ const (
 	zoneMetaField   // one field inside a detail Info panel: 0 status, 1 assign, 2 tags
 	zoneAddField    // one field of the new-ticket popup, an addFocus* value
 	zoneRenameField // one input of the sprint rename form, a renameFocus* value
+	zoneBoardBadge  // the board name in the footer — opens the board description
 )
 
 // hitZone is a rectangle registered during render so mouse events can be
@@ -273,6 +274,8 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			// does nothing — which is the same answer enter gives.
 			m.jumpToForeignArchive()
 		}
+	case zoneBoardBadge:
+		m.enterInfo(m.sprintName)
 	case zonePickerRow:
 		if repeat && m.pickerIdx == z.idx {
 			return m.pickerActivate()

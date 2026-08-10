@@ -42,6 +42,7 @@ type keyMap struct {
 	Rename      key.Binding
 	Search      key.Binding
 	TagPicker   key.Binding
+	Info        key.Binding
 }
 
 var keys = defaultKeyMap()
@@ -106,5 +107,6 @@ func defaultKeyMap() keyMap {
 		// exist in the default keymap and shadow whatever a config moved onto
 		// `t` — which is why tagPickerAlias is reserved (see reservedKeys).
 		TagPicker: key.NewBinding(key.WithKeys("#", tagPickerAlias), key.WithHelp("#", "tags")),
+		Info:      key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "board info")),
 	}
 }

@@ -139,6 +139,7 @@ func init() {
 	}
 
 	rootCmd.AddCommand(addCmd)
+	rootCmd.AddCommand(describeCmd)
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(showCmd)
 	rootCmd.AddCommand(updateCmd)

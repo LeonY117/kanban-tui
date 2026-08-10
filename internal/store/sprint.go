@@ -18,13 +18,14 @@ const archivedSuffix = ".archived"
 var sprintNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 type SprintInfo struct {
-	Name         string
-	Prefix       string
-	TicketCount  int
-	StatusCounts map[model.Status]int
-	LastModified time.Time
-	Archived     bool
-	Pinned       bool
+	Name         string               `json:"name"`
+	Prefix       string               `json:"prefix"`
+	Description  string               `json:"description,omitempty"` // first line only — see DescriptionHeader
+	TicketCount  int                  `json:"ticket_count"`
+	StatusCounts map[model.Status]int `json:"status_counts"`
+	LastModified time.Time            `json:"last_modified"`
+	Archived     bool                 `json:"archived"`
+	Pinned       bool                 `json:"pinned"`
 }
 
 func ValidateSprintName(name string) error {
@@ -228,6 +229,7 @@ func ListSprints() ([]SprintInfo, error) {
 		sprints = append(sprints, SprintInfo{
 			Name:         logicalName,
 			Prefix:       EffectivePrefix(board, logicalName),
+			Description:  DescriptionHeader(board.Description),
 			TicketCount:  len(board.Tickets),
 			StatusCounts: CountByStatus(board),
 			LastModified: info.ModTime(),

@@ -107,9 +107,9 @@ func (m *Model) updateInfo(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
-	case key.Matches(msg, keys.Esc), key.Matches(msg, keys.Info), key.Matches(msg, keys.Enter):
+	case key.Matches(msg, keys.Esc), key.Matches(msg, keys.Info):
 		m.closeInfo()
-	case key.Matches(msg, keys.Edit):
+	case key.Matches(msg, keys.Enter), key.Matches(msg, keys.Edit):
 		m.startInfoEdit()
 	case key.Matches(msg, keys.Down):
 		if m.infoScroll < m.infoScrollMax {
@@ -154,8 +154,10 @@ func (m *Model) infoPopupSize() (width, height int) {
 	if height > m.height-4 {
 		height = m.height - 4
 	}
-	if height < 7 {
-		height = 7
+	// A description is prose, and a box that hugs one short line reads as an
+	// error message rather than a place to write.
+	if height < 12 {
+		height = 12
 	}
 	return width, height
 }
@@ -180,10 +182,16 @@ func (m *Model) renderInfoPopup(width, height int) string {
 		hint = dimStyle.Render("enter save · esc discard · shift+enter newline")
 	} else {
 		body = m.renderInfoBody(innerWidth, bodyHeight)
-		hint = dimStyle.Render("e edit · j/k scroll · esc close")
+		hint = dimStyle.Render("enter edit · esc close")
 	}
 
-	content := strings.Join([]string{body, "", hint}, "\n")
+	// Pad the body out to its full height so the hint lands on the last line
+	// inside the border rather than floating under the text.
+	lines := strings.Split(body, "\n")
+	for len(lines) < bodyHeight {
+		lines = append(lines, "")
+	}
+	content := strings.Join(append(lines[:bodyHeight], "", hint), "\n")
 	return renderPanel(title, content, width, height, cyan, true)
 }
 
@@ -193,7 +201,7 @@ func (m *Model) renderInfoPopup(width, height int) string {
 func (m *Model) renderInfoBody(width, height int) string {
 	if m.infoText == "" {
 		return lipgloss.NewStyle().Foreground(subtle).
-			Render("(no description — press e to write one)")
+			Render("context about this board")
 	}
 
 	lines := strings.Split(wrapDesc(m.infoText, width), "\n")

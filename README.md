@@ -68,13 +68,15 @@ Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden
 in Ghostty, `keybind = shift+enter=text:\x1b\r`. `ctrl+j` works everywhere as
 a fallback.
 
-`i` opens the board's description read-only; `e` inside it edits, `enter` saves,
-`esc` discards. Clicking the board name in the footer opens the same thing.
+`i` opens the board's description read-only; `enter` edits it, `enter` again
+saves, `esc` discards. Clicking the board name in the footer opens the same
+thing.
 
 `z` is temporary. It switches between two ways of reaching that popup — `i` from
 anywhere, or `j` past the last card of a column moving focus to the board name so
-`enter` opens it — so the nicer one can be picked by feel. The loser and `z` both
-get deleted.
+`enter` opens it. In that second mode the column stays framed but nothing in it
+is selected, since the focus has moved off the cards. Pick the nicer one by feel;
+the loser and `z` both get deleted.
 
 ### Ticket sizes
 

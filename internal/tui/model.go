@@ -3447,7 +3447,7 @@ func (m *Model) helpText() string {
 		if m.infoEditing {
 			return "enter save | esc discard | shift+enter newline"
 		}
-		return fmt.Sprintf("%s edit | j/k scroll | esc close", hk("card.edit"))
+		return "enter edit | esc close"
 	case settingsView:
 		return "j/k select | h/l section | enter change | esc close"
 	case tagView:
@@ -3673,8 +3673,10 @@ func (m *Model) renderColumn(colIdx int, status model.Status, width, height int,
 	// Only the focused column has a selection. Passing cursor -1 keeps an
 	// unfocused column at its remembered scroll position without highlighting
 	// a ticket.
+	// The footer holding focus is the same case: the column stays framed as
+	// the one you'd come back to, but nothing in it is selected.
 	cursor := -1
-	if focused {
+	if focused && !m.footerFocus {
 		cursor = m.cursors[colIdx]
 	}
 

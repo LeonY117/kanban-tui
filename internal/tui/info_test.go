@@ -37,13 +37,28 @@ func TestInfoOpensOnTheCurrentBoard(t *testing.T) {
 	}
 }
 
-// A board with nothing said about it has to say so, rather than showing an
-// empty box that looks broken.
+// A board with nothing said about it shows what the field is for, rather than
+// an empty box that reads as broken.
 func TestInfoOnAnUndescribedBoardInvitesOne(t *testing.T) {
 	m := testModel(t, "a ticket")
 	m.Update(keyPress("i"))
-	if !strings.Contains(m.View(), "no description") {
-		t.Errorf("expected an empty-state prompt:\n%s", m.View())
+	if !strings.Contains(m.View(), "context about this board") {
+		t.Errorf("expected the placeholder:\n%s", m.View())
+	}
+}
+
+// enter is the way in: the popup lands read-only, and the one key you'd try
+// starts the edit rather than closing what you just opened.
+func TestInfoEnterStartsTheEdit(t *testing.T) {
+	m := testModel(t, "a ticket")
+	m.Update(keyPress("i"))
+	m.Update(keyPress("enter"))
+
+	if !m.infoEditing {
+		t.Error("enter did not start an edit")
+	}
+	if m.view != infoView {
+		t.Errorf("view = %v, want to stay on infoView", m.view)
 	}
 }
 

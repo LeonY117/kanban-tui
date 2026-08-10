@@ -7,8 +7,6 @@ import (
 	"github.com/LeonY117/kanban-tui/internal/model"
 )
 
-// Prototype scaffolding (KA3) — goes when footerfocus.go goes.
-
 // bottomOfColumn puts the cursor on the last card of the focused column. It
 // sets the cursor rather than pressing j, which would trip the fall-through
 // itself and leave a test measuring the state it meant to set up.
@@ -24,30 +22,11 @@ func bottomOfColumn(t *testing.T, m *Model) {
 	}
 }
 
-// The default has to be the old behaviour: j at the bottom clamps, as it always
-// did, so the trial mode is opt-in rather than something you discover by
-// accident.
-func TestFallthroughIsOffByDefault(t *testing.T) {
-	m, _ := boardWith(t, "one|TODO", "two|TODO")
-	m.focusedCol = 1
-	bottomOfColumn(t, m)
-
-	m.Update(keyPress("j"))
-	if m.footerFocus {
-		t.Error("j reached the footer with the trial mode off")
-	}
-}
-
 func TestFallthroughReachesTheBoardNameAndOpensIt(t *testing.T) {
 	m, _ := boardWith(t, "one|TODO", "two|TODO")
 	setDesc(t, "", "what this board is for")
 	m.reload()
 	m.focusedCol = 1
-
-	m.Update(keyPress("z"))
-	if !m.navFallthrough {
-		t.Fatal("z did not turn the trial mode on")
-	}
 
 	bottomOfColumn(t, m)
 	m.Update(keyPress("j"))
@@ -71,7 +50,6 @@ func TestFallthroughReachesTheBoardNameAndOpensIt(t *testing.T) {
 func TestFallthroughReturnsToTheColumn(t *testing.T) {
 	m, _ := boardWith(t, "one|TODO", "two|TODO")
 	m.focusedCol = 1
-	m.Update(keyPress("z"))
 	bottomOfColumn(t, m)
 	m.Update(keyPress("j"))
 
@@ -89,7 +67,6 @@ func TestFallthroughReturnsToTheColumn(t *testing.T) {
 func TestFallthroughClearedByLateralMove(t *testing.T) {
 	m, _ := boardWith(t, "one|TODO")
 	m.focusedCol = 1
-	m.Update(keyPress("z"))
 	bottomOfColumn(t, m)
 	m.Update(keyPress("j"))
 	if !m.footerFocus {
@@ -102,30 +79,12 @@ func TestFallthroughClearedByLateralMove(t *testing.T) {
 	}
 }
 
-// Turning the mode back off must not leave focus stranded on the footer.
-func TestTogglingOffReleasesTheFooter(t *testing.T) {
-	m, _ := boardWith(t, "one|TODO")
-	m.focusedCol = 1
-	m.Update(keyPress("z"))
-	bottomOfColumn(t, m)
-	m.Update(keyPress("j"))
-
-	m.Update(keyPress("z"))
-	if m.navFallthrough {
-		t.Error("z did not turn the mode off")
-	}
-	if m.footerFocus {
-		t.Error("focus stayed on the footer after the mode was switched off")
-	}
-}
-
 // Focus is somewhere else, so nothing in the column is selected — but the
 // column stays framed as the one you'd come back to.
 func TestFallthroughDeselectsTheCardButKeepsTheColumn(t *testing.T) {
 	m, _ := boardWith(t, "one|TODO", "two|TODO")
 	m.width, m.height = 90, 20
 	m.focusedCol = 1
-	m.Update(keyPress("z"))
 	bottomOfColumn(t, m)
 
 	before := m.View()
@@ -150,5 +109,46 @@ func TestFallthroughDeselectsTheCardButKeepsTheColumn(t *testing.T) {
 	// The cursor itself is remembered, so k lands back on the same card.
 	if got := m.cursors[m.focusedCol]; got != 1 {
 		t.Errorf("cursor = %d, want it remembered at 1", got)
+	}
+}
+
+// The badge stays lit while the description is on screen, however it was
+// opened — the popup should point back at the board it describes.
+func TestBadgeLitWhileTheDescriptionIsOpen(t *testing.T) {
+	m, _ := boardWith(t, "one|TODO")
+	m.width, m.height = 90, 24
+
+	if m.badgeLit() {
+		t.Error("badge lit with nothing focused and nothing open")
+	}
+
+	m.Update(keyPress("i")) // opened by key, not by walking to the footer
+	if m.footerFocus {
+		t.Fatal("setup: i should not move focus to the footer")
+	}
+	if !m.badgeLit() {
+		t.Error("badge not lit while the description is open")
+	}
+
+	m.Update(keyPress("esc"))
+	if m.badgeLit() {
+		t.Error("badge still lit after the description closed")
+	}
+}
+
+// Reached the other way, the badge is lit before the popup opens and stays lit
+// while it is open.
+func TestBadgeLitByFooterFocus(t *testing.T) {
+	m, _ := boardWith(t, "one|TODO")
+	m.focusedCol = 1
+	bottomOfColumn(t, m)
+
+	m.Update(keyPress("j"))
+	if !m.badgeLit() {
+		t.Fatal("badge not lit once the footer holds focus")
+	}
+	m.Update(keyPress("enter"))
+	if !m.badgeLit() {
+		t.Error("badge went dark when the description opened")
 	}
 }

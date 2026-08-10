@@ -62,21 +62,19 @@ Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden
 | `d` | Delete ticket (in detail view) |
 | `?` | Help |
 | `q` | Quit |
-| `z` | Switch how the description is reached — see below (temporary) |
 
 `shift+enter` only reaches the TUI if your terminal sends an escape for it —
 in Ghostty, `keybind = shift+enter=text:\x1b\r`. `ctrl+j` works everywhere as
 a fallback.
 
-`i` opens the board's description read-only; `enter` edits it, `enter` again
-saves, `esc` discards. Clicking the board name in the footer opens the same
-thing.
+There are three ways to the board's description. `i` opens it from anywhere,
+clicking the board name in the footer opens it, and `j` past the last card of a
+column moves focus onto that name so `enter` opens it from there. While the
+footer holds focus the column stays framed but nothing in it is selected — focus
+has left the cards — and `k` returns to the card it came from.
 
-`z` is temporary. It switches between two ways of reaching that popup — `i` from
-anywhere, or `j` past the last card of a column moving focus to the board name so
-`enter` opens it. In that second mode the column stays framed but nothing in it
-is selected, since the focus has moved off the cards. Pick the nicer one by feel;
-the loser and `z` both get deleted.
+The board name lights up whenever it holds focus or its description is open. In
+the popup, `enter` edits, `enter` again saves, `esc` discards.
 
 ### Ticket sizes
 

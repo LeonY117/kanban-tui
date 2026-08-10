@@ -232,9 +232,9 @@ type Model struct {
 	infoEditing   bool
 	infoDesc      textarea.Model
 
-	// Prototype scaffolding (KA3) — see footerfocus.go.
-	navFallthrough bool
-	footerFocus    bool
+	// Focus sits on the board name in the footer rather than on a card — see
+	// footerfocus.go.
+	footerFocus bool
 }
 
 // archiveEntry is a single row in the archive browser — either a date header
@@ -401,7 +401,7 @@ func (m *Model) guardBoardMutate() bool {
 
 func (m *Model) footerLine() string {
 	badgeStyle := sprintBadgeStyle
-	if m.footerFocus {
+	if m.badgeLit() {
 		badgeStyle = sprintBadgeFocusStyle
 	}
 	badge := badgeStyle.Render(boardDisplayName(m.sprintName))
@@ -741,8 +741,6 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.moveCursor(1)
-	case msg.String() == "z":
-		m.toggleNavFallthrough()
 	case key.Matches(msg, keys.Enter):
 		if m.footerFocusEnter() {
 			return m, nil

@@ -2,31 +2,14 @@ package tui
 
 import "github.com/LeonY117/kanban-tui/internal/model"
 
-// PROTOTYPE SCAFFOLDING (KA3) — delete this file and the `z` key with it once
-// the choice is made.
+// The board name in the footer is a navigation target. `j` past the last card
+// of a column moves focus to it and `enter` opens the board's description from
+// there, so the description is reachable by exploration rather than only by
+// knowing `i`.
 //
-// Two ways to reach a board's description are on trial, because which one feels
-// right isn't an argument you can win on paper:
-//
-//   - `i` opens the popup from anywhere. Explicit, costs a key, invisible until
-//     you read the hint line.
-//   - `j` past the last card of a column moves focus to the board name in the
-//     footer, and enter opens it from there. Discoverable by pure exploration,
-//     but it makes a repeated key change what's focused, which is the risk.
-//
-// `z` flips between them at runtime so both can be felt on a real board.
-
-// navFallthroughHint is the notice shown when the mode changes, so it's obvious
-// which one is live.
-func (m *Model) toggleNavFallthrough() {
-	m.navFallthrough = !m.navFallthrough
-	if !m.navFallthrough {
-		m.footerFocus = false
-		m.notice = "nav: i opens the board description · z to switch"
-		return
-	}
-	m.notice = "nav: j past the last card reaches the board name · z to switch"
-}
+// The cost this pays is that a repeated key changes what's focused. Two things
+// keep that honest: the badge lights up, and the column deselects — so the
+// board never claims a card is selected while a card key would miss it.
 
 // atColumnBottom reports whether the cursor is on the last card of the focused
 // column — including when the column is empty, where there is nothing below to
@@ -39,7 +22,7 @@ func (m *Model) atColumnBottom() bool {
 // footerFocusDown handles `j`. Returns true when it consumed the key, i.e. the
 // cursor was already at the bottom and focus moved to the footer instead.
 func (m *Model) footerFocusDown() bool {
-	if !m.navFallthrough || m.footerFocus || !m.atColumnBottom() {
+	if m.footerFocus || !m.atColumnBottom() {
 		return false
 	}
 	m.footerFocus = true
@@ -47,8 +30,8 @@ func (m *Model) footerFocusDown() bool {
 }
 
 // footerFocusUp handles `k` while the footer holds focus, returning to the
-// column the fall-through came from — focusedCol never changed, so there is no
-// origin to remember.
+// column it came from — focusedCol never changed, so there is no origin to
+// remember.
 func (m *Model) footerFocusUp() bool {
 	if !m.footerFocus {
 		return false
@@ -64,4 +47,11 @@ func (m *Model) footerFocusEnter() bool {
 	}
 	m.enterInfo(m.sprintName)
 	return true
+}
+
+// badgeLit reports whether the board name in the footer draws in its focused
+// style: while the footer holds focus, and while the description it opens is on
+// screen, so the popup points back at the board it describes.
+func (m *Model) badgeLit() bool {
+	return m.footerFocus || m.view == infoView
 }

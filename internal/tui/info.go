@@ -90,13 +90,16 @@ func (m *Model) saveInfoEdit() {
 	// recreates its directory, so without this a save could resurrect a deleted
 	// sprint as a board with a description and no tickets, or quietly overwrite
 	// an agent's edit with text that predates it.
-	if current, err := s.Load(); err != nil {
-		m.notice = "couldn't save: " + err.Error()
-		return
-	} else if m.infoBoard != "" && !boardExists(s) {
+	if m.infoBoard != "" && !boardExists(s) {
 		m.notice = boardDisplayName(m.infoBoard) + " no longer exists — esc to close"
 		return
-	} else if current.Description != m.infoText {
+	}
+	current, err := s.Load()
+	if err != nil {
+		m.notice = "couldn't save: " + err.Error()
+		return
+	}
+	if current.Description != m.infoText {
 		m.notice = boardDisplayName(m.infoBoard) + " changed underneath — esc and reopen"
 		return
 	}

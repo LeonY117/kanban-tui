@@ -77,12 +77,23 @@ var sprintsNewCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
 		prefix, _ := cmd.Flags().GetString("prefix")
+		desc, _ := cmd.Flags().GetString("desc")
+		// Checked before the sprint exists, so a description that's too long
+		// fails outright instead of leaving a board created but undescribed.
+		if err := store.ValidateDescription(desc); err != nil {
+			return err
+		}
 		if err := store.CreateSprint(name, prefix); err != nil {
 			return err
 		}
 		s, err := store.NewSprint(name)
 		if err != nil {
 			return err
+		}
+		if desc != "" {
+			if err := s.SetDescription(desc); err != nil {
+				return err
+			}
 		}
 		board, err := s.Load()
 		if err != nil {
@@ -225,6 +236,7 @@ func init() {
 	sprintsCmd.Flags().Bool("archived", false, "Show only archived sprints")
 	sprintsCmd.Flags().Bool("all", false, "Show both active and archived sprints")
 	sprintsNewCmd.Flags().String("prefix", "", "Ticket id prefix (1-4 letters; defaults to the first two letters of the name)")
+	sprintsNewCmd.Flags().String("desc", "", "Description of the board — what it's for and what belongs on it")
 	sprintsRmCmd.Flags().Bool("force", false, "Skip confirmation prompt")
 	sprintsCmd.AddCommand(sprintsNewCmd)
 	sprintsCmd.AddCommand(sprintsRmCmd)

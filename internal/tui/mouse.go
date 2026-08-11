@@ -25,6 +25,7 @@ const (
 	zoneMetaField   // one field inside a detail Info panel: 0 status, 1 assign, 2 tags
 	zoneAddField    // one field of the new-ticket popup, an addFocus* value
 	zoneRenameField // one input of the sprint rename form, a renameFocus* value
+	zoneBoardBadge  // the board name in the footer — opens the board description
 )
 
 // hitZone is a rectangle registered during render so mouse events can be
@@ -204,6 +205,13 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	repeat := target == m.lastClick
 	m.lastClick = target
 
+	// Clicking anything other than the board name is a return to the cards,
+	// or the click moves a cursor the board has stopped drawing and reads as
+	// having done nothing.
+	if z.kind != zoneBoardBadge {
+		m.footerFocus = false
+	}
+
 	// A click inside the editor already open is a no-op. Falling through would
 	// blur it, save, and reopen it — the same text, but with the cursor thrown
 	// back to where the editor puts it rather than where it was left.
@@ -273,6 +281,9 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			// does nothing — which is the same answer enter gives.
 			m.jumpToForeignArchive()
 		}
+	case zoneBoardBadge:
+		m.enterInfo(m.sprintName)
+		return m, nil
 	case zonePickerRow:
 		if repeat && m.pickerIdx == z.idx {
 			return m.pickerActivate()

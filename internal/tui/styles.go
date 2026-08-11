@@ -88,6 +88,14 @@ var (
 				Bold(true).
 				Padding(0, 1)
 
+	// The same badge while the footer holds focus, or while the description it
+	// opens is on screen.
+	sprintBadgeFocusStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("0")).
+				Background(cyan).
+				Bold(true).
+				Padding(0, 1)
+
 	// Title bar — bold, default fg.
 	titleBar = lipgloss.NewStyle().
 			Bold(true).

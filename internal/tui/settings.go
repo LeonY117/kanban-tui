@@ -70,6 +70,7 @@ var bindActions = []bindAction{
 	{id: "board.settings", group: "Board", label: "settings", def: "?"},
 	{id: "board.search", group: "Board", label: "search", def: "/"},
 	{id: "board.tags", group: "Board", label: "tag filter", def: "#", alias: tagPickerAlias},
+	{id: "board.info", group: "Board", label: "board description", def: "i"},
 }
 
 var bindActionsByID = func() map[string]bindAction {

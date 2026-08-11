@@ -82,9 +82,10 @@ type Ticket struct {
 // code new ticket ids on this board carry (empty on the main board, whose ids
 // are bare numbers).
 type Board struct {
-	Version int      `json:"version"`
-	Prefix  string   `json:"prefix,omitempty"`
-	Tickets []Ticket `json:"tickets"`
+	Version     int      `json:"version"`
+	Prefix      string   `json:"prefix,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Tickets     []Ticket `json:"tickets"`
 }
 
 // FilterOptions for querying tickets.

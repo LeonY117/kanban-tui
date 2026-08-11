@@ -34,6 +34,7 @@ const (
 	moveView              // floating move-ticket picker (board / column)
 	settingsView          // floating settings popup
 	tagView               // floating tag picker, feeds the search
+	infoView              // floating board-description popup
 )
 
 // inputMode tracks what the user is typing into.
@@ -221,6 +222,20 @@ type Model struct {
 	lastModTime time.Time // last known mod time of board.json
 
 	windowTitle string // board name last written to the terminal title
+
+	// The board-description popup — see info.go. infoBoard is the board being
+	// described ("" for main), which is not always the one this Model is on.
+	infoBoard     string
+	infoText      string
+	infoScroll    int
+	infoScrollMax int
+	infoEditing   bool
+	infoDesc      textarea.Model
+	infoReturn    viewMode // the view this popup closes back onto
+
+	// Focus sits on the board name in the footer rather than on a card — see
+	// footerfocus.go.
+	footerFocus bool
 }
 
 // archiveEntry is a single row in the archive browser — either a date header
@@ -386,7 +401,21 @@ func (m *Model) guardBoardMutate() bool {
 }
 
 func (m *Model) footerLine() string {
-	badge := sprintBadgeStyle.Render(boardDisplayName(m.sprintName))
+	badgeStyle := sprintBadgeStyle
+	if m.badgeLit() {
+		badgeStyle = sprintBadgeFocusStyle
+	}
+	badge := badgeStyle.Render(boardDisplayName(m.sprintName))
+	// The board's name is the thing on screen that identifies the board, so it
+	// is also where a click asking "what is this board?" lands. Registered on
+	// the name alone, not the chips beside it, which mean other things.
+	//
+	// Not while the search input is open: it takes keys ahead of the view, so a
+	// popup opened behind it would ignore every key and the esc dismissing it
+	// would cancel the search instead.
+	if !m.activeSearch().open {
+		m.addZone(hitZone{kind: zoneBoardBadge, x: 0, y: m.height - 1, w: lipgloss.Width(badge), h: 1})
+	}
 	// The active filter rides next to the board's name, in green, because it
 	// changes what the board in front of you means. It sits inside the badge
 	// rather than in the hint text so it is never the thing that gets trimmed
@@ -515,6 +544,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.clampCursors()
 			}
 		}
+		m.refreshInfoText()
 		return m, tickCmd()
 
 	case tea.WindowSizeMsg:
@@ -567,6 +597,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateSettings(msg)
 		case tagView:
 			return m.updateTagPicker(msg)
+		case infoView:
+			return m.updateInfo(msg)
 		}
 	}
 	return m, nil
@@ -620,6 +652,13 @@ func (m *Model) reload() {
 }
 
 func (m *Model) selectedTicket() *model.Ticket {
+	// While the footer holds focus the board draws no selection, so there is
+	// no selected ticket to report either. Without this the card verbs — x, m,
+	// c, H/L, J/K — keep acting on the remembered cursor, and a ticket can be
+	// archived with nothing on screen naming it.
+	if m.footerHasFocus() {
+		return nil
+	}
 	status := model.ColumnOrder[m.focusedCol]
 	tickets := m.visibleTickets(status)
 	idx := m.cursors[m.focusedCol]
@@ -666,6 +705,8 @@ func (m *Model) moveFocus(dir int) {
 		return
 	}
 	m.focusedCol = next
+	// Moving sideways is a return to the cards — see footerfocus.go.
+	m.footerFocus = false
 }
 
 // moveCursor moves the selection cursor within the focused column's ticket list.
@@ -706,10 +747,19 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Right):
 		m.moveFocus(1)
 	case key.Matches(msg, keys.Up):
+		if m.footerFocusUp() {
+			return m, nil
+		}
 		m.moveCursor(-1)
 	case key.Matches(msg, keys.Down):
+		if m.footerFocusDown() {
+			return m, nil
+		}
 		m.moveCursor(1)
 	case key.Matches(msg, keys.Enter):
+		if m.footerFocusEnter() {
+			return m, nil
+		}
 		// enter is the only key that follows a borrowed card home. Overloading
 		// zoom or panel-navigation with it made those keys do something their
 		// own help line doesn't describe.
@@ -733,15 +783,15 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Add):
 		return m.enterAddPopup()
 	case key.Matches(msg, keys.Zero):
-		m.focusedCol = 0
+		m.jumpToColumn(0)
 	case key.Matches(msg, keys.One):
-		m.focusedCol = 1
+		m.jumpToColumn(1)
 	case key.Matches(msg, keys.Two):
-		m.focusedCol = 2
+		m.jumpToColumn(2)
 	case key.Matches(msg, keys.Three):
-		m.focusedCol = 3
+		m.jumpToColumn(3)
 	case key.Matches(msg, keys.Four):
-		m.focusedCol = 4
+		m.jumpToColumn(4)
 	case key.Matches(msg, keys.MoveLeft):
 		m.moveTicket(-1)
 	case key.Matches(msg, keys.MoveRight):
@@ -768,6 +818,8 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.enterPicker()
 	case key.Matches(msg, keys.TagPicker):
 		return m.enterTagPicker()
+	case key.Matches(msg, keys.Info):
+		m.enterInfo(m.sprintName)
 	}
 	return m, nil
 }
@@ -1282,15 +1334,15 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Add):
 		return m.enterAddPopup()
 	case key.Matches(msg, keys.Zero):
-		m.focusedCol = 0
+		m.jumpToColumn(0)
 	case key.Matches(msg, keys.One):
-		m.focusedCol = 1
+		m.jumpToColumn(1)
 	case key.Matches(msg, keys.Two):
-		m.focusedCol = 2
+		m.jumpToColumn(2)
 	case key.Matches(msg, keys.Three):
-		m.focusedCol = 3
+		m.jumpToColumn(3)
 	case key.Matches(msg, keys.Four):
-		m.focusedCol = 4
+		m.jumpToColumn(4)
 	case key.Matches(msg, keys.MoveLeft):
 		m.moveTicket(-1)
 	case key.Matches(msg, keys.MoveRight):
@@ -2451,6 +2503,8 @@ func (m *Model) renderView(v viewMode) string {
 		return m.viewSettings()
 	case tagView:
 		return m.viewTagPicker()
+	case infoView:
+		return m.viewInfo()
 	default:
 		return m.viewBoard()
 	}
@@ -2459,7 +2513,7 @@ func (m *Model) renderView(v viewMode) string {
 // popupBackdrop renders the source view as the backdrop behind a popup, but
 // avoids recursing into popup views themselves.
 func (m *Model) popupBackdrop(source viewMode) string {
-	if source == addView || source == pickerView || source == moveView || source == settingsView || source == tagView {
+	if source == addView || source == pickerView || source == moveView || source == settingsView || source == tagView || source == infoView {
 		return m.viewBoard()
 	}
 	return m.renderView(source)
@@ -2751,6 +2805,12 @@ func (m *Model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.pickerReorderPin(-1)
 	case key.Matches(msg, keys.MoveDown):
 		return m.pickerReorderPin(1)
+	case key.Matches(msg, keys.Info):
+		// The highlighted board, not the current one — reading what a sprint
+		// covers before switching into it is the point.
+		if e, ok := m.selectedPickerBoard(); ok {
+			m.enterInfo(e.name)
+		}
 	}
 	return m, nil
 }
@@ -3386,8 +3446,8 @@ func (m *Model) helpText() string {
 		// search and settings lead: they are the two the board cannot teach you
 		// any other way, and fitHints drops from the end. The rest are either
 		// guessable or already on a card in front of you.
-		hints := fmt.Sprintf("h/l nav | j/k select | %s search | %s tags | %s settings | %s/%s move | %s move | %s add | %s archive | %s quit",
-			hk("board.search"), hk("board.tags"), hk("board.settings"), hk("card.moveLeft"), hk("card.moveRight"),
+		hints := fmt.Sprintf("h/l nav | j/k select | %s search | %s tags | %s info | %s settings | %s/%s move | %s move | %s add | %s archive | %s quit",
+			hk("board.search"), hk("board.tags"), hk("board.info"), hk("board.settings"), hk("card.moveLeft"), hk("card.moveRight"),
 			hk("card.move"), hk("card.add"), hk("card.archive"), "q")
 		if m.searchActive() {
 			// Only the board view frees esc for this — elsewhere it still
@@ -3396,6 +3456,11 @@ func (m *Model) helpText() string {
 			return "esc clear | " + hints
 		}
 		return hints
+	case infoView:
+		if m.infoEditing {
+			return "enter save | esc discard | shift+enter newline"
+		}
+		return "enter edit | esc close"
 	case settingsView:
 		return "j/k select | h/l section | enter change | esc close"
 	case tagView:
@@ -3413,12 +3478,12 @@ func (m *Model) helpText() string {
 			return "tab/↑↓ fields | enter apply | esc cancel"
 		}
 		if m.pickerShowArchived {
-			return fmt.Sprintf("j/k select | enter switch | %s tags | %s rename | %s pin | %s/%s reorder | %s archive | %s unarchive | %s hide archived | esc/%s close",
-				hk("board.tags"), hk("board.rename"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
+			return fmt.Sprintf("j/k select | enter switch | %s info | %s tags | %s rename | %s pin | %s/%s reorder | %s archive | %s unarchive | %s hide archived | esc/%s close",
+				hk("board.info"), hk("board.tags"), hk("board.rename"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
 				hk("card.archive"), hk("board.unarchive"), hk("board.archiveView"), hk("board.picker"))
 		}
-		return fmt.Sprintf("j/k select | enter switch | %s tags | %s rename | %s pin | %s/%s reorder | %s archive | %s show archived | esc/%s close",
-			hk("board.tags"), hk("board.rename"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
+		return fmt.Sprintf("j/k select | enter switch | %s info | %s tags | %s rename | %s pin | %s/%s reorder | %s archive | %s show archived | esc/%s close",
+			hk("board.info"), hk("board.tags"), hk("board.rename"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
 			hk("card.archive"), hk("board.archiveView"), hk("board.picker"))
 	case archiveView:
 		if m.archiveSearch.active() {
@@ -3621,8 +3686,10 @@ func (m *Model) renderColumn(colIdx int, status model.Status, width, height int,
 	// Only the focused column has a selection. Passing cursor -1 keeps an
 	// unfocused column at its remembered scroll position without highlighting
 	// a ticket.
+	// The footer holding focus is the same case: the column stays framed as
+	// the one you'd come back to, but nothing in it is selected.
 	cursor := -1
-	if focused {
+	if focused && !m.footerHasFocus() {
 		cursor = m.cursors[colIdx]
 	}
 

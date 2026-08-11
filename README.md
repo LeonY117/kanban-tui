@@ -67,9 +67,10 @@ Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden
 in Ghostty, `keybind = shift+enter=text:\x1b\r`. `ctrl+j` works everywhere as
 a fallback.
 
-There are three ways to the board's description. `i` opens it from anywhere,
-clicking the board name in the footer opens it, and `j` past the last card of a
-column moves focus onto that name so `enter` opens it from there. While the
+There are three ways to the board's description. `i` opens it from the board and
+from the board picker, clicking the board name in the footer opens it from any
+view, and `j` past the last card of a column moves focus onto that name so
+`enter` opens it from there. While the
 footer holds focus the column stays framed but nothing in it is selected — focus
 has left the cards — and `k` returns to the card it came from.
 

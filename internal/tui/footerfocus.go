@@ -50,8 +50,27 @@ func (m *Model) footerFocusEnter() bool {
 }
 
 // badgeLit reports whether the board name in the footer draws in its focused
-// style: while the footer holds focus, and while the description it opens is on
-// screen, so the popup points back at the board it describes.
+// style: while the footer holds focus, and while the description on screen is
+// this board's, so the popup points back at the board it describes.
+//
+// Opened from the picker the popup usually describes a *different* board, and
+// the badge always names the one the model is on — lighting it there would
+// point the one "this is it" signal at the wrong board.
 func (m *Model) badgeLit() bool {
-	return m.footerFocus || m.view == infoView
+	return m.footerHasFocus() || (m.view == infoView && m.infoBoard == m.sprintName)
+}
+
+// footerHasFocus is footerFocus scoped to the one view where it means
+// anything. Zooming out of the board leaves the flag set, and the split and
+// column views keep their own selection — a stale flag read there would blank
+// a list that is being driven normally.
+func (m *Model) footerHasFocus() bool {
+	return m.footerFocus && m.view == boardView
+}
+
+// jumpToColumn handles the 0-4 keys. Like moving sideways, landing on a column
+// is a return to the cards.
+func (m *Model) jumpToColumn(col int) {
+	m.focusedCol = col
+	m.footerFocus = false
 }

@@ -152,3 +152,94 @@ func TestBadgeLitByFooterFocus(t *testing.T) {
 		t.Error("badge went dark when the description opened")
 	}
 }
+
+// The board draws no selection while the footer holds focus, so there must not
+// be one: x, m, c, H/L and J/K all read selectedTicket, and acting on the
+// remembered cursor archived a card with nothing on screen naming it.
+func TestNoCardVerbActsWhileTheFooterHoldsFocus(t *testing.T) {
+	m, _ := boardWith(t, "one|TODO", "two|TODO")
+	m.width, m.height = 90, 20
+	m.focusedCol = 1
+	bottomOfColumn(t, m)
+	m.Update(keyPress("j"))
+	if !m.footerFocus {
+		t.Fatal("setup: never reached the footer")
+	}
+
+	if sel := m.selectedTicket(); sel != nil {
+		t.Errorf("selectedTicket = %q, want nil while the board shows no selection", sel.Title)
+	}
+	for _, k := range []string{"x", "H", "L", "J", "K"} {
+		m.Update(keyPress(k))
+	}
+	if got := len(m.board.Tickets); got != 2 {
+		t.Errorf("%d tickets left, want 2 — a card verb acted with nothing selected", got)
+	}
+}
+
+// Zooming out of the board leaves the flag set; the split keeps its own
+// selection and must not be blanked by it.
+func TestFooterFocusIsIgnoredOffTheBoard(t *testing.T) {
+	m, _ := boardWith(t, "one|TODO")
+	m.focusedCol = 1
+	bottomOfColumn(t, m)
+	m.Update(keyPress("j"))
+
+	m.enterSplit()
+	if sel := m.selectedTicket(); sel == nil {
+		t.Error("the split lost its selection to a stale footer-focus flag")
+	}
+}
+
+// A click is a return to the cards — otherwise it moves a cursor the board has
+// stopped drawing, and reads as having done nothing.
+func TestClickingACardLeavesTheFooter(t *testing.T) {
+	m, _ := boardWith(t, "one|TODO", "two|TODO")
+	m.width, m.height = 90, 20
+	m.focusedCol = 1
+	bottomOfColumn(t, m)
+	m.Update(keyPress("j"))
+
+	m.View()
+	z := zoneOf(t, m, zoneTicket, 1, 0)
+	m.mouseClick(mouseAt(z.x, z.y))
+
+	if m.footerFocus {
+		t.Error("clicking a card left focus on the footer")
+	}
+	if sel := m.selectedTicket(); sel == nil {
+		t.Error("no card selected after clicking one")
+	}
+}
+
+// Jumping to a column with 0-4 is a return to the cards, like moving sideways.
+func TestColumnJumpLeavesTheFooter(t *testing.T) {
+	m, _ := boardWith(t, "one|TODO")
+	m.focusedCol = 1
+	bottomOfColumn(t, m)
+	m.Update(keyPress("j"))
+
+	m.Update(keyPress("3"))
+	if m.footerFocus {
+		t.Error("jumping to a column left focus on the footer")
+	}
+	if m.focusedCol != 3 {
+		t.Errorf("focusedCol = %d, want 3", m.focusedCol)
+	}
+}
+
+// The badge names the board the model is on. Opened from the picker the popup
+// usually describes a different one, so lighting the badge would point the
+// "this is it" signal at the wrong board.
+func TestBadgeDarkWhenDescribingAnotherBoard(t *testing.T) {
+	m := pickerModel(t, "demo")
+	selectBoard(t, m, "demo")
+	m.Update(keyPress("i"))
+
+	if m.infoBoard != "demo" {
+		t.Fatalf("infoBoard = %q, want demo", m.infoBoard)
+	}
+	if m.badgeLit() {
+		t.Error("footer badge lit while the popup describes a different board")
+	}
+}

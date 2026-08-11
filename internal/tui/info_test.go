@@ -226,3 +226,101 @@ func TestInfoClosesBackToItsSource(t *testing.T) {
 		t.Errorf("view = %v, want pickerView — info was opened from the picker", m.view)
 	}
 }
+
+// The popup holds a snapshot of a board this Model may not be sitting on. A
+// removed sprint reads back as an empty board and a write recreates its
+// directory, so without a guard, saving resurrects it as a board with a
+// description and no tickets.
+func TestInfoSaveRefusesAResurrectedSprint(t *testing.T) {
+	m := pickerModel(t, "demo")
+	setDesc(t, "demo", "about the demo sprint")
+	m.reloadPickerEntries()
+	selectBoard(t, m, "demo")
+	m.Update(keyPress("i"))
+	m.Update(keyPress("enter")) // start editing
+	if !m.infoEditing {
+		t.Fatal("setup: never started editing")
+	}
+
+	if err := store.RemoveSprint("demo"); err != nil {
+		t.Fatal(err)
+	}
+	m.infoDesc.SetValue("written after the sprint was deleted")
+	m.Update(keyPress("enter")) // save
+
+	if sprints, err := store.ListSprints(); err != nil {
+		t.Fatal(err)
+	} else if len(sprints) != 0 {
+		t.Errorf("saving recreated the deleted sprint: %+v", sprints)
+	}
+	if m.notice == "" {
+		t.Error("no notice explaining the refusal")
+	}
+	if !m.infoEditing {
+		t.Error("editor closed on a refused save — the text would be lost")
+	}
+}
+
+// An agent rewriting the description while the popup is open must not be
+// silently overwritten by text that predates its edit.
+func TestInfoSaveRefusesWhenTheBoardChangedUnderneath(t *testing.T) {
+	m := testModel(t, "a ticket")
+	setDesc(t, "", "original")
+	m.reload()
+	m.Update(keyPress("i"))
+	m.Update(keyPress("enter"))
+
+	setDesc(t, "", "an agent wrote this while the popup was open")
+
+	m.infoDesc.SetValue("Leon's edit, from before the agent's")
+	m.Update(keyPress("enter"))
+
+	s, _ := boardStore("")
+	board, err := s.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if board.Description != "an agent wrote this while the popup was open" {
+		t.Errorf("description = %q, want the agent's text left alone", board.Description)
+	}
+	if m.notice == "" {
+		t.Error("no notice explaining the refusal")
+	}
+}
+
+// While the popup is just being read, the tick brings an agent's edit in, the
+// way it does for a ticket.
+func TestInfoRefreshesOnTheTick(t *testing.T) {
+	m := testModel(t, "a ticket")
+	setDesc(t, "", "before")
+	m.reload()
+	m.Update(keyPress("i"))
+	if !strings.Contains(m.View(), "before") {
+		t.Fatal("setup: popup did not show the original text")
+	}
+
+	setDesc(t, "", "after an agent's edit")
+	m.Update(tickMsg{})
+
+	if !strings.Contains(m.View(), "after an agent's edit") {
+		t.Errorf("popup did not pick up the change:\n%s", m.View())
+	}
+}
+
+// Not while editing, though — replacing the text under the cursor loses what
+// was typed.
+func TestInfoDoesNotRefreshWhileEditing(t *testing.T) {
+	m := testModel(t, "a ticket")
+	setDesc(t, "", "before")
+	m.reload()
+	m.Update(keyPress("i"))
+	m.Update(keyPress("enter"))
+	m.infoDesc.SetValue("half-typed thought")
+
+	setDesc(t, "", "an agent's edit")
+	m.Update(tickMsg{})
+
+	if got := m.infoDesc.Value(); got != "half-typed thought" {
+		t.Errorf("editor content = %q, want the typing left alone", got)
+	}
+}

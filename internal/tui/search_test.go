@@ -385,6 +385,12 @@ func TestCursorStopsAtTheVisibleEndOnAnySurface(t *testing.T) {
 			if got := m.cursors[1]; got != 0 {
 				t.Errorf("cursor at %d, want 0 — j walked off the end of what's on screen", got)
 			}
+			if m.footerHasFocus() {
+				// On the board, j past the last visible card moves focus to the
+				// board name rather than onto a hidden one. The cursor still
+				// stopped, which is what this is guarding.
+				return
+			}
 			if sel := m.selectedTicket(); sel == nil || sel.Title != "auth one" {
 				t.Errorf("selected %v, want the only visible card", sel)
 			}

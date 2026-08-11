@@ -205,6 +205,13 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	repeat := target == m.lastClick
 	m.lastClick = target
 
+	// Clicking anything other than the board name is a return to the cards,
+	// or the click moves a cursor the board has stopped drawing and reads as
+	// having done nothing.
+	if z.kind != zoneBoardBadge {
+		m.footerFocus = false
+	}
+
 	// A click inside the editor already open is a no-op. Falling through would
 	// blur it, save, and reopen it — the same text, but with the cursor thrown
 	// back to where the editor puts it rather than where it was left.
@@ -276,6 +283,7 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 	case zoneBoardBadge:
 		m.enterInfo(m.sprintName)
+		return m, nil
 	case zonePickerRow:
 		if repeat && m.pickerIdx == z.idx {
 			return m.pickerActivate()

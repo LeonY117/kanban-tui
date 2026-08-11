@@ -231,6 +231,7 @@ type Model struct {
 	infoScrollMax int
 	infoEditing   bool
 	infoDesc      textarea.Model
+	infoReturn    viewMode // the view this popup closes back onto
 
 	// Focus sits on the board name in the footer rather than on a card — see
 	// footerfocus.go.
@@ -408,7 +409,13 @@ func (m *Model) footerLine() string {
 	// The board's name is the thing on screen that identifies the board, so it
 	// is also where a click asking "what is this board?" lands. Registered on
 	// the name alone, not the chips beside it, which mean other things.
-	m.addZone(hitZone{kind: zoneBoardBadge, x: 0, y: m.height - 1, w: lipgloss.Width(badge), h: 1})
+	//
+	// Not while the search input is open: it takes keys ahead of the view, so a
+	// popup opened behind it would ignore every key and the esc dismissing it
+	// would cancel the search instead.
+	if !m.activeSearch().open {
+		m.addZone(hitZone{kind: zoneBoardBadge, x: 0, y: m.height - 1, w: lipgloss.Width(badge), h: 1})
+	}
 	// The active filter rides next to the board's name, in green, because it
 	// changes what the board in front of you means. It sits inside the badge
 	// rather than in the hint text so it is never the thing that gets trimmed
@@ -537,6 +544,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.clampCursors()
 			}
 		}
+		m.refreshInfoText()
 		return m, tickCmd()
 
 	case tea.WindowSizeMsg:
@@ -644,6 +652,13 @@ func (m *Model) reload() {
 }
 
 func (m *Model) selectedTicket() *model.Ticket {
+	// While the footer holds focus the board draws no selection, so there is
+	// no selected ticket to report either. Without this the card verbs — x, m,
+	// c, H/L, J/K — keep acting on the remembered cursor, and a ticket can be
+	// archived with nothing on screen naming it.
+	if m.footerHasFocus() {
+		return nil
+	}
 	status := model.ColumnOrder[m.focusedCol]
 	tickets := m.visibleTickets(status)
 	idx := m.cursors[m.focusedCol]
@@ -768,15 +783,15 @@ func (m *Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Add):
 		return m.enterAddPopup()
 	case key.Matches(msg, keys.Zero):
-		m.focusedCol = 0
+		m.jumpToColumn(0)
 	case key.Matches(msg, keys.One):
-		m.focusedCol = 1
+		m.jumpToColumn(1)
 	case key.Matches(msg, keys.Two):
-		m.focusedCol = 2
+		m.jumpToColumn(2)
 	case key.Matches(msg, keys.Three):
-		m.focusedCol = 3
+		m.jumpToColumn(3)
 	case key.Matches(msg, keys.Four):
-		m.focusedCol = 4
+		m.jumpToColumn(4)
 	case key.Matches(msg, keys.MoveLeft):
 		m.moveTicket(-1)
 	case key.Matches(msg, keys.MoveRight):
@@ -1319,15 +1334,15 @@ func (m *Model) updateColumn(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Add):
 		return m.enterAddPopup()
 	case key.Matches(msg, keys.Zero):
-		m.focusedCol = 0
+		m.jumpToColumn(0)
 	case key.Matches(msg, keys.One):
-		m.focusedCol = 1
+		m.jumpToColumn(1)
 	case key.Matches(msg, keys.Two):
-		m.focusedCol = 2
+		m.jumpToColumn(2)
 	case key.Matches(msg, keys.Three):
-		m.focusedCol = 3
+		m.jumpToColumn(3)
 	case key.Matches(msg, keys.Four):
-		m.focusedCol = 4
+		m.jumpToColumn(4)
 	case key.Matches(msg, keys.MoveLeft):
 		m.moveTicket(-1)
 	case key.Matches(msg, keys.MoveRight):
@@ -3674,7 +3689,7 @@ func (m *Model) renderColumn(colIdx int, status model.Status, width, height int,
 	// The footer holding focus is the same case: the column stays framed as
 	// the one you'd come back to, but nothing in it is selected.
 	cursor := -1
-	if focused && !m.footerFocus {
+	if focused && !m.footerHasFocus() {
 		cursor = m.cursors[colIdx]
 	}
 

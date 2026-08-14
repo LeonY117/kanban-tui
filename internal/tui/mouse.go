@@ -24,6 +24,7 @@ const (
 	zoneTagRow
 	zoneMetaField   // one field inside a detail Info panel: 0 status, 1 assign, 2 tags
 	zoneAddField    // one field of the new-ticket popup, an addFocus* value
+	zoneEmojiCell   // one emoji in the add popup's picker grid, a filtered index
 	zoneRenameField // one input of the sprint rename form, a renameFocus* value
 	zoneBoardBadge  // the board name in the footer — opens the board description
 )
@@ -306,6 +307,10 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, textarea.Blink
 		}
 		m.focusAddField(z.idx)
+	case zoneEmojiCell:
+		if filtered := m.emojiFiltered(); z.idx < len(filtered) {
+			m.applyPickedEmoji(filtered[z.idx].Emoji)
+		}
 	case zoneRenameField:
 		m.setRenameFocus(z.idx)
 	case zoneSettingsRow:

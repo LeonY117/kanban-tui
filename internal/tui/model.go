@@ -35,6 +35,7 @@ const (
 	settingsView          // floating settings popup
 	tagView               // floating tag picker, feeds the search
 	infoView              // floating board-description popup
+	emojiView             // floating emoji picker over any text field
 )
 
 // inputMode tracks what the user is typing into.
@@ -177,6 +178,7 @@ type Model struct {
 	addDesc        textarea.Model
 	addTags        textinput.Model
 	addAssign      textinput.Model
+	emojiPick      emojiPicker
 	addFocusIdx    int
 	addDescEditing bool
 	addConfirmQuit bool // esc pressed with content in the popup — awaiting y/N
@@ -599,6 +601,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateTagPicker(msg)
 		case infoView:
 			return m.updateInfo(msg)
+		case emojiView:
+			return m.updateEmojiPicker(msg)
 		}
 	}
 	return m, nil
@@ -1179,6 +1183,8 @@ func (m *Model) updateSplitDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.editTitle.Blur()
 			m.saveEdit()
 			return m, nil
+		case "ctrl+e":
+			return m.openEmojiPicker(emojiToEditTitle)
 		}
 		var cmd tea.Cmd
 		m.editTitle, cmd = m.editTitle.Update(msg)
@@ -1245,6 +1251,9 @@ func (m *Model) updateSplitDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.editDesc.Blur()
 			m.saveEdit()
 			return m, nil
+		}
+		if msg.String() == "ctrl+e" {
+			return m.openEmojiPicker(emojiToEditDesc)
 		}
 		var cmd tea.Cmd
 		m.editDesc, cmd = m.editDesc.Update(msg)
@@ -1496,6 +1505,8 @@ func (m *Model) updateDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.editTitle.Blur()
 			m.saveEdit()
 			return m, nil
+		case msg.String() == "ctrl+e":
+			return m.openEmojiPicker(emojiToEditTitle)
 		// Goes through the binding rather than a literal "tab": the picker key
 		// is rebindable, and a hard-coded alias here stayed live after a rebind.
 		case key.Matches(msg, keys.BoardPicker):
@@ -1538,6 +1549,9 @@ func (m *Model) updateDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.editDesc.Blur()
 			m.saveEdit()
 			return m, nil
+		}
+		if msg.String() == "ctrl+e" {
+			return m.openEmojiPicker(emojiToEditDesc)
 		}
 		if key.Matches(msg, keys.BoardPicker) {
 			m.editDesc.Blur()
@@ -2241,6 +2255,7 @@ func (m *Model) enterAddPopup() (tea.Model, tea.Cmd) {
 	m.addFocusIdx = addFocusTitle
 	m.addDescEditing = false
 	m.addConfirmQuit = false
+	m.emojiPick = emojiPicker{}
 	m.popupReturnView = m.view
 	m.view = addView
 	return m, textinput.Blink
@@ -2289,6 +2304,9 @@ func (m *Model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.addDescEditing = false
 			return m, nil
 		}
+		if msg.String() == "ctrl+e" {
+			return m.openEmojiPicker(emojiToAddDesc)
+		}
 		var cmd tea.Cmd
 		m.addDesc, cmd = m.addDesc.Update(msg)
 		return m, cmd
@@ -2308,6 +2326,16 @@ func (m *Model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab":
 		m.cycleAddField(-1)
 		return m, nil
+	case "ctrl+e":
+		switch m.addFocusIdx {
+		case addFocusDesc:
+			return m.openEmojiPicker(emojiToAddDesc)
+		case addFocusTags:
+			return m.openEmojiPicker(emojiToAddTags)
+		case addFocusAssign:
+			return m.openEmojiPicker(emojiToAddAssign)
+		}
+		return m.openEmojiPicker(emojiToAddTitle)
 	}
 
 	if m.addFocusIdx == addFocusDesc {
@@ -2436,7 +2464,9 @@ func (m *Model) submitAdd() {
 	}
 }
 
-func (m *Model) viewAdd() string {
+// addPopupSize is the new-ticket popup's outer size, shared by the renderer
+// and by key handlers that need the grid geometry before the next render.
+func (m *Model) addPopupSize() (int, int) {
 	popupWidth := 66
 	if popupWidth > m.width-4 {
 		popupWidth = m.width - 4
@@ -2451,6 +2481,20 @@ func (m *Model) viewAdd() string {
 	if popupHeight < 12 {
 		popupHeight = 12
 	}
+	return popupWidth, popupHeight
+}
+
+// addInnerWidth is the width the popup's inner panels render at.
+func (m *Model) addInnerWidth() int {
+	w, _ := m.addPopupSize()
+	if w-4 < 10 {
+		return 10
+	}
+	return w - 4
+}
+
+func (m *Model) viewAdd() string {
+	popupWidth, popupHeight := m.addPopupSize()
 
 	backdrop := m.popupBackdrop(m.popupReturnView)
 	// The backdrop's zones belong to a view the user can't reach right now.
@@ -2505,6 +2549,8 @@ func (m *Model) renderView(v viewMode) string {
 		return m.viewTagPicker()
 	case infoView:
 		return m.viewInfo()
+	case emojiView:
+		return m.viewEmoji()
 	default:
 		return m.viewBoard()
 	}
@@ -2513,7 +2559,7 @@ func (m *Model) renderView(v viewMode) string {
 // popupBackdrop renders the source view as the backdrop behind a popup, but
 // avoids recursing into popup views themselves.
 func (m *Model) popupBackdrop(source viewMode) string {
-	if source == addView || source == pickerView || source == moveView || source == settingsView || source == tagView || source == infoView {
+	if source == addView || source == pickerView || source == moveView || source == settingsView || source == tagView || source == infoView || source == emojiView {
 		return m.viewBoard()
 	}
 	return m.renderView(source)
@@ -2549,10 +2595,7 @@ func (m *Model) renderAddPopup(width, height int, origin point) string {
 	// width is the outer popup width. The outer border eats 2 cols; we also
 	// reserve 1 col of left pad + 1 col of right pad so inner panels sit
 	// symmetrically inside the popup.
-	innerWidth := width - 4
-	if innerWidth < 10 {
-		innerWidth = 10
-	}
+	innerWidth := m.addInnerWidth()
 
 	// Content starts one row below the popup's top border, one column in from
 	// its left border, plus the left pad every line below carries. While the
@@ -2678,6 +2721,7 @@ func (m *Model) addHelpLine() string {
 	parts := []string{
 		"tab/shift-tab: field",
 		"enter: save",
+		"ctrl+e: emoji",
 	}
 	if m.addFocusIdx == addFocusDesc && !m.addDescEditing {
 		parts = append(parts, "enter: edit", "h/l: field")
@@ -3461,6 +3505,14 @@ func (m *Model) helpText() string {
 			return "enter save | esc discard | shift+enter newline"
 		}
 		return "enter edit | esc close"
+	case emojiView:
+		if m.emojiPick.filtering {
+			return "type filter | ctrl+n/p move | enter keep filter | esc clear"
+		}
+		if m.emojiPick.filter.Value() != "" {
+			return "hjkl move | / edit filter | enter pick | esc clear filter"
+		}
+		return "hjkl move | / filter | enter pick | esc close"
 	case settingsView:
 		return "j/k select | h/l section | enter change | esc close"
 	case tagView:

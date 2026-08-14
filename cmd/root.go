@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/LeonY117/kanban-tui/internal/emoji"
 	"github.com/LeonY117/kanban-tui/internal/model"
 	"github.com/LeonY117/kanban-tui/internal/store"
 	"github.com/spf13/cobra"
@@ -60,6 +61,19 @@ func statusValues() string {
 		names[i] = string(s)
 	}
 	return strings.Join(names, ", ")
+}
+
+// warnFragileEmoji nudges the caller when a title contains emoji that
+// terminals size inconsistently (see internal/emoji). It runs at write time
+// because the breakage is a property of the stored title, not of the writer's
+// terminal — a ticket added from Ghostty still skews the board for a VS Code
+// viewer. Stderr only, never fatal, so stdout stays pipeable.
+func warnFragileEmoji(cmd *cobra.Command, title string) {
+	if bad := emoji.Fragile(title); len(bad) != 0 {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"note: %s renders at different widths across terminals and can skew the board's borders — plain single-codepoint emoji (🔒 📦 🎯) are safe everywhere\n",
+			strings.Join(bad, " "))
+	}
 }
 
 // promptYN returns true only on "y"/"yes" (case-insensitive). EOF, empty, and

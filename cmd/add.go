@@ -11,7 +11,13 @@ import (
 var addCmd = &cobra.Command{
 	Use:   "add <title>",
 	Short: "Create a new ticket",
-	Args:  cobra.MinimumNArgs(1),
+	Long: `Create a new ticket.
+
+Emoji in titles: prefer plain single-codepoint emoji (🔒 📦 🎯). Variation-selector
+emoji (✏️ ⚠️ 🗄️), multi-part sequences (👍🏽 🇬🇧 #️⃣) and post-2018 emoji (🫠) measure
+differently across terminals, which skews the board's borders in VS Code-family
+terminals; kanban prints a note when a title contains one.`,
+	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		title := strings.Join(args, " ")
 
@@ -32,6 +38,7 @@ var addCmd = &cobra.Command{
 		}
 
 		fmt.Printf("Created %s: %s\n", ticket.ShortID, ticket.Title)
+		warnFragileEmoji(cmd, ticket.Title)
 		return nil
 	},
 }

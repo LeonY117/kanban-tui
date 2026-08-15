@@ -179,6 +179,7 @@ type Model struct {
 	addTags        textinput.Model
 	addAssign      textinput.Model
 	emojiPick      emojiPicker
+	emojiType      emojiTypeahead
 	addFocusIdx    int
 	addDescEditing bool
 	addConfirmQuit bool // esc pressed with content in the popup — awaiting y/N
@@ -532,6 +533,18 @@ func (m *Model) titleCmd() tea.Cmd {
 // search jumps; threading a title command out of each would leave the sixth to
 // remember.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// The `:` typeahead brackets the real update: it takes the few keys it
+	// owns while its list is on screen, and otherwise lets the keystroke reach
+	// the field and mirrors it afterwards. One place, rather than a hook in
+	// each of the seven handlers that own a text widget.
+	if key, ok := msg.(tea.KeyMsg); ok {
+		if consumed, cmd := m.typeaheadKey(key); consumed {
+			return m, tea.Batch(cmd, m.titleCmd())
+		}
+		next, cmd := m.update(msg)
+		m.trackTypeahead(key)
+		return next, tea.Batch(cmd, m.titleCmd())
+	}
 	next, cmd := m.update(msg)
 	return next, tea.Batch(cmd, m.titleCmd())
 }
@@ -627,7 +640,9 @@ func (m *Model) View() string {
 		content = lipgloss.JoinVertical(lipgloss.Left, content, m.viewInput())
 	}
 
-	return content
+	// Last, so it floats over whatever was drawn — and after the zones it
+	// anchors to have been registered by the render above.
+	return m.overlayTypeahead(content)
 }
 
 func (m *Model) reload() {

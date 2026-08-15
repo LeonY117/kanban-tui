@@ -1,13 +1,16 @@
 package tui
 
-// Prototype (KA18): a floating emoji picker over any text field. keys.Emoji —
-// alt+e by default, rebindable from settings — opens it while typing, and the
-// pick lands back in the field it came from: a title
-// gets it as its prefix, everything else at the cursor. It navigates like the
-// board: hjkl/arrows move, and `/` starts a live filter over names and
-// keywords ("happy" finds 🙂) with the board search's grammar — enter keeps
-// the filter, esc clears it, esc again closes. Sections mirror a real picker:
-// "Most used" first, computed from every live board, then the Unicode groups.
+// A floating emoji picker over any text field, opened with keys.Emoji (alt+e
+// by default, rebindable) while typing. The pick lands back in the field it
+// came from — a title takes it as its prefix, everything else at the cursor —
+// and the field keeps its editing state, so typing just continues.
+//
+// It navigates like the board: hjkl/arrows move, and `/` starts a live filter
+// over names and keywords ("happy" finds 🙂) with the board search's grammar —
+// enter keeps the filter, esc clears it, esc again closes. Sections mirror a
+// real picker: "Most used" first, computed from every live board, then the
+// Unicode groups.
+//
 // Offering only the safe set (internal/emoji) is the point: what the picker
 // inserts can never skew the board in another terminal.
 
@@ -107,27 +110,22 @@ func (m *Model) mostUsedEmoji(limit int) []emoji.Entry {
 		}
 	}
 
-	used := make([]string, 0, len(count))
-	for e := range count {
-		used = append(used, e)
+	used := make([]emoji.Entry, 0, len(count))
+	for value := range count {
+		entry := byEmoji[value]
+		entry.Group = "Most used"
+		used = append(used, entry)
 	}
 	sort.Slice(used, func(i, j int) bool {
-		if count[used[i]] != count[used[j]] {
-			return count[used[i]] > count[used[j]]
+		if count[used[i].Emoji] != count[used[j].Emoji] {
+			return count[used[i].Emoji] > count[used[j].Emoji]
 		}
-		return used[i] < used[j] // deterministic order among ties
+		return used[i].Emoji < used[j].Emoji // deterministic order among ties
 	})
 	if len(used) > limit {
 		used = used[:limit]
 	}
-
-	out := make([]emoji.Entry, 0, len(used))
-	for _, e := range used {
-		entry := byEmoji[e]
-		entry.Group = "Most used"
-		out = append(out, entry)
-	}
-	return out
+	return used
 }
 
 func (m *Model) closeEmojiPicker() {
@@ -176,7 +174,12 @@ func (m *Model) emojiFiltered() []emoji.Entry {
 			byKeyword = append(byKeyword, e)
 		}
 	}
-	return append(append(append(exact, prefix...), inName...), byKeyword...)
+	matches := make([]emoji.Entry, 0, len(exact)+len(prefix)+len(inName)+len(byKeyword))
+	matches = append(matches, exact...)
+	matches = append(matches, prefix...)
+	matches = append(matches, inName...)
+	matches = append(matches, byKeyword...)
+	return matches
 }
 
 // gridRow is one rendered row of the picker: a section header, or up to cols
@@ -278,17 +281,10 @@ func (m *Model) moveEmojiRow(dir int) {
 func (m *Model) updateEmojiPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	filtered := m.emojiFiltered()
 
-	moveRow := m.moveEmojiRow
 	moveCell := func(dir int) {
 		if next := m.emojiPick.sel + dir; next >= 0 && next < len(filtered) {
 			m.emojiPick.sel = next
 		}
-	}
-	pick := func() (tea.Model, tea.Cmd) {
-		if m.emojiPick.sel < len(filtered) {
-			m.applyPickedEmoji(filtered[m.emojiPick.sel].Emoji)
-		}
-		return m, nil
 	}
 
 	// Filter mode follows the board search's grammar: typing narrows live,
@@ -306,13 +302,17 @@ func (m *Model) updateEmojiPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.emojiPick.filter.Blur()
 			m.emojiPick.filtering = false
+			return m, nil
 		case "enter":
 			m.emojiPick.filter.Blur()
 			m.emojiPick.filtering = false
+			return m, nil
 		case "up", "ctrl+p":
-			moveRow(-1)
+			m.moveEmojiRow(-1)
+			return m, nil
 		case "down", "ctrl+n":
-			moveRow(1)
+			m.moveEmojiRow(1)
+			return m, nil
 		// Both spellings, like the board search: backspacing past the start
 		// of the query deletes the slash too and drops back to nav mode. It
 		// commits rather than cancels for the board's reason — an empty
@@ -323,17 +323,11 @@ func (m *Model) updateEmojiPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.emojiPick.filtering = false
 				return m, nil
 			}
-			var cmd tea.Cmd
-			m.emojiPick.filter, cmd = m.emojiPick.filter.Update(msg)
-			m.emojiPick.sel, m.emojiPick.scroll = 0, 0
-			return m, cmd
-		default:
-			var cmd tea.Cmd
-			m.emojiPick.filter, cmd = m.emojiPick.filter.Update(msg)
-			m.emojiPick.sel, m.emojiPick.scroll = 0, 0
-			return m, cmd
 		}
-		return m, nil
+		var cmd tea.Cmd
+		m.emojiPick.filter, cmd = m.emojiPick.filter.Update(msg)
+		m.emojiPick.sel, m.emojiPick.scroll = 0, 0
+		return m, cmd
 	}
 
 	switch msg.String() {
@@ -357,15 +351,17 @@ func (m *Model) updateEmojiPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.closeEmojiPicker()
 	case "enter":
-		return pick()
+		if m.emojiPick.sel < len(filtered) {
+			m.applyPickedEmoji(filtered[m.emojiPick.sel].Emoji)
+		}
 	case "h", "left":
 		moveCell(-1)
 	case "l", "right":
 		moveCell(1)
 	case "k", "up":
-		moveRow(-1)
+		m.moveEmojiRow(-1)
 	case "j", "down":
-		moveRow(1)
+		m.moveEmojiRow(1)
 	}
 	return m, nil
 }
@@ -460,16 +456,16 @@ func (m *Model) renderEmojiPicker(width, height int, origin point) string {
 
 	// Keep the selection visible; drag the section header along when it sits
 	// directly above the selected row.
-	selRow, _ := emojiRowOf(rows, m.emojiPick.sel)
-	if selRow > 0 && rows[selRow-1].header != "" {
-		selRow--
+	selectedRow, _ := emojiRowOf(rows, m.emojiPick.sel)
+	visibleStart := selectedRow
+	if visibleStart > 0 && rows[visibleStart-1].header != "" {
+		visibleStart--
 	}
-	if selRow < m.emojiPick.scroll {
-		m.emojiPick.scroll = selRow
+	if visibleStart < m.emojiPick.scroll {
+		m.emojiPick.scroll = visibleStart
 	}
-	selRow, _ = emojiRowOf(rows, m.emojiPick.sel)
-	if selRow >= m.emojiPick.scroll+gridRows {
-		m.emojiPick.scroll = selRow - gridRows + 1
+	if selectedRow >= m.emojiPick.scroll+gridRows {
+		m.emojiPick.scroll = selectedRow - gridRows + 1
 	}
 
 	m.emojiPick.filter.Width = width - 8

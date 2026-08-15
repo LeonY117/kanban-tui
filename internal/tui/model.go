@@ -546,16 +546,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// owns while its list is on screen, and otherwise lets the keystroke reach
 	// the field and mirrors it afterwards. One place, rather than a hook in
 	// each of the seven handlers that own a text widget.
-	key, isKey := msg.(tea.KeyMsg)
+	// Named keyMsg, not key: this file's other handlers reach for the bubbles
+	// key package by that name.
+	keyMsg, isKey := msg.(tea.KeyMsg)
 	if isKey {
-		if consumed, cmd := m.typeaheadKey(key); consumed {
+		if consumed, cmd := m.typeaheadKey(keyMsg); consumed {
 			return m, tea.Batch(cmd, m.titleCmd())
 		}
 	}
 
 	next, cmd := m.update(msg)
 	if isKey {
-		m.trackTypeahead(key)
+		m.trackTypeahead(keyMsg)
 	}
 	return next, tea.Batch(cmd, m.titleCmd())
 }

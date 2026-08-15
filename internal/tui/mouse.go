@@ -122,6 +122,8 @@ func (m *Model) mouseScroll(msg tea.MouseMsg, dir int) (tea.Model, tea.Cmd) {
 		m.moveTagPickerCursor(dir)
 	case zoneSettingsRow, zoneSettingsTab:
 		m.moveSettingsCursor(dir)
+	case zoneEmojiCell:
+		m.moveEmojiRow(dir)
 	}
 	return m, nil
 }
@@ -216,7 +218,12 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// A click inside the editor already open is a no-op. Falling through would
 	// blur it, save, and reopen it — the same text, but with the cursor thrown
 	// back to where the editor puts it rather than where it was left.
-	if m.editTitle.Focused() || m.editDesc.Focused() {
+	//
+	// The emoji picker is the one surface that floats over a still-focused
+	// editor and lands its pick back into it, so clicking one of its cells is
+	// part of that edit, not a click away from it. Without the exemption the
+	// save below runs first and writes the title without the emoji.
+	if (m.editTitle.Focused() || m.editDesc.Focused()) && z.kind != zoneEmojiCell {
 		if z.kind == zoneField && z.idx == m.editField {
 			return m, nil
 		}

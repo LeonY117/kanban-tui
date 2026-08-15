@@ -3,6 +3,10 @@ package tui
 import (
 	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/LeonY117/kanban-tui/internal/model"
 )
 
 // openAddWithPicker drives the model into the add popup with the emoji picker
@@ -245,6 +249,91 @@ func TestEmojiPickerKeywordSearch(t *testing.T) {
 	}
 }
 
+// The picker floats over an editor that stays focused on purpose, so the
+// mouse route has to be exempt from mouseClick's "clicked away, commit it"
+// guard — without that the save runs first and writes the title emoji-less.
+func TestEmojiPickerClickFromTitleEditKeepsEditing(t *testing.T) {
+	m := testModel(t, "first")
+	m.enterSplit()
+	m.splitFocus = 1
+	m.editField = 1
+	m.Update(keyPress("e"))
+	m.Update(keyPress("ctrl+e"))
+	m.View() // register zones
+
+	z := zoneOf(t, m, zoneEmojiCell, 0, 0)
+	want := m.emojiFiltered()[0].Emoji
+	m.mouseClick(mouseAt(z.x, z.y))
+
+	if got := m.editTitle.Value(); got != want+" first" {
+		t.Errorf("clicked title = %q, want %q", got, want+" first")
+	}
+	if !m.editTitle.Focused() {
+		t.Error("clicking a cell should leave the title still being edited")
+	}
+	if m.view != splitView {
+		t.Errorf("picker should return to the split view, got %v", m.view)
+	}
+}
+
+// textinput.SetValue truncates from the end at CharLimit, so a field already
+// at its cap would lose its tail to make room for the emoji. Declining the
+// pick is what typing at the cap already does.
+func TestEmojiPickerRespectsCharLimit(t *testing.T) {
+	m := testModel(t)
+	m.Update(keyPress("a"))
+	full := strings.Repeat("x", m.addTitle.CharLimit)
+	m.addTitle.SetValue(full)
+
+	m.Update(keyPress("ctrl+e"))
+	m.Update(keyPress("enter"))
+
+	if got := m.addTitle.Value(); got != full {
+		t.Errorf("a full title should be left intact, got %d runes ending %q",
+			len([]rune(got)), string([]rune(got)[len([]rune(got))-3:]))
+	}
+}
+
+// Only a query that narrowed the list invalidates where the cursor was.
+func TestEmojiPickerEscOnEmptyFilterKeepsPosition(t *testing.T) {
+	m := testModel(t)
+	openAddWithPicker(t, m)
+	for i := 0; i < 4; i++ {
+		m.Update(keyPress("j"))
+	}
+	moved := m.emojiPick.sel
+	if moved == 0 {
+		t.Fatal("j should have moved the selection off the first cell")
+	}
+
+	m.Update(keyPress("/"))
+	m.Update(keyPress("esc"))
+	if m.emojiPick.filtering {
+		t.Fatal("esc should leave filter mode")
+	}
+	if m.emojiPick.sel != moved {
+		t.Errorf("backing out of an empty / moved the cursor %d → %d", moved, m.emojiPick.sel)
+	}
+}
+
+// Every other list in the TUI scrolls under the wheel; the picker is a list.
+func TestEmojiPickerWheelScrolls(t *testing.T) {
+	m := testModel(t)
+	openAddWithPicker(t, m)
+	m.View() // register zones
+
+	z := zoneOf(t, m, zoneEmojiCell, 0, 0)
+	m.mouseScroll(mouseAt(z.x, z.y), 1)
+	if m.emojiPick.sel == 0 {
+		t.Error("the wheel should walk the grid like j does")
+	}
+	down := m.emojiPick.sel
+	m.mouseScroll(mouseAt(z.x, z.y), -1)
+	if m.emojiPick.sel >= down {
+		t.Error("scrolling back up should return toward the first row")
+	}
+}
+
 func TestEmojiPickerClickPicks(t *testing.T) {
 	m := testModel(t)
 	openAddWithPicker(t, m)
@@ -258,6 +347,81 @@ func TestEmojiPickerClickPicks(t *testing.T) {
 	}
 	if got := m.addTitle.Value(); !strings.HasSuffix(got, " ") || got == " " {
 		t.Errorf("clicked emoji should land as the title prefix, got %q", got)
+	}
+}
+
+// The picker floats over a live editor without changing what is being edited,
+// so a reload underneath it must still re-seed the detail editors. Otherwise
+// an agent moving the edited ticket leaves the next save pointed at a card
+// nobody is looking at.
+func TestEmojiPickerReloadUnderPickerRebindsEditors(t *testing.T) {
+	m, s := boardWith(t, "aaa|TODO", "bbb|TODO")
+	m.enterSplit()
+	m.splitFocus = 1
+	m.editField = 1
+	m.Update(keyPress("e"))
+	edited := m.editTicketID
+	if edited == "" {
+		t.Fatal("setup: no ticket bound to the editor")
+	}
+	m.Update(keyPress("ctrl+e"))
+	if m.view != emojiView {
+		t.Fatal("setup: the picker did not open")
+	}
+
+	// An agent moves the edited ticket out of the column mid-pick.
+	if err := s.Update(edited, func(tk *model.Ticket) { tk.Status = model.StatusDone }); err != nil {
+		t.Fatalf("external update: %v", err)
+	}
+	m.Update(tickMsg{})
+
+	if m.editTicketID == edited {
+		t.Error("editors still bound to the ticket that left the column — the next save lands off-screen")
+	}
+}
+
+// ctrl+c is the reflex way out of a modal, but q must stay inert: the picker
+// is routinely summoned from a half-typed ticket, and quitting discards it.
+func TestEmojiPickerCtrlCQuitsAndQDoesNot(t *testing.T) {
+	m := testModel(t)
+	openAddWithPicker(t, m)
+
+	if _, cmd := m.updateEmojiPicker(keyPress("q")); cmd != nil {
+		t.Error("q should do nothing in the picker, not quit over a draft ticket")
+	}
+	_, cmd := m.updateEmojiPicker(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil {
+		t.Fatal("ctrl+c should quit from the picker")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Errorf("ctrl+c produced %T, want a quit", cmd())
+	}
+}
+
+// The board description is a text field the README promises the picker in.
+func TestEmojiPickerFromBoardDescription(t *testing.T) {
+	m := testModel(t, "a ticket")
+	m.Update(keyPress("i"))
+	m.Update(keyPress("enter"))
+	if !m.infoEditing {
+		t.Fatal("setup: the description edit did not start")
+	}
+
+	m.Update(keyPress("ctrl+e"))
+	if m.view != emojiView {
+		t.Fatal("ctrl+e should open the picker from the board description")
+	}
+	typeFilter(t, m, "bug")
+	m.Update(keyPress("enter"))
+
+	if m.view != infoView {
+		t.Errorf("picker should return to the description popup, got %v", m.view)
+	}
+	if got := m.infoDesc.Value(); !strings.Contains(got, "🐛") {
+		t.Errorf("description = %q, want the picked emoji in it", got)
+	}
+	if !m.infoEditing {
+		t.Error("editing should survive the round trip")
 	}
 }
 

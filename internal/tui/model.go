@@ -648,7 +648,15 @@ func (m *Model) reload() {
 	// renders from selectedTicket while writes go to editTicketID, and a
 	// mismatch sends the next save to a card nobody is looking at.
 	m.clampCursors()
-	if m.view == splitView || m.view == detailView {
+	// The emoji picker floats over a still-focused editor without changing
+	// what is being edited, so the guard has to see through it to the view
+	// underneath — otherwise a reload while the picker is open skips the
+	// re-seed and the next save lands on a card nobody is looking at.
+	editing := m.view
+	if editing == emojiView {
+		editing = m.emojiPick.returnView
+	}
+	if editing == splitView || editing == detailView {
 		if t := m.selectedTicket(); t == nil || t.ID != m.editTicketID {
 			m.refreshDetailEditors()
 		}
@@ -2464,8 +2472,9 @@ func (m *Model) submitAdd() {
 	}
 }
 
-// addPopupSize is the new-ticket popup's outer size, shared by the renderer
-// and by key handlers that need the grid geometry before the next render.
+// addPopupSize is the new-ticket popup's outer size. Split out from viewAdd so
+// the help-line width test can assert against the same geometry the renderer
+// uses, rather than restating the numbers.
 func (m *Model) addPopupSize() (int, int) {
 	popupWidth := 66
 	if popupWidth > m.width-4 {
@@ -2718,8 +2727,11 @@ func (m *Model) addHelpLine() string {
 		return lipgloss.NewStyle().Foreground(peach).Render(m.notice)
 	}
 
+	// The popup's interior is 62 cells, and MaxWidth truncates rather than
+	// wraps — so this line has a budget. "tab: field" implies shift+tab the
+	// way every other TUI does, and buys the room the emoji hint needs.
 	parts := []string{
-		"tab/shift-tab: field",
+		"tab: field",
 		"enter: save",
 		"ctrl+e: emoji",
 	}

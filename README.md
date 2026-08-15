@@ -42,7 +42,7 @@ Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden
 | `m` | Move ticket — boards on the left, that board's columns on the right |
 | `c` | Copy to clipboard — the ticket id from a list, or the focused title / description |
 | `a` | Add a new ticket (floating popup) |
-| `ctrl+e` (in any text field) | Emoji picker — `h/j/k/l` move, `/` filters like ticket search, `enter` picks, `esc` back |
+| `ctrl+e` (editing a title, description, tag or assignee) | Emoji picker — `h/j/k/l` or the wheel move, `/` filters like ticket search, `enter` picks, `esc` back |
 | `e` / `enter` | Edit selected field |
 | `enter` (while editing) | Save and stop editing — in the add popup, create the ticket |
 | `shift+enter` | New line inside a description |

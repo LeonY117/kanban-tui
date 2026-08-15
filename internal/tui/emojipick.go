@@ -39,6 +39,7 @@ const (
 	emojiToAddAssign
 	emojiToEditTitle
 	emojiToEditDesc
+	emojiToInfoDesc
 )
 
 type emojiPicker struct {
@@ -254,25 +255,29 @@ func emojiGridCols(innerWidth int) int {
 	return cols
 }
 
-func (m *Model) updateEmojiPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	filtered := m.emojiFiltered()
+// moveEmojiRow steps the selection to the nearest cell row above or below,
+// keeping the column — how every grid picker walks across section headers.
+// A method rather than a closure so the wheel reaches it too, like every
+// other list in the TUI.
+func (m *Model) moveEmojiRow(dir int) {
 	w, _ := m.emojiPickerSize()
-	rows := m.emojiRows(filtered, emojiGridCols(w-2))
-
-	// moveRow steps to the nearest cell row above or below, keeping the
-	// column — how every grid picker walks across section headers.
-	moveRow := func(dir int) {
-		ri, col := emojiRowOf(rows, m.emojiPick.sel)
-		for i := ri + dir; i >= 0 && i < len(rows); i += dir {
-			if rows[i].header == "" {
-				if col >= rows[i].n {
-					col = rows[i].n - 1
-				}
-				m.emojiPick.sel = rows[i].start + col
-				return
+	rows := m.emojiRows(m.emojiFiltered(), emojiGridCols(w-2))
+	ri, col := emojiRowOf(rows, m.emojiPick.sel)
+	for i := ri + dir; i >= 0 && i < len(rows); i += dir {
+		if rows[i].header == "" {
+			if col >= rows[i].n {
+				col = rows[i].n - 1
 			}
+			m.emojiPick.sel = rows[i].start + col
+			return
 		}
 	}
+}
+
+func (m *Model) updateEmojiPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	filtered := m.emojiFiltered()
+
+	moveRow := m.moveEmojiRow
 	moveCell := func(dir int) {
 		if next := m.emojiPick.sel + dir; next >= 0 && next < len(filtered) {
 			m.emojiPick.sel = next
@@ -291,10 +296,15 @@ func (m *Model) updateEmojiPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.emojiPick.filtering {
 		switch msg.String() {
 		case "esc":
-			m.emojiPick.filter.SetValue("")
+			// Only a query that actually narrowed the list invalidates where
+			// the cursor was; backing out of an empty `/` leaves the grid
+			// exactly where it was scrolled to.
+			if m.emojiPick.filter.Value() != "" {
+				m.emojiPick.filter.SetValue("")
+				m.emojiPick.sel, m.emojiPick.scroll = 0, 0
+			}
 			m.emojiPick.filter.Blur()
 			m.emojiPick.filtering = false
-			m.emojiPick.sel, m.emojiPick.scroll = 0, 0
 		case "enter":
 			m.emojiPick.filter.Blur()
 			m.emojiPick.filtering = false
@@ -326,6 +336,12 @@ func (m *Model) updateEmojiPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
+	// ctrl+c alone, not keys.Quit: the sibling popups bind q as well, but they
+	// are never summoned from a half-typed ticket. This one is, and quitting
+	// discards that draft without a confirm — so q stays inert here, the way
+	// the search input treats it (see updateSearch).
+	case "ctrl+c":
+		return m, tea.Quit
 	case "/":
 		m.emojiPick.filtering = true
 		m.emojiPick.filter.Focus()
@@ -365,6 +381,8 @@ func (m *Model) applyPickedEmoji(e string) {
 		m.addDesc.InsertString(e)
 	case emojiToEditDesc:
 		m.editDesc.InsertString(e)
+	case emojiToInfoDesc:
+		m.infoDesc.InsertString(e)
 	case emojiToAddTags:
 		insertAtCursor(&m.addTags, e)
 	case emojiToAddAssign:
@@ -381,7 +399,9 @@ func setTitlePrefix(in *textinput.Model, e string) {
 		title = strings.TrimLeft(strings.TrimPrefix(title, lead), " ")
 	}
 	// The gap stays on an empty title so typing continues after it.
-	in.SetValue(e + " " + title)
+	if !setWithinLimit(in, e+" "+title) {
+		return
+	}
 	in.CursorEnd()
 }
 
@@ -393,8 +413,24 @@ func insertAtCursor(in *textinput.Model, s string) {
 	if pos > len(runes) {
 		pos = len(runes)
 	}
-	in.SetValue(string(runes[:pos]) + s + string(runes[pos:]))
+	if !setWithinLimit(in, string(runes[:pos])+s+string(runes[pos:])) {
+		return
+	}
 	in.SetCursor(pos + len([]rune(s)))
+}
+
+// setWithinLimit writes v only if it fits the input's CharLimit, reporting
+// whether it did. textinput.SetValue truncates from the end instead of
+// refusing, so a field already at its cap would silently lose its tail to make
+// room for the emoji. Declining is what the widget itself does when you type
+// at the cap, and it never eats text the user already entered.
+// (textarea.InsertString needs no such guard — it trims the insertion.)
+func setWithinLimit(in *textinput.Model, v string) bool {
+	if in.CharLimit > 0 && len([]rune(v)) > in.CharLimit {
+		return false
+	}
+	in.SetValue(v)
+	return true
 }
 
 // viewEmoji floats the picker over whichever view summoned it.

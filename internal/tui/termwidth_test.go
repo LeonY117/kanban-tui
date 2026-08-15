@@ -186,3 +186,33 @@ func TestOverWideClustersCannotBeCompensated(t *testing.T) {
 		}
 	}
 }
+
+// The two features met on main: the typeahead composites its popup onto the
+// frame, and compensation then walks the finished frame. The popup is full of
+// emoji and sits on top of already-padded board lines, so it is the one place
+// where an overlay could leave a line the correction cannot square up. Order
+// matters here — compensation has to be the last thing that touches the frame.
+func TestTypeaheadPopupPaintsEvenlyOnANarrowTerminal(t *testing.T) {
+	m := emojiBoard(t)
+	withProfile(t, termwidth.Narrow)
+	m.width, m.height = 160-termwidth.Reserve, 40
+
+	m.Update(keyPress("a"))
+	for _, k := range []string{":", "f", "i", "r", "e"} {
+		m.Update(keyPress(k))
+	}
+	if !m.typeaheadShowing() {
+		t.Fatal("setup: the popup should be on screen")
+	}
+
+	lines := strings.Split(m.View(), "\n")
+	first := paintedWidth(t, lines[0], termwidth.Narrow)
+	for i, line := range lines {
+		if got := paintedWidth(t, line, termwidth.Narrow); got != first {
+			t.Errorf("line %d paints %d cells, line 0 paints %d:\n%s", i, got, first, line)
+		}
+		if got := ansi.StringWidth(line); got > 160 {
+			t.Errorf("line %d measures %d to lipgloss, over the 160-cell window", i, got)
+		}
+	}
+}

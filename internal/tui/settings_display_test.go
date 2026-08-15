@@ -100,6 +100,39 @@ func TestDisplaySectionRendersOptionsAndSample(t *testing.T) {
 	}
 }
 
+func TestSettingsNavigationIncludesAbout(t *testing.T) {
+	m := testModel(t, "a ticket")
+	openDisplaySection(t, m)
+
+	m.Update(keyPress("4"))
+	if m.settings.section != sectionAbout {
+		t.Fatalf("4 reached %s, want About", sectionNames[m.settings.section])
+	}
+	m.Update(keyPress("tab"))
+	if m.settings.section != sectionShortcuts {
+		t.Errorf("tab from About reached %s, want Shortcuts", sectionNames[m.settings.section])
+	}
+	m.Update(keyPress("shift+tab"))
+	if m.settings.section != sectionAbout {
+		t.Errorf("shift+tab from Shortcuts reached %s, want About", sectionNames[m.settings.section])
+	}
+}
+
+func TestDisplayChoicePersistsWhenQuittingSettings(t *testing.T) {
+	m := testModel(t, "🐛 a ticket")
+	openDisplaySection(t, m)
+	m.Update(keyPress("j"))
+	m.Update(keyPress("enter"))
+
+	if _, cmd := m.updateSettings(keyPress("ctrl+c")); cmd == nil {
+		t.Fatal("ctrl+c should still quit from settings")
+	}
+	if cfg := store.LoadConfig(); cfg.TerminalWidth != "narrow" {
+		t.Errorf("config holds %q, want the choice saved before quitting", cfg.TerminalWidth)
+	}
+	t.Cleanup(func() { ApplyConfig(store.Config{}) })
+}
+
 // updateDirty assigns rather than accumulates, so a width change it doesn't
 // count gets cleared by the next edit anywhere else on the page — and closing
 // the popup then threw the chosen profile away without a word.

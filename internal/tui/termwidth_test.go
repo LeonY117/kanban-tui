@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/rivo/uniseg"
 
@@ -103,6 +104,19 @@ func TestGraphemeTerminalRenderIsUntouched(t *testing.T) {
 	m.width = 160
 	if after := m.View(); after != before {
 		t.Error("the grapheme render changed once a narrow profile existed")
+	}
+}
+
+func TestNarrowTooSmallViewReportsRealTerminalWidth(t *testing.T) {
+	m := testModel(t, "🐛 a ticket")
+	withProfile(t, termwidth.Narrow)
+	m.Update(tea.WindowSizeMsg{Width: 54, Height: 40})
+
+	view := m.View()
+	for _, want := range []string{"current:  54x40", "required: 58x10"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("small-terminal view does not contain %q:\n%s", want, view)
+		}
 	}
 }
 

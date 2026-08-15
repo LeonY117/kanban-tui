@@ -522,7 +522,8 @@ func statusChoices() ([]string, map[string]model.Status) {
 }
 
 func (m *Model) setSettingsSection(sec settingsSection) {
-	m.settings.section = (sec + 3) % 3
+	n := settingsSection(len(sectionNames))
+	m.settings.section = (sec + n) % n
 	m.settings.idx = 0
 	m.settings.notice = ""
 }
@@ -653,6 +654,9 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch {
 	case key.Matches(msg, keys.Quit):
+		if s.dirty {
+			m.saveSettings()
+		}
 		return m, tea.Quit
 	case k == "esc":
 		// Checked from every section: a conflict made in Shortcuts and then

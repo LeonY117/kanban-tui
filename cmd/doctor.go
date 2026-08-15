@@ -66,8 +66,9 @@ one cell in one and two in another. So this asks the terminal directly rather
 than consulting a table — it prints each sample and reads back where the
 cursor landed.
 
-Run it in each terminal you use the board in. It needs a real terminal, so it
-cannot be piped.`,
+Run it in each terminal you use the board in. It needs a real controlling
+terminal for the measurement traffic, but its report can still be piped or
+redirected.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		results, err := measureWidths()
@@ -117,7 +118,7 @@ cannot be piped.`,
 				store.ConfigPath(), p.String(),
 				"The board then hands back the cells this terminal declines to spend,\n"+
 					"and lays out a few columns narrower to make room for them.")
-		case !ok:
+		case !ok && hasShortMeasurement(results):
 			fmt.Fprintf(w, "\n%s\n",
 				"No profile matches this terminal: some samples are short and others\n"+
 					"are already right, so no single correction fits. Choosing one would\n"+
@@ -203,6 +204,18 @@ func recommend(results []widthResult) (termwidth.Profile, bool) {
 	return termwidth.Grapheme, false
 }
 
+// hasShortMeasurement reports whether a profile could help. A terminal that
+// only draws samples wider needs a kanban measurement fix, not width handed
+// back or advice to change terminal profiles.
+func hasShortMeasurement(results []widthResult) bool {
+	for _, r := range results {
+		if r.Terminal < r.Kanban {
+			return true
+		}
+	}
+	return false
+}
+
 // measureWidths prints each sample and reads back the cursor column. The
 // terminal has to be raw for the reply to reach us rather than the line editor.
 //
@@ -219,13 +232,14 @@ func measureWidths() ([]widthResult, error) {
 
 	fd := tty.Fd()
 	if !term.IsTerminal(fd) {
-		return nil, fmt.Errorf("doctor measures the terminal it is attached to, so it can't be piped or redirected — run it directly")
+		return nil, fmt.Errorf("doctor measures the terminal it is attached to, but /dev/tty is not a terminal — run it directly from one")
 	}
 	state, err := term.MakeRaw(fd)
 	if err != nil {
 		return nil, fmt.Errorf("putting the terminal in raw mode: %w", err)
 	}
 	defer term.Restore(fd, state)
+	defer fmt.Fprint(tty, "\r\x1b[2K")
 
 	out := make([]widthResult, 0, len(widthSamples))
 	for _, s := range widthSamples {
@@ -241,7 +255,6 @@ func measureWidths() ([]widthResult, error) {
 			Kanban:      ansi.StringWidth(s.Text),
 		})
 	}
-	fmt.Fprint(tty, "\r\x1b[2K")
 	return out, nil
 }
 
@@ -260,30 +273,29 @@ func readCursorColumn(f *os.File, wait time.Duration) (int, error) {
 	ch := make(chan read, 1)
 	go func() {
 		buf := make([]byte, 32)
+		var reply []byte
 		for {
 			n, err := f.Read(buf)
-			ch <- read{append([]byte(nil), buf[:n]...), err}
+			reply = append(reply, buf[:n]...)
+			if strings.ContainsRune(string(reply), 'R') {
+				ch <- read{b: reply}
+				return
+			}
 			if err != nil {
+				ch <- read{err: err}
 				return
 			}
 		}
 	}()
 
-	deadline := time.After(wait)
-	var reply []byte
-	for {
-		select {
-		case r := <-ch:
-			if r.err != nil {
-				return 0, r.err
-			}
-			reply = append(reply, r.b...)
-			if strings.ContainsRune(string(reply), 'R') {
-				return parseCursorColumn(string(reply))
-			}
-		case <-deadline:
-			return 0, fmt.Errorf("this terminal did not answer a cursor-position request, so its widths can't be measured")
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			return 0, r.err
 		}
+		return parseCursorColumn(string(r.b))
+	case <-time.After(wait):
+		return 0, fmt.Errorf("this terminal did not answer a cursor-position request, so its widths can't be measured")
 	}
 }
 

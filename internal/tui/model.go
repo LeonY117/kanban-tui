@@ -3705,16 +3705,23 @@ func (m *Model) helpText() string {
 // viewTooSmall renders a placeholder when the terminal is below the usable
 // minimum size. Shows current vs required dimensions so the user can resize.
 func (m *Model) viewTooSmall() string {
+	currentWidth, requiredWidth := m.width, minTerminalWidth
+	if m.termWidth > 0 {
+		currentWidth = m.termWidth
+		if m.widthProfile() != termwidth.Grapheme {
+			requiredWidth += termwidth.Reserve
+		}
+	}
 	lines := []string{
 		"Terminal too small",
 		"",
-		fmt.Sprintf("current:  %dx%d", m.width, m.height),
-		fmt.Sprintf("required: %dx%d", minTerminalWidth, minTerminalHeight),
+		fmt.Sprintf("current:  %dx%d", currentWidth, m.height),
+		fmt.Sprintf("required: %dx%d", requiredWidth, minTerminalHeight),
 		"",
 		"resize or press q to quit",
 	}
 	msg := strings.Join(lines, "\n")
-	return lipgloss.Place(m.width, m.height,
+	return lipgloss.Place(currentWidth, m.height,
 		lipgloss.Center, lipgloss.Center,
 		lipgloss.NewStyle().Foreground(softWhite).Render(msg))
 }

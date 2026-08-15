@@ -173,7 +173,7 @@ func TestCompensateCatchesBMPEmoji(t *testing.T) {
 // single cell, so a Japanese title had a space injected after every ideograph
 // and skewed the very rows this package straightens.
 func TestNarrowProfileLeavesEastAsianWidthAlone(t *testing.T) {
-	for _, s := range []string{"界", "日本語", "한국", "ａ", "→", "…", "é", "ab"} {
+	for _, s := range []string{"界", "日本語", "한국", "ａ", "〈", "〉", "→", "…", "é", "ab"} {
 		if got := Narrow.Shortfall(s); got != 0 {
 			t.Errorf("Narrow.Shortfall(%q) = %d, want 0 — wcwidth has agreed about this since before emoji", s, got)
 		}

@@ -61,6 +61,7 @@ const (
 func u6Wide(r rune) bool {
 	switch {
 	case r >= 0x1100 && r <= 0x115F, // Hangul Jamo, initial consonants
+		r >= 0x2329 && r <= 0x232A,                // angle brackets
 		r >= 0x2E80 && r <= 0xA4CF && r != 0x303F, // CJK radicals through Yi
 		r >= 0xAC00 && r <= 0xD7A3,                // Hangul syllables
 		r >= 0xF900 && r <= 0xFAFF,                // CJK compatibility ideographs

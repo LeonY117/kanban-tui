@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -159,6 +160,25 @@ func TestRecommendNeedsTheWholeTableToAgree(t *testing.T) {
 	if _, ok := recommend(partial); ok {
 		t.Error("no profile should be offered when only some samples disagree")
 	}
+	if !hasShortMeasurement(partial) {
+		t.Error("a short sample with no matching profile still needs profile advice")
+	}
+
+	// Ghostty agrees with the Grapheme profile on every correctable sample,
+	// but draws the known-unfixable keycap wider than x/ansi. That is still no
+	// exact whole-table match; it just must not trigger advice about short rows.
+	modern := measured(func(s widthSample) int { return ansi.StringWidth(s.Text) })
+	for i := range modern {
+		if modern[i].Text == "#️⃣" {
+			modern[i].Terminal = modern[i].Kanban + 1
+		}
+	}
+	if _, ok := recommend(modern); ok {
+		t.Error("the keycap mismatch means the whole table does not match")
+	}
+	if hasShortMeasurement(modern) {
+		t.Error("an over-wide-only mismatch cannot be corrected by a profile")
+	}
 }
 
 // A CPR reply can arrive in pieces. Parsing the first read alone reported an
@@ -183,5 +203,39 @@ func TestCursorColumnAcceptsASplitReply(t *testing.T) {
 	}
 	if col != 3 {
 		t.Errorf("column = %d, want 3", col)
+	}
+}
+
+// A completed read must release the pipe before the next measurement starts.
+// Leaving its goroutine blocked in another Read lets it steal the next CPR.
+func TestCursorColumnDoesNotLeaveAReaderBehind(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	if _, err := w.Write([]byte("\x1b[1;2R")); err != nil {
+		t.Fatalf("write first reply: %v", err)
+	}
+	if col, err := readCursorColumn(r, time.Second); err != nil || col != 2 {
+		t.Fatalf("first reply: column=%d err=%v", col, err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		col, err := readCursorColumn(r, time.Second)
+		if err == nil && col != 3 {
+			err = fmt.Errorf("column = %d, want 3", col)
+		}
+		done <- err
+	}()
+	time.Sleep(10 * time.Millisecond)
+	if _, err := w.Write([]byte("\x1b[1;3R")); err != nil {
+		t.Fatalf("write second reply: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("second reply: %v", err)
 	}
 }

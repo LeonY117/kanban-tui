@@ -11,6 +11,7 @@ import (
 
 	"github.com/LeonY117/kanban-tui/internal/model"
 	"github.com/LeonY117/kanban-tui/internal/store"
+	"github.com/LeonY117/kanban-tui/internal/termwidth"
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/runeutil"
@@ -74,12 +75,19 @@ var (
 	statusShort   = maps.Clone(defaultStatusShort)
 )
 
+// widthProfile is how the terminal in front of us measures emoji. Everything
+// lipgloss lays out assumes the grapheme-aware answer; where the terminal
+// disagrees, View corrects the finished frame rather than the layout — see
+// internal/termwidth for why it cannot be done any earlier.
+var widthProfile = termwidth.Grapheme
+
 // ApplyConfig points the display labels and the keymap at the user's config,
 // and reports any key override that had to be refused, plus any action left
 // with no key because an override claimed its default. Call it before
 // NewModel. Separate from NewModel so tests set preferences explicitly rather
 // than inheriting whatever the machine running them has in config.json.
 func ApplyConfig(cfg store.Config) (refused, unbound []string) {
+	widthProfile, _ = termwidth.ParseProfile(cfg.TerminalWidth)
 	statusDisplay = maps.Clone(defaultStatusDisplay)
 	statusShort = maps.Clone(defaultStatusShort)
 	for status, label := range cfg.Labels() {
@@ -121,6 +129,7 @@ type Model struct {
 	board      *model.Board
 	sprintName string // empty for main board
 	width      int
+	termWidth  int // the window's real width, before any reserve
 	height     int
 	ready      bool
 	view       viewMode
@@ -576,7 +585,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickCmd()
 
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
+		m.termWidth = msg.Width
+		m.applyWidthProfile()
 		m.height = msg.Height
 		m.ready = true
 		return m, nil
@@ -643,6 +653,10 @@ func (m *Model) View() string {
 		return m.viewTooSmall()
 	}
 
+	// Settings previews a profile live, so the geometry has to follow it
+	// before anything is laid out — the reserve moves with the profile.
+	m.applyWidthProfile()
+
 	m.resetZones()
 	content := m.renderView(m.view)
 
@@ -653,9 +667,38 @@ func (m *Model) View() string {
 		content = lipgloss.JoinVertical(lipgloss.Left, content, m.viewInput())
 	}
 
-	// Last, so it floats over whatever was drawn — and after the zones it
+	// Late, so it floats over whatever was drawn — and after the zones it
 	// anchors to have been registered by the render above.
-	return m.overlayTypeahead(content)
+	content = m.overlayTypeahead(content)
+
+	// The frame is laid out in the cells lipgloss counts; the terminal may
+	// spend fewer on the same glyphs. Hand back the cells it declines to
+	// spend, so what gets painted is the grid this was built on.
+	return termwidth.Compensate(content, m.widthProfile(), termwidth.Reserve)
+}
+
+// widthProfile is how the terminal in front of us measures emoji right now.
+// While the settings popup is open that is whatever it is previewing, so the
+// board redraws under each option as the cursor moves over it.
+func (m *Model) widthProfile() termwidth.Profile {
+	if m.view == settingsView {
+		return m.settings.previewProfile()
+	}
+	return widthProfile
+}
+
+// applyWidthProfile sizes the layout for the profile in force. A terminal that
+// needs cells handed back is laid out narrower by exactly that reserve, so a
+// compensated line never trips Bubble Tea's truncation — which measures with
+// lipgloss and would cut off the very cells we added.
+func (m *Model) applyWidthProfile() {
+	if m.termWidth == 0 {
+		return // no WindowSizeMsg yet; tests set m.width directly
+	}
+	m.width = m.termWidth
+	if m.widthProfile() != termwidth.Grapheme {
+		m.width -= termwidth.Reserve
+	}
 }
 
 func (m *Model) reload() {

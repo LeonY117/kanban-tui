@@ -13,6 +13,7 @@ import (
 
 	"github.com/LeonY117/kanban-tui/internal/model"
 	"github.com/LeonY117/kanban-tui/internal/store"
+	"github.com/LeonY117/kanban-tui/internal/termwidth"
 )
 
 var conflictRed = lipgloss.Color("1")
@@ -91,10 +92,11 @@ type settingsSection int
 const (
 	sectionShortcuts settingsSection = iota
 	sectionColumns
+	sectionDisplay
 	sectionAbout
 )
 
-var sectionNames = []string{"Shortcuts", "Columns", "About"}
+var sectionNames = []string{"Shortcuts", "Columns", "Display", "About"}
 
 type settingsState struct {
 	section settingsSection
@@ -105,13 +107,20 @@ type settingsState struct {
 	binds  map[string]string
 	labels map[model.Status]string
 
+	// width is the terminal profile being previewed. It is applied to the
+	// render the moment the cursor lands on it, so the box below the list
+	// either lines up or does not — which is the whole point of the section.
+	width termwidth.Profile
+
 	// Baselines identify the net rows changed during this visit. Saving merges
 	// only those rows into the latest config, so another process's unrelated
 	// edits and settings this build doesn't know about survive.
 	baseline       map[string]string
 	baselineLabels map[model.Status]string
+	baselineWidth  termwidth.Profile
 	changedBinds   map[string]bool
 	changedLabels  map[model.Status]bool
+	changedWidth   bool
 
 	capturing bool   // waiting for the next keypress to become a binding
 	editing   bool   // typing a column label
@@ -252,6 +261,8 @@ func (s *settingsState) atDefault() bool {
 		}
 		st := model.ColumnOrder[s.idx]
 		return s.labels[st] == defaultStatusDisplay[st]
+	case sectionDisplay:
+		return s.width == termwidth.Grapheme
 	}
 	return false
 }
@@ -271,6 +282,8 @@ func (s *settingsState) rowCount() int {
 		return len(bindActions)
 	case sectionColumns:
 		return len(model.ColumnOrder)
+	case sectionDisplay:
+		return len(widthProfiles)
 	}
 	return 0
 }
@@ -298,6 +311,9 @@ func (m *Model) enterSettings() (tea.Model, tea.Cmd) {
 	}
 	m.settings.changedBinds = map[string]bool{}
 	m.settings.changedLabels = map[model.Status]bool{}
+	m.settings.width = widthProfile
+	m.settings.baselineWidth = widthProfile
+	m.settings.changedWidth = false
 	m.settings.idx = 0
 	m.settings.notice = ""
 	m.settings.warned = false
@@ -362,6 +378,16 @@ func (m *Model) saveSettings() bool {
 }
 
 func (s *settingsState) mergeIntoConfig(cfg *store.Config) error {
+	if s.changedWidth {
+		// Only the non-default is stored, matching how keys and labels are
+		// written: a config carrying nothing says "whatever the build defaults
+		// to", which is what someone who never opened this page wants.
+		if s.width == termwidth.Grapheme {
+			cfg.TerminalWidth = ""
+		} else {
+			cfg.TerminalWidth = s.width.String()
+		}
+	}
 	for _, a := range bindActions {
 		if !s.changedBinds[a.id] {
 			continue
@@ -646,6 +672,8 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case k == "2":
 		m.setSettingsSection(sectionColumns)
 	case k == "3":
+		m.setSettingsSection(sectionDisplay)
+	case k == "4":
 		m.setSettingsSection(sectionAbout)
 
 	case key.Matches(msg, keys.Up):
@@ -714,8 +742,31 @@ func (m *Model) settingsActivate() (tea.Model, tea.Cmd) {
 	case sectionColumns:
 		s.editing = true
 		s.buf = s.labels[model.ColumnOrder[s.idx]]
+	case sectionDisplay:
+		if s.idx < 0 || s.idx >= len(widthProfiles) {
+			return m, nil
+		}
+		p := widthProfiles[s.idx]
+		if s.width == p.profile {
+			return m, nil
+		}
+		s.width = p.profile
+		s.changedWidth = s.width != s.baselineWidth
+		s.dirty = s.dirty || s.changedWidth
 	}
 	return m, nil
+}
+
+// previewProfile is the profile the frame renders under while the settings
+// popup is open. On the Display section it follows the cursor rather than the
+// chosen value, so moving between the rows re-renders the board underneath and
+// the sample box either lines up or steps — which is the only reliable way to
+// tell which one this terminal actually wants.
+func (s *settingsState) previewProfile() termwidth.Profile {
+	if s.section == sectionDisplay && s.idx >= 0 && s.idx < len(widthProfiles) {
+		return widthProfiles[s.idx].profile
+	}
+	return s.width
 }
 
 // ─── Render ──────────────────────────────────────────────────────────
@@ -787,6 +838,8 @@ func (m *Model) settingsBody(width int) ([]string, []int, int) {
 		return m.settings.shortcutRows(width)
 	case sectionColumns:
 		return m.settings.columnRows(width)
+	case sectionDisplay:
+		return m.settings.displayRows(width)
 	case sectionAbout:
 		rows := m.aboutRows(width)
 		indexes := make([]int, len(rows))
@@ -953,6 +1006,60 @@ func (s *settingsState) columnRows(w int) ([]string, []int, int) {
 			" "+marker+lipgloss.NewStyle().Foreground(dimGray).Render(string(st)),
 			style.Render(name)+" ", w))
 		idxs = append(idxs, i)
+	}
+	return rows, idxs, cursorRow
+}
+
+// ─── Display: how this terminal measures ─────────────────────────────
+
+// widthProfiles is the finite set of terminal profiles offered, in the order
+// the section lists them. Each is a claim about how many cells the terminal
+// spends on an emoji; the preview under the list is the way to tell which
+// claim is true, because the board renders under whichever the cursor is on.
+var widthProfiles = []struct {
+	profile termwidth.Profile
+	label   string
+	note    string
+}{
+	{termwidth.Grapheme, "grapheme", "Ghostty, iTerm2, WezTerm, VS Code"},
+	{termwidth.Narrow, "narrow", "xterm.js, Codex"},
+}
+
+// displayRows lists the profiles above a box whose two rows are laid out to
+// the same width. Under the right profile they line up; under the wrong one
+// the border steps. That is the entire explanation, so the section carries no
+// prose — the sample says it faster than a sentence could.
+func (s *settingsState) displayRows(w int) ([]string, []int, int) {
+	dim := lipgloss.NewStyle().Foreground(dimGray)
+	var rows []string
+	var idxs []int
+	cursorRow := 0
+
+	for i, p := range widthProfiles {
+		marker := "  "
+		if i == s.idx {
+			marker = selectedMarker.Render("* ")
+			cursorRow = len(rows)
+		}
+		chosen := "  "
+		if p.profile == s.width {
+			chosen = lipgloss.NewStyle().Foreground(green).Render("● ")
+		}
+		// Both columns left-aligned: the notes are read down the list, not
+		// across a gap from their labels.
+		label := p.label + strings.Repeat(" ", max(0, 12-lipgloss.Width(p.label)))
+		rows = append(rows, " "+marker+chosen+label+dim.Render(p.note))
+		idxs = append(idxs, i)
+	}
+
+	for _, line := range []string{
+		"",
+		" ┌──────────────────┐",
+		" │ 🐛 a ticket      │",
+		" │ plain text       │",
+		" └──────────────────┘",
+	} {
+		rows, idxs = append(rows, line), append(idxs, -1)
 	}
 	return rows, idxs, cursorRow
 }

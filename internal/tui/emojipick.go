@@ -1,7 +1,8 @@
 package tui
 
-// Prototype (KA18): a floating emoji picker over any text field. ctrl+e while
-// typing opens it; the pick lands back in the field it came from — a title
+// Prototype (KA18): a floating emoji picker over any text field. keys.Emoji —
+// alt+e by default, rebindable from settings — opens it while typing, and the
+// pick lands back in the field it came from: a title
 // gets it as its prefix, everything else at the cursor. It navigates like the
 // board: hjkl/arrows move, and `/` starts a live filter over names and
 // keywords ("happy" finds 🙂) with the board search's grammar — enter keeps

@@ -33,6 +33,7 @@ func bindingTargets(km *keyMap) map[string]*key.Binding {
 		"card.moveRight":   &km.MoveRight,
 		"card.reorderUp":   &km.MoveUp,
 		"card.reorderDown": &km.MoveDown,
+		"card.emoji":       &km.Emoji,
 
 		"board.picker":      &km.BoardPicker,
 		"board.archiveView": &km.ArchiveView,

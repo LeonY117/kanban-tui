@@ -1182,6 +1182,9 @@ func (m *Model) updateSplitDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) updateSplitDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.editTitle.Focused() {
 		// Editing mode
+		if key.Matches(msg, keys.Emoji) {
+			return m.openEmojiPicker(emojiToEditTitle)
+		}
 		switch msg.String() {
 		case "esc":
 			m.editTitle.Blur()
@@ -1191,8 +1194,6 @@ func (m *Model) updateSplitDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.editTitle.Blur()
 			m.saveEdit()
 			return m, nil
-		case "ctrl+e":
-			return m.openEmojiPicker(emojiToEditTitle)
 		}
 		var cmd tea.Cmd
 		m.editTitle, cmd = m.editTitle.Update(msg)
@@ -1260,7 +1261,7 @@ func (m *Model) updateSplitDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.saveEdit()
 			return m, nil
 		}
-		if msg.String() == "ctrl+e" {
+		if key.Matches(msg, keys.Emoji) {
 			return m.openEmojiPicker(emojiToEditDesc)
 		}
 		var cmd tea.Cmd
@@ -1513,7 +1514,7 @@ func (m *Model) updateDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.editTitle.Blur()
 			m.saveEdit()
 			return m, nil
-		case msg.String() == "ctrl+e":
+		case key.Matches(msg, keys.Emoji):
 			return m.openEmojiPicker(emojiToEditTitle)
 		// Goes through the binding rather than a literal "tab": the picker key
 		// is rebindable, and a hard-coded alias here stayed live after a rebind.
@@ -1558,7 +1559,7 @@ func (m *Model) updateDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.saveEdit()
 			return m, nil
 		}
-		if msg.String() == "ctrl+e" {
+		if key.Matches(msg, keys.Emoji) {
 			return m.openEmojiPicker(emojiToEditDesc)
 		}
 		if key.Matches(msg, keys.BoardPicker) {
@@ -2312,12 +2313,26 @@ func (m *Model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.addDescEditing = false
 			return m, nil
 		}
-		if msg.String() == "ctrl+e" {
+		if key.Matches(msg, keys.Emoji) {
 			return m.openEmojiPicker(emojiToAddDesc)
 		}
 		var cmd tea.Cmd
 		m.addDesc, cmd = m.addDesc.Update(msg)
 		return m, cmd
+	}
+
+	// Ahead of the switch below, which reads literal key names: this one is
+	// rebindable, so it has to go through the binding.
+	if key.Matches(msg, keys.Emoji) {
+		switch m.addFocusIdx {
+		case addFocusDesc:
+			return m.openEmojiPicker(emojiToAddDesc)
+		case addFocusTags:
+			return m.openEmojiPicker(emojiToAddTags)
+		case addFocusAssign:
+			return m.openEmojiPicker(emojiToAddAssign)
+		}
+		return m.openEmojiPicker(emojiToAddTitle)
 	}
 
 	switch msg.String() {
@@ -2334,16 +2349,6 @@ func (m *Model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab":
 		m.cycleAddField(-1)
 		return m, nil
-	case "ctrl+e":
-		switch m.addFocusIdx {
-		case addFocusDesc:
-			return m.openEmojiPicker(emojiToAddDesc)
-		case addFocusTags:
-			return m.openEmojiPicker(emojiToAddTags)
-		case addFocusAssign:
-			return m.openEmojiPicker(emojiToAddAssign)
-		}
-		return m.openEmojiPicker(emojiToAddTitle)
 	}
 
 	if m.addFocusIdx == addFocusDesc {
@@ -2733,7 +2738,7 @@ func (m *Model) addHelpLine() string {
 	parts := []string{
 		"tab: field",
 		"enter: save",
-		"ctrl+e: emoji",
+		hk("card.emoji") + ": emoji",
 	}
 	if m.addFocusIdx == addFocusDesc && !m.addDescEditing {
 		parts = append(parts, "enter: edit", "h/l: field")

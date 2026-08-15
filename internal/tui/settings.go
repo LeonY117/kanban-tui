@@ -53,6 +53,9 @@ var bindActions = []bindAction{
 	{id: "card.moveRight", group: "Cards", label: "move a column right", def: "L"},
 	{id: "card.reorderUp", group: "Cards", label: "reorder up", def: "K"},
 	{id: "card.reorderDown", group: "Cards", label: "reorder down", def: "J"},
+	// Fires while a text field is focused rather than from the board, so it is
+	// the one Cards action whose key has to dodge the editors' own bindings.
+	{id: "card.emoji", group: "Cards", label: "emoji picker (while editing)", def: "alt+e"},
 
 	{id: "board.picker", group: "Board", label: "board picker", def: "tab"},
 	{id: "board.archiveView", group: "Board", label: "archive browser", def: "X"},

@@ -10,16 +10,16 @@ import (
 )
 
 // openAddWithPicker drives the model into the add popup with the emoji picker
-// open, the way a user gets there: 'a', then ctrl+e.
+// open, the way a user gets there: 'a', then the emoji key.
 func openAddWithPicker(t *testing.T, m *Model) {
 	t.Helper()
 	m.Update(keyPress("a"))
 	if m.view != addView {
 		t.Fatal("expected the add popup")
 	}
-	m.Update(keyPress("ctrl+e"))
+	m.Update(keyPress("alt+e"))
 	if m.view != emojiView || !m.emojiPick.open {
-		t.Fatal("ctrl+e should open the emoji picker")
+		t.Fatal("alt+e should open the emoji picker")
 	}
 }
 
@@ -136,7 +136,7 @@ func TestEmojiPickerReplacesLeadEmoji(t *testing.T) {
 	for _, r := range "🗄️ Slice 2" {
 		m.Update(keyPress(string(r)))
 	}
-	m.Update(keyPress("ctrl+e"))
+	m.Update(keyPress("alt+e"))
 	typeFilter(t, m, "package")
 	m.Update(keyPress("enter"))
 
@@ -153,9 +153,9 @@ func TestEmojiPickerInsertsIntoDescription(t *testing.T) {
 	for _, r := range "ab" {
 		m.Update(keyPress(string(r)))
 	}
-	m.Update(keyPress("ctrl+e"))
+	m.Update(keyPress("alt+e"))
 	if m.view != emojiView {
-		t.Fatal("ctrl+e should open the picker from the description")
+		t.Fatal("alt+e should open the picker from the description")
 	}
 	typeFilter(t, m, "bug")
 	m.Update(keyPress("enter"))
@@ -178,9 +178,9 @@ func TestEmojiPickerFromSplitTitleEdit(t *testing.T) {
 		t.Fatal("expected the title editor focused")
 	}
 
-	m.Update(keyPress("ctrl+e"))
+	m.Update(keyPress("alt+e"))
 	if m.view != emojiView {
-		t.Fatal("ctrl+e should open the picker from a detail title edit")
+		t.Fatal("alt+e should open the picker from a detail title edit")
 	}
 	typeFilter(t, m, "bug")
 	m.Update(keyPress("enter"))
@@ -258,7 +258,7 @@ func TestEmojiPickerClickFromTitleEditKeepsEditing(t *testing.T) {
 	m.splitFocus = 1
 	m.editField = 1
 	m.Update(keyPress("e"))
-	m.Update(keyPress("ctrl+e"))
+	m.Update(keyPress("alt+e"))
 	m.View() // register zones
 
 	z := zoneOf(t, m, zoneEmojiCell, 0, 0)
@@ -285,7 +285,7 @@ func TestEmojiPickerRespectsCharLimit(t *testing.T) {
 	full := strings.Repeat("x", m.addTitle.CharLimit)
 	m.addTitle.SetValue(full)
 
-	m.Update(keyPress("ctrl+e"))
+	m.Update(keyPress("alt+e"))
 	m.Update(keyPress("enter"))
 
 	if got := m.addTitle.Value(); got != full {
@@ -364,7 +364,7 @@ func TestEmojiPickerReloadUnderPickerRebindsEditors(t *testing.T) {
 	if edited == "" {
 		t.Fatal("setup: no ticket bound to the editor")
 	}
-	m.Update(keyPress("ctrl+e"))
+	m.Update(keyPress("alt+e"))
 	if m.view != emojiView {
 		t.Fatal("setup: the picker did not open")
 	}
@@ -398,6 +398,27 @@ func TestEmojiPickerCtrlCQuitsAndQDoesNot(t *testing.T) {
 	}
 }
 
+// The key is settings-rebindable, so the handlers have to read the binding
+// rather than a literal — a hard-coded alt+e would stay live after a rebind.
+func TestEmojiPickerKeyIsRebindable(t *testing.T) {
+	t.Cleanup(func() { applyKeyBindings(nil) })
+	applyKeyBindings(map[string]string{"card.emoji": "ctrl+g"})
+
+	m := testModel(t)
+	m.Update(keyPress("a"))
+	m.Update(keyPress("alt+e"))
+	if m.view == emojiView {
+		t.Error("the old default should stop opening the picker after a rebind")
+	}
+	m.Update(keyPress("ctrl+g"))
+	if m.view != emojiView {
+		t.Fatal("the rebound key should open the picker")
+	}
+	if !strings.Contains(m.addHelpLine(), "ctrl+g") {
+		t.Errorf("the add popup should advertise the rebound key, got %q", m.addHelpLine())
+	}
+}
+
 // The board description is a text field the README promises the picker in.
 func TestEmojiPickerFromBoardDescription(t *testing.T) {
 	m := testModel(t, "a ticket")
@@ -407,9 +428,9 @@ func TestEmojiPickerFromBoardDescription(t *testing.T) {
 		t.Fatal("setup: the description edit did not start")
 	}
 
-	m.Update(keyPress("ctrl+e"))
+	m.Update(keyPress("alt+e"))
 	if m.view != emojiView {
-		t.Fatal("ctrl+e should open the picker from the board description")
+		t.Fatal("alt+e should open the picker from the board description")
 	}
 	typeFilter(t, m, "bug")
 	m.Update(keyPress("enter"))

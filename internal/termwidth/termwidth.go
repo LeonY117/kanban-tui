@@ -39,14 +39,41 @@ const (
 	// or Cursor once they are on Unicode 11. Nothing to correct.
 	Grapheme Profile = iota
 
-	// Narrow is a terminal carrying pre-emoji width tables: one cell per
-	// codepoint that occupies any, zero for the combining marks. That is
-	// xterm.js's built-in Unicode 6 provider, which returns 1 for the whole of
-	// plane 1. It is why a skin tone or a flag comes out right there — two
-	// codepoints at one cell each happens to equal the two cells lipgloss
-	// wanted — while every single emoji comes up short.
+	// Narrow is a terminal carrying pre-emoji width tables — xterm.js's
+	// built-in Unicode 6 provider, which is Markus Kuhn's wcwidth: per
+	// codepoint, zero for the combining marks, two for the East Asian ranges
+	// it knows about, one for everything else.
+	//
+	// Everything else is the part that matters. Unicode 6 predates emoji being
+	// wide, so the emoji blocks are one cell there and lipgloss spends two,
+	// which is the shortfall this package hands back. A skin tone or a flag
+	// comes out right by accident — two codepoints at one cell each happens to
+	// equal the two cells lipgloss wanted.
 	Narrow
 )
+
+// u6Wide is Unicode 6's double-width set, which is the East Asian ranges and
+// nothing else. Modelling this rather than "one cell per codepoint" is not a
+// refinement: CJK has been two cells in wcwidth since long before emoji, so
+// calling 界 one cell injected a space after every ideograph and skewed exactly
+// the rows this package exists to straighten. Only the emoji blocks are narrow
+// here, and they are narrow because Unicode 6 has nothing to say about them.
+func u6Wide(r rune) bool {
+	switch {
+	case r >= 0x1100 && r <= 0x115F, // Hangul Jamo, initial consonants
+		r >= 0x2E80 && r <= 0xA4CF && r != 0x303F, // CJK radicals through Yi
+		r >= 0xAC00 && r <= 0xD7A3,                // Hangul syllables
+		r >= 0xF900 && r <= 0xFAFF,                // CJK compatibility ideographs
+		r >= 0xFE10 && r <= 0xFE19,                // vertical forms
+		r >= 0xFE30 && r <= 0xFE6F,                // CJK compatibility forms
+		r >= 0xFF00 && r <= 0xFF60,                // fullwidth forms
+		r >= 0xFFE0 && r <= 0xFFE6,                // fullwidth signs
+		r >= 0x20000 && r <= 0x2FFFD,              // CJK extension B and later
+		r >= 0x30000 && r <= 0x3FFFD:
+		return true
+	}
+	return false
+}
 
 func (p Profile) String() string {
 	if p == Narrow {
@@ -71,15 +98,17 @@ func (p Profile) Cells(cluster string) int {
 	if p != Narrow {
 		return ansi.StringWidth(cluster)
 	}
-	// One cell per codepoint that occupies any. Variation selectors, the
-	// keycap mark, the zero-width joiner and the combining marks take none —
-	// which is what makes `#️⃣` a single cell here and `👍🏽` two.
+	// Per codepoint. Variation selectors, the keycap mark, the zero-width
+	// joiner and the combining marks take none — which is what makes `#️⃣` a
+	// single cell here and `👍🏽` two.
 	n := 0
 	for _, r := range cluster {
 		switch {
 		case r == 0x200D, r == 0xFE0F, r == 0xFE0E, r == 0x20E3:
 		case unicode.Is(unicode.Mn, r), unicode.Is(unicode.Me, r):
 		case r >= 0xE0020 && r <= 0xE007F:
+		case u6Wide(r):
+			n += 2
 		default:
 			n++
 		}
@@ -112,9 +141,17 @@ const Reserve = 8
 // so the terminal paints the grid the frame was laid out on.
 //
 // Escape sequences are stepped over rather than measured, and each line is
-// corrected independently up to budget cells. A line needing more than its
-// budget keeps the cells it got: past the budget the line would exceed the
-// window and be truncated, which is worse than being short.
+// corrected independently up to budget cells.
+//
+// The budget is a hard ceiling, not a tuning knob. A line is laid out to
+// termWidth-Reserve, so injecting more than Reserve cells pushes it past the
+// window and Bubble Tea truncates it — cutting off the very cells just added.
+// Reserve is therefore the number of disagreeing clusters one screen row can
+// carry: 8, against a board of at most five columns whose titles lead with one
+// emoji each. A row that exceeds it keeps the cells it got and stays short by
+// the remainder, which is better than being truncated but is still the defect
+// this package exists to remove. Raising Reserve buys headroom and costs that
+// many columns of board on the terminals that need it.
 func Compensate(frame string, p Profile, budget int) string {
 	if p == Grapheme || budget <= 0 {
 		return frame
@@ -138,9 +175,17 @@ func compensateLine(line string, p Profile, budget int) string {
 	for len(rest) > 0 {
 		// Escape sequences carry no width; copy them across untouched so the
 		// clusterer never sees them and never counts one as a cell.
+		//
+		// The parser state is dropped with them. Carrying it across an escape
+		// hands uniseg a state describing text that no longer adjoins what
+		// comes next, and it then breaks the following cluster in the wrong
+		// place: `\x1b[37m🗄️` split into a bare base plus its selector, each
+		// owed nothing, so the styled line kept none of its missing cells.
+		// Styles wrap whole strings, so no cluster is ever split by one.
 		if n := escapeLen(rest); n > 0 {
 			b.WriteString(rest[:n])
 			rest = rest[n:]
+			state = -1
 			continue
 		}
 

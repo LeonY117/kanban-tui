@@ -99,3 +99,51 @@ func TestDisplaySectionRendersOptionsAndSample(t *testing.T) {
 		}
 	}
 }
+
+// updateDirty assigns rather than accumulates, so a width change it doesn't
+// count gets cleared by the next edit anywhere else on the page — and closing
+// the popup then threw the chosen profile away without a word.
+func TestDisplayChoiceSurvivesAnEditElsewhere(t *testing.T) {
+	m := testModel(t, "🐛 a ticket")
+	m.termWidth = 160
+	openDisplaySection(t, m)
+	m.Update(keyPress("j"))
+	m.Update(keyPress("enter")) // choose narrow
+
+	// Now touch a shortcut and put it straight back.
+	m.Update(keyPress("1")) // Shortcuts
+	before := m.settings.binds["card.add"]
+	m.settings.binds["card.add"] = "z"
+	m.settings.markBindingChanged("card.add")
+	m.settings.binds["card.add"] = before
+	m.settings.markBindingChanged("card.add")
+
+	if !m.settings.dirty {
+		t.Fatal("the page should still be dirty — a profile was chosen")
+	}
+	m.Update(keyPress("esc"))
+	if cfg := store.LoadConfig(); cfg.TerminalWidth != "narrow" {
+		t.Errorf("config holds %q, want narrow — the choice was discarded", cfg.TerminalWidth)
+	}
+	t.Cleanup(func() { ApplyConfig(store.Config{}) })
+}
+
+// The reserve can push a small window under the minimum. If the size guard
+// runs before the profile is applied, m.width stays shrunk and moving back to
+// grapheme can't undo it — the only way out was to resize the terminal.
+func TestNarrowProfileDoesNotTrapASmallWindow(t *testing.T) {
+	m := testModel(t, "🐛 a ticket")
+	m.termWidth, m.height = minTerminalWidth+4, 40 // 54: fine wide, under the floor once reserved
+	openDisplaySection(t, m)
+
+	// The shrink lands on this render; with the guard ahead of the profile the
+	// lockout only bites on the next one, when m.width is already 46.
+	m.Update(keyPress("j")) // preview narrow
+	m.View()
+	m.View()
+
+	m.Update(keyPress("k")) // back to grapheme
+	if got := m.View(); strings.Contains(got, "Terminal too small") {
+		t.Error("moving back to grapheme should restore the window, not stay stuck below the floor")
+	}
+}

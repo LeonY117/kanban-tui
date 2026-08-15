@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/LeonY117/kanban-tui/internal/store"
+	"github.com/LeonY117/kanban-tui/internal/termwidth"
 )
 
 // doctor exists because width tables are a guess about what a terminal will
@@ -110,14 +111,18 @@ cannot be piped.`,
 		fmt.Fprintf(w, "\n%s\n", summarize(results))
 
 		// Where cells are being lost, name the setting that hands them back.
-		for _, r := range results {
-			if r.Terminal < r.Kanban {
-				fmt.Fprintf(w, "\nTo correct it, set the terminal profile in %s:\n\n    \"terminalWidth\": \"narrow\"\n\n%s\n",
-					store.ConfigPath(),
-					"The board then hands back the cells this terminal declines to spend,\n"+
-						"and lays out a few columns narrower to make room for them.")
-				break
-			}
+		switch p, ok := recommend(results); {
+		case ok && p != termwidth.Grapheme:
+			fmt.Fprintf(w, "\nTo correct it, set the terminal profile in %s:\n\n    \"terminalWidth\": %q\n\n%s\n",
+				store.ConfigPath(), p.String(),
+				"The board then hands back the cells this terminal declines to spend,\n"+
+					"and lays out a few columns narrower to make room for them.")
+		case !ok:
+			fmt.Fprintf(w, "\n%s\n",
+				"No profile matches this terminal: some samples are short and others\n"+
+					"are already right, so no single correction fits. Choosing one would\n"+
+					"straighten some rows by bending the rest. Keep emoji out of titles\n"+
+					"here, or move to a terminal on modern width tables.")
 		}
 		return nil
 	},
@@ -173,10 +178,46 @@ func summarize(results []widthResult) string {
 	}
 }
 
+// recommend names the profile whose model matches every measurement, and
+// reports false when none does.
+//
+// It used to offer `narrow` after any short sample, which is wrong in the case
+// that matters most: a terminal on intermediate width tables draws older emoji
+// at exactly the width kanban laid out for and only newer ones short. Narrow
+// would then pad the ones that were already right, straightening some rows by
+// bending others. A profile is a claim about a whole table, so it is only
+// offered when the whole table agrees with it.
+func recommend(results []widthResult) (termwidth.Profile, bool) {
+	for _, p := range []termwidth.Profile{termwidth.Grapheme, termwidth.Narrow} {
+		matches := true
+		for _, r := range results {
+			if r.Terminal != p.Cells(r.Text) {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return p, true
+		}
+	}
+	return termwidth.Grapheme, false
+}
+
 // measureWidths prints each sample and reads back the cursor column. The
 // terminal has to be raw for the reply to reach us rather than the line editor.
+//
+// Measurement traffic goes to /dev/tty rather than to stdout, because the
+// natural way to use --json is `kanban doctor --json > widths.json`, and
+// writing the cursor query to stdout then put the escape in the file, left the
+// terminal with nothing to answer, and timed out once per sample.
 func measureWidths() ([]widthResult, error) {
-	fd := os.Stdin.Fd()
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return nil, fmt.Errorf("doctor measures the terminal it is attached to, so it needs one — run it directly")
+	}
+	defer tty.Close()
+
+	fd := tty.Fd()
 	if !term.IsTerminal(fd) {
 		return nil, fmt.Errorf("doctor measures the terminal it is attached to, so it can't be piped or redirected — run it directly")
 	}
@@ -189,8 +230,8 @@ func measureWidths() ([]widthResult, error) {
 	out := make([]widthResult, 0, len(widthSamples))
 	for _, s := range widthSamples {
 		// Back to column 1, clear, print the sample, ask where we ended up.
-		fmt.Fprintf(os.Stdout, "\r\x1b[2K%s\x1b[6n", s.Text)
-		col, err := readCursorColumn(os.Stdin, 2*time.Second)
+		fmt.Fprintf(tty, "\r\x1b[2K%s\x1b[6n", s.Text)
+		col, err := readCursorColumn(tty, 2*time.Second)
 		if err != nil {
 			return nil, err
 		}
@@ -200,33 +241,49 @@ func measureWidths() ([]widthResult, error) {
 			Kanban:      ansi.StringWidth(s.Text),
 		})
 	}
-	fmt.Fprint(os.Stdout, "\r\x1b[2K")
+	fmt.Fprint(tty, "\r\x1b[2K")
 	return out, nil
 }
 
 // readCursorColumn reads one CPR reply, `ESC [ row ; col R`. The timeout is
 // the point: a terminal that does not answer must cost a couple of seconds,
 // not hang the command forever with the tty still in raw mode.
+// A reply is read until the terminating R rather than in one call: a tty
+// usually delivers the whole thing at once, but nothing promises it, and a read
+// that returned just "\x1b[" would have been reported as an unparsable reply
+// while the rest of it was still on the way.
 func readCursorColumn(f *os.File, wait time.Duration) (int, error) {
 	type read struct {
-		n   int
+		b   []byte
 		err error
 	}
 	ch := make(chan read, 1)
-	buf := make([]byte, 32)
 	go func() {
-		n, err := f.Read(buf)
-		ch <- read{n, err}
+		buf := make([]byte, 32)
+		for {
+			n, err := f.Read(buf)
+			ch <- read{append([]byte(nil), buf[:n]...), err}
+			if err != nil {
+				return
+			}
+		}
 	}()
 
-	select {
-	case r := <-ch:
-		if r.err != nil {
-			return 0, r.err
+	deadline := time.After(wait)
+	var reply []byte
+	for {
+		select {
+		case r := <-ch:
+			if r.err != nil {
+				return 0, r.err
+			}
+			reply = append(reply, r.b...)
+			if strings.ContainsRune(string(reply), 'R') {
+				return parseCursorColumn(string(reply))
+			}
+		case <-deadline:
+			return 0, fmt.Errorf("this terminal did not answer a cursor-position request, so its widths can't be measured")
 		}
-		return parseCursorColumn(string(buf[:r.n]))
-	case <-time.After(wait):
-		return 0, fmt.Errorf("this terminal did not answer a cursor-position request, so its widths can't be measured")
 	}
 }
 

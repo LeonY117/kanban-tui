@@ -167,3 +167,49 @@ func TestCompensateCatchesBMPEmoji(t *testing.T) {
 		}
 	}
 }
+
+// The narrow profile models Unicode 6, which is the East Asian ranges plus
+// nothing for emoji. Reading it as "one cell per codepoint" instead made CJK a
+// single cell, so a Japanese title had a space injected after every ideograph
+// and skewed the very rows this package straightens.
+func TestNarrowProfileLeavesEastAsianWidthAlone(t *testing.T) {
+	for _, s := range []string{"界", "日本語", "한국", "ａ", "→", "…", "é", "ab"} {
+		if got := Narrow.Shortfall(s); got != 0 {
+			t.Errorf("Narrow.Shortfall(%q) = %d, want 0 — wcwidth has agreed about this since before emoji", s, got)
+		}
+	}
+	// And the emoji it exists for are still owed their cell.
+	for _, s := range []string{"🐛", "⚡", "🫠", "🗄️"} {
+		if got := Narrow.Shortfall(s); got != 1 {
+			t.Errorf("Narrow.Shortfall(%q) = %d, want 1", s, got)
+		}
+	}
+}
+
+// Styled text is the normal case on a rendered board, and the grapheme parser
+// state must not survive the escape that precedes it: carried across, uniseg
+// broke `🗄️` into a bare base plus its selector, each owed nothing, and the
+// line silently kept none of its missing cells.
+func TestCompensateSeesClustersAfterStyling(t *testing.T) {
+	for _, line := range []string{
+		"ab\x1b[37m🗄️cd",
+		"\x1b[1;32m🐛\x1b[0m a ticket",
+		"│ \x1b[38;5;240m🫠\x1b[0m │",
+	} {
+		got := compensateLine(line, Narrow, Reserve)
+		painted := 0
+		rest, state := got, -1
+		for len(rest) > 0 {
+			if n := escapeLen(rest); n > 0 {
+				rest = rest[n:]
+				continue
+			}
+			var cluster string
+			cluster, rest, _, state = firstCluster(rest, state)
+			painted += Narrow.Cells(cluster)
+		}
+		if want := ansi.StringWidth(line); painted != want {
+			t.Errorf("%q paints %d cells, laid out for %d", line, painted, want)
+		}
+	}
+}

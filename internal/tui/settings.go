@@ -243,8 +243,13 @@ func (s *settingsState) markLabelChanged(status model.Status) {
 	s.updateDirty()
 }
 
+// updateDirty recomputes whether this visit is worth writing. It assigns
+// rather than accumulates, so every kind of change has to be counted here:
+// leaving the width out meant picking a profile and then editing a shortcut
+// and putting it back cleared the flag, and closing the page threw the profile
+// away without a word.
 func (s *settingsState) updateDirty() {
-	s.dirty = len(s.changedBinds) > 0 || len(s.changedLabels) > 0
+	s.dirty = len(s.changedBinds) > 0 || len(s.changedLabels) > 0 || s.changedWidth
 }
 
 // atDefault reports whether the focused row still holds its built-in value, so
@@ -752,7 +757,7 @@ func (m *Model) settingsActivate() (tea.Model, tea.Cmd) {
 		}
 		s.width = p.profile
 		s.changedWidth = s.width != s.baselineWidth
-		s.dirty = s.dirty || s.changedWidth
+		s.updateDirty()
 	}
 	return m, nil
 }

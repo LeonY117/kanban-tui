@@ -649,13 +649,19 @@ func (m *Model) View() string {
 		return "Loading..."
 	}
 
+	// Settings previews a profile live, so the geometry has to follow it
+	// before anything is laid out — the reserve moves with the profile.
+	//
+	// Ahead of the size guard, not after it: the reserve can push a 50-to-57
+	// column window under the minimum, and a View that returns early never
+	// reaches this, so m.width stays shrunk. Moving the cursor back onto
+	// grapheme then couldn't undo it, and the only way out of "terminal too
+	// small" was to resize the window.
+	m.applyWidthProfile()
+
 	if m.width < minTerminalWidth || m.height < minTerminalHeight {
 		return m.viewTooSmall()
 	}
-
-	// Settings previews a profile live, so the geometry has to follow it
-	// before anything is laid out — the reserve moves with the profile.
-	m.applyWidthProfile()
 
 	m.resetZones()
 	content := m.renderView(m.view)

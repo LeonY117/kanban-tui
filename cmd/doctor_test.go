@@ -5,6 +5,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/LeonY117/kanban-tui/internal/termwidth"
 )
 
 func TestParseCursorColumn(t *testing.T) {
@@ -119,5 +123,65 @@ func TestSummarizeNamesTheCulprit(t *testing.T) {
 	got = summarize(ghostty)
 	if !strings.Contains(got, "kanban's bug") || strings.Contains(got, "corrects the") {
 		t.Errorf("a lone over-wide sample is kanban's bug, not the terminal's:\n%s", got)
+	}
+}
+
+// recommend offers a profile only when the whole measured table agrees with
+// it. Offering narrow off any single short sample told a partly-modern
+// terminal to pad the emoji it was already drawing correctly.
+func TestRecommendNeedsTheWholeTableToAgree(t *testing.T) {
+	measured := func(f func(widthSample) int) []widthResult {
+		out := make([]widthResult, 0, len(widthSamples))
+		for _, s := range widthSamples {
+			out = append(out, widthResult{widthSample: s, Terminal: f(s), Kanban: ansi.StringWidth(s.Text)})
+		}
+		return out
+	}
+
+	// Ghostty: agrees with kanban about everything.
+	if p, ok := recommend(measured(func(s widthSample) int { return ansi.StringWidth(s.Text) })); !ok || p != termwidth.Grapheme {
+		t.Errorf("a terminal that agrees should resolve to grapheme, got %v ok=%v", p, ok)
+	}
+
+	// Codex / xterm.js: Unicode 6 throughout — the case the profile exists for.
+	if p, ok := recommend(measured(func(s widthSample) int { return termwidth.Narrow.Cells(s.Text) })); !ok || p != termwidth.Narrow {
+		t.Errorf("a Unicode 6 terminal should resolve to narrow, got %v ok=%v", p, ok)
+	}
+
+	// Partly modern: older emoji already right, newer ones short. Neither
+	// profile fits, and narrow would make the correct rows over-wide.
+	partial := measured(func(s widthSample) int {
+		if s.Text == "🫠" {
+			return 1
+		}
+		return ansi.StringWidth(s.Text)
+	})
+	if _, ok := recommend(partial); ok {
+		t.Error("no profile should be offered when only some samples disagree")
+	}
+}
+
+// A CPR reply can arrive in pieces. Parsing the first read alone reported an
+// unparsable reply while the rest of it was still in flight.
+func TestCursorColumnAcceptsASplitReply(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	defer r.Close()
+
+	go func() {
+		defer w.Close()
+		w.Write([]byte("\x1b["))
+		time.Sleep(10 * time.Millisecond)
+		w.Write([]byte("12;3R"))
+	}()
+
+	col, err := readCursorColumn(r, 2*time.Second)
+	if err != nil {
+		t.Fatalf("readCursorColumn: %v", err)
+	}
+	if col != 3 {
+		t.Errorf("column = %d, want 3", col)
 	}
 }

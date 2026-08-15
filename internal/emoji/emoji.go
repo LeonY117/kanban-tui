@@ -1,8 +1,16 @@
 // Package emoji classifies emoji by whether terminals agree on their width.
-// The board measures text with modern grapheme-aware tables (lipgloss), but
-// xterm.js-based terminals (VS Code, Cursor, and the agent-app panes built on
-// them) count per codepoint with tables frozen at Unicode 11 — any sequence
-// the two disagree on shifts an entire board row by a cell.
+// The board measures text with modern grapheme-aware tables (lipgloss); most
+// terminals carry an older per-codepoint table, and any sequence the two
+// disagree on shifts an entire board row by a cell.
+//
+// There are two failure modes and this package only addresses the first.
+// Terminals on Unicode 11 tables — VS Code and Cursor, which default
+// terminal.integrated.unicodeVersion to "11" — measure a variation-selector
+// sequence, a post-2018 emoji or a ZWJ cluster narrower than lipgloss does,
+// and Fragile reports exactly those. Terminals still on Unicode 6 — which is
+// what bare xterm.js ships, so an app embedding it without loading
+// addon-unicode11 gets it — return 1 for every codepoint above the BMP, so
+// they draw *every* emoji a cell narrow and nothing in here helps.
 package emoji
 
 import (

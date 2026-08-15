@@ -73,6 +73,17 @@ is emacs' end-of-line, which bubbles binds inside every text field, and this
 key only ever fires inside one. Like most keys here it can be rebound from
 `?` → Shortcuts.
 
+Typing `:` in any of those fields starts a shortcode typeahead instead — two
+characters in, a list of matches appears under the cursor, `up`/`down` move it,
+`enter` or `tab` accepts, `esc` dismisses without touching what you typed. It
+matches shortcodes only, so `:wip` stays text and the `enter` that submits a
+ticket still submits it. `alt+e` is for browsing when you don't know what you
+want; `:` is for when you do.
+
+Both offer only emoji whose width terminals agree on, so neither can skew a
+board. That agreement is narrower than you would hope — see
+[`kanban add --help`](#cli).
+
 There are three ways to the board's description. `i` opens it from the board and
 from the board picker, clicking the board name in the footer opens it from any
 view, and `j` past the last card of a column moves focus onto that name so

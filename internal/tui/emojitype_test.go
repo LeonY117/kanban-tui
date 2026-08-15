@@ -4,6 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
+
 	"github.com/LeonY117/kanban-tui/internal/emoji"
 )
 
@@ -151,15 +154,50 @@ func TestTypeaheadInDescription(t *testing.T) {
 	}
 }
 
-// Only the safe set is offered, so the typeahead can no more skew a board than
-// the picker can.
+// The typeahead draws from the same allow-list the picker does, so it can no
+// more skew a board than the picker can. Membership, not just the width
+// property — a match has to be one of the 997, however it was found.
 func TestTypeaheadOffersOnlySafeEmoji(t *testing.T) {
-	for _, q := range []string{"war", "pen", "card", "file"} {
-		for _, e := range typeaheadMatches(q) {
-			if bad := emojiFragileFor(e.Emoji); bad {
+	safe := make(map[string]bool, len(emoji.Safe))
+	for _, e := range emoji.Safe {
+		safe[e.Emoji] = true
+	}
+	for _, q := range []string{"war", "pen", "card", "file", "fla", "point", "hand"} {
+		matches := typeaheadMatches(q)
+		if len(matches) == 0 {
+			t.Errorf("%q matched nothing — the probe has stopped proving anything", q)
+		}
+		for _, e := range matches {
+			if !safe[e.Emoji] {
+				t.Errorf("%q offered %s, which is not in the safe set", q, e.Emoji)
+			}
+			if emojiFragileFor(e.Emoji) {
 				t.Errorf("%q offered fragile emoji %s", q, e.Emoji)
 			}
 		}
+	}
+}
+
+// The selection marks the glyph and nothing else — not the spaces around it,
+// not the colons. Asserted against the escape codes, since that is the only
+// place the distinction exists.
+func TestTypeaheadHighlightsOnlyTheEmoji(t *testing.T) {
+	old := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI)
+	defer lipgloss.SetColorProfile(old)
+
+	m := testModel(t)
+	m.Update(keyPress("a"))
+	typeText(m, ":fir")
+	list, _, _ := m.renderTypeaheadList()
+
+	const reverse = "\x1b[7m"
+	if n := strings.Count(list, reverse); n != 1 {
+		t.Fatalf("reverse video appears %d times, want exactly one — the selected glyph", n)
+	}
+	want := reverse + m.emojiType.matches[0].Emoji + "\x1b[0m"
+	if !strings.Contains(list, want) {
+		t.Errorf("the highlight should wrap just %q", m.emojiType.matches[0].Emoji)
 	}
 }
 

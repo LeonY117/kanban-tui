@@ -353,17 +353,23 @@ func (m *Model) renderTypeaheadList() (string, int, int) {
 		} else {
 			label = dim.Render(label)
 		}
-		row := " " + e.Emoji + "  " + label + " "
+		// The selection marks the emoji itself, not the row: a full-width
+		// reverse bar swallows the shortcode and the colons that make the row
+		// readable, and the glyph is what you are actually choosing.
+		glyph := e.Emoji
+		if i == m.emojiType.sel {
+			glyph = selected.Render(glyph)
+		}
+		row := " " + glyph + " " + label
 		if w := lipgloss.Width(row); w > widest {
 			widest = w
-		}
-		if i == m.emojiType.sel {
-			row = selected.Render(row)
 		}
 		rows = append(rows, row)
 	}
 
-	width := min(widest+2, max(20, m.width-2))
+	// widest + two borders + a right gutter, so the longest shortcode doesn't
+	// sit flush against the frame.
+	width := min(widest+3, max(20, m.width-2))
 	height := len(rows) + 2
 	body := strings.Join(rows, "\n")
 	return renderPanel("", body, width, height, midGray, false), width, height

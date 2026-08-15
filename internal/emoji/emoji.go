@@ -69,11 +69,7 @@ func isEmoji(cluster string) bool {
 	for _, r := range cluster {
 		switch {
 		case r == 0xFE0F, // VS16: text presentation promoted to emoji
-			r == 0x200D,                  // zero-width joiner: 👨‍👩‍👧
-			r == 0x20E3,                  // combining keycap: #️⃣
-			r >= 0x1F1E6 && r <= 0x1F1FF, // regional indicators: 🇬🇧
-			r >= 0x1F3FB && r <= 0x1F3FF, // skin-tone modifiers: 👍🏽
-			r >= 0xE0020 && r <= 0xE007F: // tag characters (subdivision flags)
+			isEmojiSequenceRune(r):
 			return true
 		case unicode.Is(pictograph, r) && uniseg.StringWidth(string(r)) == 2:
 			return true
@@ -85,15 +81,25 @@ func isEmoji(cluster string) bool {
 func fragile(cluster string) bool {
 	for _, r := range cluster {
 		switch {
-		case r == 0x200D, // zero-width joiner: 👨‍👩‍👧
-			r == 0x20E3,                  // combining keycap: #️⃣
-			r >= 0x1F1E6 && r <= 0x1F1FF, // regional indicators: 🇬🇧
-			r >= 0x1F3FB && r <= 0x1F3FF, // skin-tone modifiers: 👍🏽
-			r >= 0xE0020 && r <= 0xE007F: // tag characters (subdivision flags)
+		case isEmojiSequenceRune(r):
 			return true
 		case unicode.Is(pictograph, r) && !unicode.Is(safeEmoji, r):
 			return true
 		}
+	}
+	return false
+}
+
+// isEmojiSequenceRune reports codepoints whose presence proves the grapheme
+// is an emoji sequence, rather than an ordinary text pictograph.
+func isEmojiSequenceRune(r rune) bool {
+	switch {
+	case r == 0x200D, // zero-width joiner: 👨‍👩‍👧
+		r == 0x20E3,                  // combining keycap: #️⃣
+		r >= 0x1F1E6 && r <= 0x1F1FF, // regional indicators: 🇬🇧
+		r >= 0x1F3FB && r <= 0x1F3FF, // skin-tone modifiers: 👍🏽
+		r >= 0xE0020 && r <= 0xE007F: // tag characters (subdivision flags)
+		return true
 	}
 	return false
 }

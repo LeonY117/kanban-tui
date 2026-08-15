@@ -138,11 +138,12 @@ func (m *Model) focusedTextTarget() (emojiTarget, bool) {
 // after the widget has seen the key, so the text and the query stay in step.
 func (m *Model) trackTypeahead(msg tea.KeyMsg) {
 	target, ok := m.focusedTextTarget()
-	if !ok || (m.emojiType.active && m.emojiType.target != target) {
+	if !ok {
 		m.emojiType = emojiTypeahead{}
-		if !ok {
-			return
-		}
+		return
+	}
+	if m.emojiType.active && m.emojiType.target != target {
+		m.emojiType = emojiTypeahead{}
 	}
 
 	switch msg.Type {

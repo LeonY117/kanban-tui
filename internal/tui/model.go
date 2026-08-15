@@ -507,9 +507,9 @@ func fitHints(text, sep string, width int) string {
 	// negotiable, dropped from the end so the leading hints survive.
 	last := hints[len(hints)-1]
 	for n := len(hints) - 1; n > 0; n-- {
-		// Fresh slice each round: appending onto hints[:n] would write into the
-		// hint list we are still reading from.
-		candidate := strings.Join(append(append([]string{}, hints[:n]...), last), sep)
+		// Concatenating leaves the hint list intact; appending onto hints[:n]
+		// could overwrite the final hint we are protecting.
+		candidate := strings.Join(hints[:n], sep) + sep + last
 		if lipgloss.Width(candidate) <= width {
 			return candidate
 		}
@@ -546,15 +546,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// owns while its list is on screen, and otherwise lets the keystroke reach
 	// the field and mirrors it afterwards. One place, rather than a hook in
 	// each of the seven handlers that own a text widget.
-	if key, ok := msg.(tea.KeyMsg); ok {
+	key, isKey := msg.(tea.KeyMsg)
+	if isKey {
 		if consumed, cmd := m.typeaheadKey(key); consumed {
 			return m, tea.Batch(cmd, m.titleCmd())
 		}
-		next, cmd := m.update(msg)
-		m.trackTypeahead(key)
-		return next, tea.Batch(cmd, m.titleCmd())
 	}
+
 	next, cmd := m.update(msg)
+	if isKey {
+		m.trackTypeahead(key)
+	}
 	return next, tea.Batch(cmd, m.titleCmd())
 }
 
@@ -2781,11 +2783,12 @@ func (m *Model) addHelpLine() string {
 		"enter: save",
 		hk("card.emoji") + ": emoji",
 	}
-	if m.addFocusIdx == addFocusDesc && !m.addDescEditing {
-		parts = append(parts, "enter: edit", "h/l: field")
-	}
-	if m.addFocusIdx == addFocusDesc && m.addDescEditing {
-		parts = []string{"enter: save", "shift+enter: new line", "esc: exit edit"}
+	if m.addFocusIdx == addFocusDesc {
+		if m.addDescEditing {
+			parts = []string{"enter: save", "shift+enter: new line", "esc: exit edit"}
+		} else {
+			parts = append(parts, "enter: edit", "h/l: field")
+		}
 	}
 	parts = append(parts, "esc: cancel")
 	// helpStyle pads a cell either side, so the text budget is two

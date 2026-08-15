@@ -49,6 +49,10 @@ var updateCmd = &cobra.Command{
 		}
 
 		fmt.Printf("Updated %s\n", id)
+		if cmd.Flags().Changed("title") {
+			title, _ := cmd.Flags().GetString("title")
+			warnFragileEmoji(cmd, title)
+		}
 		return nil
 	},
 }

@@ -24,6 +24,7 @@ const (
 	zoneTagRow
 	zoneMetaField   // one field inside a detail Info panel: 0 status, 1 assign, 2 tags
 	zoneAddField    // one field of the new-ticket popup, an addFocus* value
+	zoneEmojiCell   // one emoji in the add popup's picker grid, a filtered index
 	zoneRenameField // one input of the sprint rename form, a renameFocus* value
 	zoneBoardBadge  // the board name in the footer — opens the board description
 )
@@ -121,6 +122,8 @@ func (m *Model) mouseScroll(msg tea.MouseMsg, dir int) (tea.Model, tea.Cmd) {
 		m.moveTagPickerCursor(dir)
 	case zoneSettingsRow, zoneSettingsTab:
 		m.moveSettingsCursor(dir)
+	case zoneEmojiCell:
+		m.moveEmojiRow(dir)
 	}
 	return m, nil
 }
@@ -215,7 +218,12 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// A click inside the editor already open is a no-op. Falling through would
 	// blur it, save, and reopen it — the same text, but with the cursor thrown
 	// back to where the editor puts it rather than where it was left.
-	if m.editTitle.Focused() || m.editDesc.Focused() {
+	//
+	// The emoji picker is the one surface that floats over a still-focused
+	// editor and lands its pick back into it, so clicking one of its cells is
+	// part of that edit, not a click away from it. Without the exemption the
+	// save below runs first and writes the title without the emoji.
+	if (m.editTitle.Focused() || m.editDesc.Focused()) && z.kind != zoneEmojiCell {
 		if z.kind == zoneField && z.idx == m.editField {
 			return m, nil
 		}
@@ -306,6 +314,10 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, textarea.Blink
 		}
 		m.focusAddField(z.idx)
+	case zoneEmojiCell:
+		if filtered := m.emojiFiltered(); z.idx < len(filtered) {
+			m.applyPickedEmoji(filtered[z.idx].Emoji)
+		}
 	case zoneRenameField:
 		m.setRenameFocus(z.idx)
 	case zoneSettingsRow:

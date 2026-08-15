@@ -43,6 +43,7 @@ type keyMap struct {
 	Search      key.Binding
 	TagPicker   key.Binding
 	Info        key.Binding
+	Emoji       key.Binding
 }
 
 var keys = defaultKeyMap()
@@ -108,5 +109,8 @@ func defaultKeyMap() keyMap {
 		// `t` — which is why tagPickerAlias is reserved (see reservedKeys).
 		TagPicker: key.NewBinding(key.WithKeys("#", tagPickerAlias), key.WithHelp("#", "tags")),
 		Info:      key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "board info")),
+		// Not ctrl+e: that is emacs' end-of-line, which bubbles binds in every
+		// textinput and textarea, and this key only ever fires inside one.
+		Emoji: key.NewBinding(key.WithKeys("alt+e"), key.WithHelp("alt+e", "emoji")),
 	}
 }

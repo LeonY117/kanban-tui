@@ -35,6 +35,7 @@ const (
 	settingsView          // floating settings popup
 	tagView               // floating tag picker, feeds the search
 	infoView              // floating board-description popup
+	emojiView             // floating emoji picker over any text field
 )
 
 // inputMode tracks what the user is typing into.
@@ -177,6 +178,8 @@ type Model struct {
 	addDesc        textarea.Model
 	addTags        textinput.Model
 	addAssign      textinput.Model
+	emojiPick      emojiPicker
+	emojiType      emojiTypeahead
 	addFocusIdx    int
 	addDescEditing bool
 	addConfirmQuit bool // esc pressed with content in the popup — awaiting y/N
@@ -453,9 +456,9 @@ func (m *Model) footerLine() string {
 		// could push out the very thing that explains why the board looks
 		// half empty.
 		chip := m.searchCountLabel()
-		rightText = chip + " | " + fitHints(m.helpText(), budget-lipgloss.Width(chip)-3)
+		rightText = chip + " | " + fitHints(m.helpText(), hintSep, budget-lipgloss.Width(chip)-3)
 	default:
-		rightText = fitHints(m.helpText(), budget)
+		rightText = fitHints(m.helpText(), hintSep, budget)
 	}
 	help := helpStyle.Render(rightText)
 	return m.renderFooter(badge, help)
@@ -475,18 +478,27 @@ func (m *Model) renderFooter(parts ...string) string {
 	return ansi.Truncate(line, m.width, "…")
 }
 
+// The two separators help lines are written with: the board and pickers use a
+// pipe, the add popup a bullet.
+const (
+	hintSep   = " | "
+	bulletSep = "  •  "
+)
+
 // fitHints drops whole hints off the end of a help line until it fits, keeping
 // the last one — how to get out of wherever you are.
 //
 // Bubble Tea truncates a rendered line to the terminal width with no ellipsis,
-// so an over-long footer loses its tail silently. The picker's footer is the
-// only place its keys are documented, and the tail is where the close hint
-// lives, so losing it strands the user in a popup with no visible way out.
-func fitHints(text string, width int) string {
+// and a popup's interior truncates rather than wrapping, so an over-long footer
+// loses its tail silently. The footer is the only place a popup's keys are
+// documented, and the tail is where the close hint lives, so losing it strands
+// the user in a popup with no visible way out. The add popup found this the
+// hard way: its interior is 62 cells on a wide terminal but 54 at the narrowest
+// supported width, where one added hint took `esc: cancel` with it.
+func fitHints(text, sep string, width int) string {
 	if width < 1 || lipgloss.Width(text) <= width {
 		return text
 	}
-	const sep = " | "
 	hints := strings.Split(text, sep)
 	if len(hints) < 2 {
 		return text
@@ -495,9 +507,9 @@ func fitHints(text string, width int) string {
 	// negotiable, dropped from the end so the leading hints survive.
 	last := hints[len(hints)-1]
 	for n := len(hints) - 1; n > 0; n-- {
-		// Fresh slice each round: appending onto hints[:n] would write into the
-		// hint list we are still reading from.
-		candidate := strings.Join(append(append([]string{}, hints[:n]...), last), sep)
+		// Concatenating leaves the hint list intact; appending onto hints[:n]
+		// could overwrite the final hint we are protecting.
+		candidate := strings.Join(hints[:n], sep) + sep + last
 		if lipgloss.Width(candidate) <= width {
 			return candidate
 		}
@@ -530,7 +542,23 @@ func (m *Model) titleCmd() tea.Cmd {
 // search jumps; threading a title command out of each would leave the sixth to
 // remember.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// The `:` typeahead brackets the real update: it takes the few keys it
+	// owns while its list is on screen, and otherwise lets the keystroke reach
+	// the field and mirrors it afterwards. One place, rather than a hook in
+	// each of the seven handlers that own a text widget.
+	// Named keyMsg, not key: this file's other handlers reach for the bubbles
+	// key package by that name.
+	keyMsg, isKey := msg.(tea.KeyMsg)
+	if isKey {
+		if consumed, cmd := m.typeaheadKey(keyMsg); consumed {
+			return m, tea.Batch(cmd, m.titleCmd())
+		}
+	}
+
 	next, cmd := m.update(msg)
+	if isKey {
+		m.trackTypeahead(keyMsg)
+	}
 	return next, tea.Batch(cmd, m.titleCmd())
 }
 
@@ -599,6 +627,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateTagPicker(msg)
 		case infoView:
 			return m.updateInfo(msg)
+		case emojiView:
+			return m.updateEmojiPicker(msg)
 		}
 	}
 	return m, nil
@@ -623,7 +653,9 @@ func (m *Model) View() string {
 		content = lipgloss.JoinVertical(lipgloss.Left, content, m.viewInput())
 	}
 
-	return content
+	// Last, so it floats over whatever was drawn — and after the zones it
+	// anchors to have been registered by the render above.
+	return m.overlayTypeahead(content)
 }
 
 func (m *Model) reload() {
@@ -644,7 +676,15 @@ func (m *Model) reload() {
 	// renders from selectedTicket while writes go to editTicketID, and a
 	// mismatch sends the next save to a card nobody is looking at.
 	m.clampCursors()
-	if m.view == splitView || m.view == detailView {
+	// The emoji picker floats over a still-focused editor without changing
+	// what is being edited, so the guard has to see through it to the view
+	// underneath — otherwise a reload while the picker is open skips the
+	// re-seed and the next save lands on a card nobody is looking at.
+	editing := m.view
+	if editing == emojiView {
+		editing = m.emojiPick.returnView
+	}
+	if editing == splitView || editing == detailView {
 		if t := m.selectedTicket(); t == nil || t.ID != m.editTicketID {
 			m.refreshDetailEditors()
 		}
@@ -962,6 +1002,17 @@ func newDescArea(value string) textarea.Model {
 
 // refreshDetailEditors sets up the edit widgets for the currently selected ticket.
 func (m *Model) refreshDetailEditors() {
+	// A pending emoji pick or shortcode was aimed at the editors these lines
+	// are about to replace, and neither remembers which ticket it was armed
+	// on. Left standing, the next enter writes the emoji into whichever card
+	// the editors now hold: open the picker on one card, let an agent move it,
+	// and the pick lands on the card that slid into its place. Closing under
+	// the user is the mild outcome here.
+	if m.emojiPick.open {
+		m.closeEmojiPicker()
+	}
+	m.emojiType = emojiTypeahead{}
+
 	t := m.selectedTicket()
 	if t == nil {
 		m.editTicketID = ""
@@ -1170,6 +1221,9 @@ func (m *Model) updateSplitDetailMeta(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) updateSplitDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.editTitle.Focused() {
 		// Editing mode
+		if key.Matches(msg, keys.Emoji) {
+			return m.openEmojiPicker(emojiToEditTitle)
+		}
 		switch msg.String() {
 		case "esc":
 			m.editTitle.Blur()
@@ -1245,6 +1299,9 @@ func (m *Model) updateSplitDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.editDesc.Blur()
 			m.saveEdit()
 			return m, nil
+		}
+		if key.Matches(msg, keys.Emoji) {
+			return m.openEmojiPicker(emojiToEditDesc)
 		}
 		var cmd tea.Cmd
 		m.editDesc, cmd = m.editDesc.Update(msg)
@@ -1496,6 +1553,8 @@ func (m *Model) updateDetailTitle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.editTitle.Blur()
 			m.saveEdit()
 			return m, nil
+		case key.Matches(msg, keys.Emoji):
+			return m.openEmojiPicker(emojiToEditTitle)
 		// Goes through the binding rather than a literal "tab": the picker key
 		// is rebindable, and a hard-coded alias here stayed live after a rebind.
 		case key.Matches(msg, keys.BoardPicker):
@@ -1538,6 +1597,9 @@ func (m *Model) updateDetailDesc(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.editDesc.Blur()
 			m.saveEdit()
 			return m, nil
+		}
+		if key.Matches(msg, keys.Emoji) {
+			return m.openEmojiPicker(emojiToEditDesc)
 		}
 		if key.Matches(msg, keys.BoardPicker) {
 			m.editDesc.Blur()
@@ -1582,6 +1644,12 @@ func (m *Model) startInput(mode inputMode, prompt string) {
 }
 
 func (m *Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Without this the key reaches textinput.Update and types a literal "e"
+	// into the tag or assignee being edited — the one text field in the TUI
+	// where the emoji key did nothing it advertised.
+	if key.Matches(msg, keys.Emoji) {
+		return m.openEmojiPicker(emojiToMetaInput)
+	}
 	switch msg.String() {
 	case "enter":
 		m.submitInput()
@@ -2241,6 +2309,7 @@ func (m *Model) enterAddPopup() (tea.Model, tea.Cmd) {
 	m.addFocusIdx = addFocusTitle
 	m.addDescEditing = false
 	m.addConfirmQuit = false
+	m.emojiPick = emojiPicker{}
 	m.popupReturnView = m.view
 	m.view = addView
 	return m, textinput.Blink
@@ -2289,9 +2358,26 @@ func (m *Model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.addDescEditing = false
 			return m, nil
 		}
+		if key.Matches(msg, keys.Emoji) {
+			return m.openEmojiPicker(emojiToAddDesc)
+		}
 		var cmd tea.Cmd
 		m.addDesc, cmd = m.addDesc.Update(msg)
 		return m, cmd
+	}
+
+	// Ahead of the switch below, which reads literal key names: this one is
+	// rebindable, so it has to go through the binding.
+	if key.Matches(msg, keys.Emoji) {
+		switch m.addFocusIdx {
+		case addFocusDesc:
+			return m.openEmojiPicker(emojiToAddDesc)
+		case addFocusTags:
+			return m.openEmojiPicker(emojiToAddTags)
+		case addFocusAssign:
+			return m.openEmojiPicker(emojiToAddAssign)
+		}
+		return m.openEmojiPicker(emojiToAddTitle)
 	}
 
 	switch msg.String() {
@@ -2436,7 +2522,10 @@ func (m *Model) submitAdd() {
 	}
 }
 
-func (m *Model) viewAdd() string {
+// addPopupSize is the new-ticket popup's outer size. Split out from viewAdd so
+// the help-line width test can assert against the same geometry the renderer
+// uses, rather than restating the numbers.
+func (m *Model) addPopupSize() (int, int) {
 	popupWidth := 66
 	if popupWidth > m.width-4 {
 		popupWidth = m.width - 4
@@ -2451,6 +2540,20 @@ func (m *Model) viewAdd() string {
 	if popupHeight < 12 {
 		popupHeight = 12
 	}
+	return popupWidth, popupHeight
+}
+
+// addInnerWidth is the width the popup's inner panels render at.
+func (m *Model) addInnerWidth() int {
+	w, _ := m.addPopupSize()
+	if w-4 < 10 {
+		return 10
+	}
+	return w - 4
+}
+
+func (m *Model) viewAdd() string {
+	popupWidth, popupHeight := m.addPopupSize()
 
 	backdrop := m.popupBackdrop(m.popupReturnView)
 	// The backdrop's zones belong to a view the user can't reach right now.
@@ -2505,6 +2608,8 @@ func (m *Model) renderView(v viewMode) string {
 		return m.viewTagPicker()
 	case infoView:
 		return m.viewInfo()
+	case emojiView:
+		return m.viewEmoji()
 	default:
 		return m.viewBoard()
 	}
@@ -2513,7 +2618,7 @@ func (m *Model) renderView(v viewMode) string {
 // popupBackdrop renders the source view as the backdrop behind a popup, but
 // avoids recursing into popup views themselves.
 func (m *Model) popupBackdrop(source viewMode) string {
-	if source == addView || source == pickerView || source == moveView || source == settingsView || source == tagView || source == infoView {
+	if source == addView || source == pickerView || source == moveView || source == settingsView || source == tagView || source == infoView || source == emojiView {
 		return m.viewBoard()
 	}
 	return m.renderView(source)
@@ -2549,10 +2654,7 @@ func (m *Model) renderAddPopup(width, height int, origin point) string {
 	// width is the outer popup width. The outer border eats 2 cols; we also
 	// reserve 1 col of left pad + 1 col of right pad so inner panels sit
 	// symmetrically inside the popup.
-	innerWidth := width - 4
-	if innerWidth < 10 {
-		innerWidth = 10
-	}
+	innerWidth := m.addInnerWidth()
 
 	// Content starts one row below the popup's top border, one column in from
 	// its left border, plus the left pad every line below carries. While the
@@ -2675,18 +2777,25 @@ func (m *Model) addHelpLine() string {
 		return lipgloss.NewStyle().Foreground(peach).Render(m.notice)
 	}
 
+	// MaxWidth truncates rather than wraps, so this line has a budget and the
+	// tail is what gets eaten — which is where "esc: cancel" lives. "tab:
+	// field" implies shift+tab the way every other TUI does, buying room.
 	parts := []string{
-		"tab/shift-tab: field",
+		"tab: field",
 		"enter: save",
+		hk("card.emoji") + ": emoji",
 	}
-	if m.addFocusIdx == addFocusDesc && !m.addDescEditing {
-		parts = append(parts, "enter: edit", "h/l: field")
-	}
-	if m.addFocusIdx == addFocusDesc && m.addDescEditing {
-		parts = []string{"enter: save", "shift+enter: new line", "esc: exit edit"}
+	if m.addFocusIdx == addFocusDesc {
+		if m.addDescEditing {
+			parts = []string{"enter: save", "shift+enter: new line", "esc: exit edit"}
+		} else {
+			parts = append(parts, "enter: edit", "h/l: field")
+		}
 	}
 	parts = append(parts, "esc: cancel")
-	return helpStyle.Render(strings.Join(parts, "  •  "))
+	// helpStyle pads a cell either side, so the text budget is two
+	// short of the interior.
+	return helpStyle.Render(fitHints(strings.Join(parts, bulletSep), bulletSep, m.addInnerWidth()-2))
 }
 
 // ─── Board picker ───────────────────────────────────────────────────
@@ -3461,6 +3570,14 @@ func (m *Model) helpText() string {
 			return "enter save | esc discard | shift+enter newline"
 		}
 		return "enter edit | esc close"
+	case emojiView:
+		if m.emojiPick.filtering {
+			return "type filter | ctrl+n/p move | enter keep filter | esc clear"
+		}
+		if m.emojiPick.filter.Value() != "" {
+			return "hjkl move | / edit filter | enter pick | esc clear filter"
+		}
+		return "hjkl move | / filter | enter pick | esc close"
 	case settingsView:
 		return "j/k select | h/l section | enter change | esc close"
 	case tagView:

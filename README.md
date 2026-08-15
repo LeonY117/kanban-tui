@@ -42,6 +42,7 @@ Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden
 | `m` | Move ticket — boards on the left, that board's columns on the right |
 | `c` | Copy to clipboard — the ticket id from a list, or the focused title / description |
 | `a` | Add a new ticket (floating popup) |
+| `alt+e` (editing a title, description, tag or assignee) | Emoji picker — `h/j/k/l` or the wheel move, `/` filters like ticket search, `enter` picks, `esc` back |
 | `e` / `enter` | Edit selected field |
 | `enter` (while editing) | Save and stop editing — in the add popup, create the ticket |
 | `shift+enter` | New line inside a description |
@@ -66,6 +67,22 @@ Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden
 `shift+enter` only reaches the TUI if your terminal sends an escape for it —
 in Ghostty, `keybind = shift+enter=text:\x1b\r`. `ctrl+j` works everywhere as
 a fallback.
+
+The emoji picker is `alt+e` rather than the `ctrl+e` you might reach for: that
+is emacs' end-of-line, which bubbles binds inside every text field, and this
+key only ever fires inside one. Like most keys here it can be rebound from
+`?` → Shortcuts.
+
+Typing `:` in any of those fields starts a shortcode typeahead instead — two
+characters in, a list of matches appears under the cursor, `up`/`down` move it,
+`enter` or `tab` accepts, `esc` dismisses without touching what you typed. It
+matches shortcodes only, so `:wip` stays text and the `enter` that submits a
+ticket still submits it. `alt+e` is for browsing when you don't know what you
+want; `:` is for when you do.
+
+Both offer only emoji whose width terminals agree on, so neither can skew a
+board. That agreement is narrower than you would hope — see
+[`kanban add --help`](#cli).
 
 There are three ways to the board's description. `i` opens it from the board and
 from the board picker, clicking the board name in the footer opens it from any

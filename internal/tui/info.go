@@ -133,6 +133,8 @@ func (m *Model) updateInfo(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, keys.Enter):
 			m.saveInfoEdit()
 			return m, nil
+		case key.Matches(msg, keys.Emoji):
+			return m.openEmojiPicker(emojiToInfoDesc)
 		}
 		var cmd tea.Cmd
 		m.infoDesc, cmd = m.infoDesc.Update(msg)

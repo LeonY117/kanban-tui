@@ -563,7 +563,7 @@ func TestFooterKeepsTheEscapeHintWhenItCannotFit(t *testing.T) {
 	}
 
 	for _, width := range []int{200, 120, 100, 80, 60, 40, 20} {
-		got := fitHints(full, width)
+		got := fitHints(full, hintSep, width)
 		if lipgloss.Width(got) > width {
 			t.Errorf("at width %d the footer is %d wide: %q", width, lipgloss.Width(got), got)
 		}

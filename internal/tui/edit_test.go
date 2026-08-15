@@ -15,8 +15,12 @@ func keyPress(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyEsc}
 	case "alt+enter":
 		return tea.KeyMsg{Type: tea.KeyEnter, Alt: true}
+	case "alt+e":
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e"), Alt: true}
 	case "tab":
 		return tea.KeyMsg{Type: tea.KeyTab}
+	case "backspace":
+		return tea.KeyMsg{Type: tea.KeyBackspace}
 	}
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 }

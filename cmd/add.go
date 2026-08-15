@@ -11,7 +11,16 @@ import (
 var addCmd = &cobra.Command{
 	Use:   "add <title>",
 	Short: "Create a new ticket",
-	Args:  cobra.MinimumNArgs(1),
+	Long: `Create a new ticket.
+
+Emoji in titles: prefer plain single-codepoint emoji (🔒 📦 🎯). Variation-selector
+emoji (✏️ ⚠️ 🗄️), multi-part sequences (👍🏽 🇬🇧 #️⃣) and post-2018 emoji (🫠) measure
+narrower in VS Code and Cursor than kanban lays out for, which skews that
+ticket's board row; kanban prints a note when a title contains one.
+
+No emoji survives every terminal — one carrying older width tables draws all of
+them a cell narrow, whatever they are made of.`,
+	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		title := strings.Join(args, " ")
 
@@ -32,6 +41,7 @@ var addCmd = &cobra.Command{
 		}
 
 		fmt.Printf("Created %s: %s\n", ticket.ShortID, ticket.Title)
+		warnFragileEmoji(cmd, ticket.Title)
 		return nil
 	},
 }

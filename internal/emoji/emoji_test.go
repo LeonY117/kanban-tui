@@ -37,3 +37,28 @@ func TestFragile(t *testing.T) {
 		})
 	}
 }
+
+// Lead's answer is acted on destructively — setTitlePrefix deletes what it
+// returns — so it asks whether a cluster is presented as an emoji, not merely
+// whether it is Extended_Pictographic. That property also covers ©, ™ and ‼,
+// and a title of "© 2026" lost its © the moment someone picked an emoji.
+func TestLeadKeepsTextPictographs(t *testing.T) {
+	for _, tc := range []struct {
+		title string
+		want  string
+	}{
+		{"© 2026 acme", ""},
+		{"™ trademark", ""},
+		{"‼ urgent", ""},
+		{"plain title", ""},
+		{"🐛 a bug", "🐛"},
+		{"⌚ a watch", "⌚"},
+		{"🗄️ archived", "🗄️"}, // VS16 promotes it
+		{"👨‍👩‍👧 household", "👨‍👩‍👧"}, // a ZWJ sequence is its own proof
+		{"🇬🇧 rollout", "🇬🇧"},
+	} {
+		if got := Lead(tc.title); got != tc.want {
+			t.Errorf("Lead(%q) = %q, want %q", tc.title, got, tc.want)
+		}
+	}
+}

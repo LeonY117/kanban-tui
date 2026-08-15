@@ -595,9 +595,9 @@ func (m *Model) searchFooter(badge string) string {
 	// hint by construction. Giving the strip a fixed share instead silently
 	// dropped candidates while hint text it outranks sat next to it.
 	floor := count + " | esc cancel"
-	right := fitHints(hints, budget)
+	right := fitHints(hints, hintSep, budget)
 	if strip := m.completionStrip(budget - lipgloss.Width(floor) - 2); strip != "" {
-		right = strip + "  " + fitHints(hints, budget-lipgloss.Width(strip)-2)
+		right = strip + "  " + fitHints(hints, hintSep, budget-lipgloss.Width(strip)-2)
 	}
 	return m.renderFooter(badge, input, helpStyle.Render(right))
 }

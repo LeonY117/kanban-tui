@@ -458,3 +458,34 @@ func TestEmojiPickerViewShowsGridAndName(t *testing.T) {
 		t.Errorf("picker should show the selected emoji's name %q", m.emojiPick.list[0].Name)
 	}
 }
+
+// Neither the picker nor the typeahead remembers which ticket it was armed on,
+// and a reload re-seeds the detail editors in place. Open the picker on one
+// card, let an agent move it, and the pick landed on the card that slid into
+// its place — a different ticket, edited without anyone asking.
+func TestReloadClosesAPickerAimedAtTheOldCard(t *testing.T) {
+	m, s := boardWith(t, "alpha|TODO", "beta|TODO")
+	m.Update(keyPress("enter"))
+	m.splitFocus, m.editField = 1, 1 // the detail pane, on the title
+	m.Update(keyPress("e"))          // edit it
+	editing := m.editTicketID
+	m.Update(keyPress("alt+e"))
+	if m.view != emojiView {
+		t.Fatal("setup: the picker should be open")
+	}
+
+	// Something else moves the edited card off this column.
+	if err := s.Update(editing, func(tk *model.Ticket) { tk.Status = model.StatusDone }); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	m.reload()
+	m.clampCursors()
+
+	if m.view == emojiView {
+		t.Error("the picker should close when the editors it aimed at are replaced")
+	}
+	m.Update(keyPress("enter"))
+	if m.editTitle.Value() != "beta" {
+		t.Errorf("the pick landed on the card that slid into place — title=%q", m.editTitle.Value())
+	}
+}

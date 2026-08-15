@@ -214,3 +214,73 @@ func TestTypeaheadRendersTheList(t *testing.T) {
 		t.Error("the list should show the emoji itself")
 	}
 }
+
+// The query is only a claim about the text. These three prove it is checked
+// before anything acts on it — each one used to splice an emoji into text the
+// user never typed a `:` into.
+
+// A field at its character limit refuses the rune, but the key still arrived,
+// so the tracker counted it. Enter then deleted one more rune than the user
+// had typed, taking a real character with it.
+func TestTypeaheadIgnoresRunesTheFieldRefused(t *testing.T) {
+	m := testModel(t)
+	m.Update(keyPress("a"))
+	m.addTitle.SetValue(strings.Repeat("x", 198)) // limit is 200
+	m.addTitle.CursorEnd()
+	for _, k := range []string{":", "f", "i"} { // the `i` never lands
+		m.Update(keyPress(k))
+	}
+	m.Update(keyPress("enter"))
+
+	if n := strings.Count(m.addTitle.Value(), "x"); n != 198 {
+		t.Errorf("the title lost real text: %d x's left of 198 — %q", n, m.addTitle.Value())
+	}
+}
+
+// Only KeyMsg reaches trackTypeahead, so a click moving focus left the popup
+// armed on the field the user had just left.
+func TestTypeaheadDropsWhenAClickMovesFocus(t *testing.T) {
+	m := testModel(t)
+	m.Update(keyPress("a"))
+	for _, k := range []string{":", "f", "i", "r", "e"} {
+		m.Update(keyPress(k))
+	}
+	if !m.typeaheadShowing() {
+		t.Fatal("setup: the popup should be showing")
+	}
+	m.View()
+	z := zoneOf(t, m, zoneAddField, 0, addFocusTags)
+	m.mouseClick(mouseAt(z.x, z.y))
+	if m.addFocusIdx != addFocusTags {
+		t.Fatalf("setup: the click should focus tags, got %v", m.addFocusIdx)
+	}
+
+	if m.typeaheadShowing() {
+		t.Error("the popup should not survive a click onto another field")
+	}
+	m.Update(keyPress("enter"))
+	if strings.Contains(m.addTitle.Value(), "🔥") {
+		t.Errorf("enter applied to the field the user left — title=%q", m.addTitle.Value())
+	}
+}
+
+// Editing an existing card's tags or assignee borrows the shared one-line
+// input, which focusedTextTarget didn't know about: `:` did nothing there, and
+// the emoji key fell through to the widget and typed a literal "e".
+func TestEmojiKeysReachTheSharedMetaInput(t *testing.T) {
+	m, _ := boardWith(t, "ship it|TODO")
+	m.Update(keyPress("enter"))
+	m.metaIdx = 1 // assignee
+	m.editMetaField()
+	if m.inputMode == inputNone {
+		t.Fatal("setup: the meta input should be open")
+	}
+
+	m.Update(keyPress("alt+e"))
+	if m.view != emojiView {
+		t.Fatalf("the emoji key should open the picker, got view %v", m.view)
+	}
+	if m.input.Value() != "" {
+		t.Errorf("the emoji key typed into the field instead: %q", m.input.Value())
+	}
+}

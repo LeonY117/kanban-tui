@@ -44,6 +44,10 @@ const (
 	emojiToEditTitle
 	emojiToEditDesc
 	emojiToInfoDesc
+	// emojiToMetaInput is the one-line input the detail pane borrows for an
+	// existing card's tags and assignee. It is the same widget for both, which
+	// is why one target covers them.
+	emojiToMetaInput
 )
 
 type emojiPicker struct {
@@ -384,6 +388,8 @@ func (m *Model) applyPickedEmoji(e string) {
 		insertAtCursor(&m.addTags, e)
 	case emojiToAddAssign:
 		insertAtCursor(&m.addAssign, e)
+	case emojiToMetaInput:
+		insertAtCursor(&m.input, e)
 	}
 	m.closeEmojiPicker()
 }

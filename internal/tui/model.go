@@ -456,9 +456,9 @@ func (m *Model) footerLine() string {
 		// could push out the very thing that explains why the board looks
 		// half empty.
 		chip := m.searchCountLabel()
-		rightText = chip + " | " + fitHints(m.helpText(), budget-lipgloss.Width(chip)-3)
+		rightText = chip + " | " + fitHints(m.helpText(), hintSep, budget-lipgloss.Width(chip)-3)
 	default:
-		rightText = fitHints(m.helpText(), budget)
+		rightText = fitHints(m.helpText(), hintSep, budget)
 	}
 	help := helpStyle.Render(rightText)
 	return m.renderFooter(badge, help)
@@ -478,18 +478,27 @@ func (m *Model) renderFooter(parts ...string) string {
 	return ansi.Truncate(line, m.width, "…")
 }
 
+// The two separators help lines are written with: the board and pickers use a
+// pipe, the add popup a bullet.
+const (
+	hintSep   = " | "
+	bulletSep = "  •  "
+)
+
 // fitHints drops whole hints off the end of a help line until it fits, keeping
 // the last one — how to get out of wherever you are.
 //
 // Bubble Tea truncates a rendered line to the terminal width with no ellipsis,
-// so an over-long footer loses its tail silently. The picker's footer is the
-// only place its keys are documented, and the tail is where the close hint
-// lives, so losing it strands the user in a popup with no visible way out.
-func fitHints(text string, width int) string {
+// and a popup's interior truncates rather than wrapping, so an over-long footer
+// loses its tail silently. The footer is the only place a popup's keys are
+// documented, and the tail is where the close hint lives, so losing it strands
+// the user in a popup with no visible way out. The add popup found this the
+// hard way: its interior is 62 cells on a wide terminal but 54 at the narrowest
+// supported width, where one added hint took `esc: cancel` with it.
+func fitHints(text, sep string, width int) string {
 	if width < 1 || lipgloss.Width(text) <= width {
 		return text
 	}
-	const sep = " | "
 	hints := strings.Split(text, sep)
 	if len(hints) < 2 {
 		return text
@@ -989,6 +998,17 @@ func newDescArea(value string) textarea.Model {
 
 // refreshDetailEditors sets up the edit widgets for the currently selected ticket.
 func (m *Model) refreshDetailEditors() {
+	// A pending emoji pick or shortcode was aimed at the editors these lines
+	// are about to replace, and neither remembers which ticket it was armed
+	// on. Left standing, the next enter writes the emoji into whichever card
+	// the editors now hold: open the picker on one card, let an agent move it,
+	// and the pick lands on the card that slid into its place. Closing under
+	// the user is the mild outcome here.
+	if m.emojiPick.open {
+		m.closeEmojiPicker()
+	}
+	m.emojiType = emojiTypeahead{}
+
 	t := m.selectedTicket()
 	if t == nil {
 		m.editTicketID = ""
@@ -1620,6 +1640,12 @@ func (m *Model) startInput(mode inputMode, prompt string) {
 }
 
 func (m *Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Without this the key reaches textinput.Update and types a literal "e"
+	// into the tag or assignee being edited — the one text field in the TUI
+	// where the emoji key did nothing it advertised.
+	if key.Matches(msg, keys.Emoji) {
+		return m.openEmojiPicker(emojiToMetaInput)
+	}
 	switch msg.String() {
 	case "enter":
 		m.submitInput()
@@ -2747,9 +2773,9 @@ func (m *Model) addHelpLine() string {
 		return lipgloss.NewStyle().Foreground(peach).Render(m.notice)
 	}
 
-	// The popup's interior is 62 cells, and MaxWidth truncates rather than
-	// wraps — so this line has a budget. "tab: field" implies shift+tab the
-	// way every other TUI does, and buys the room the emoji hint needs.
+	// MaxWidth truncates rather than wraps, so this line has a budget and the
+	// tail is what gets eaten — which is where "esc: cancel" lives. "tab:
+	// field" implies shift+tab the way every other TUI does, buying room.
 	parts := []string{
 		"tab: field",
 		"enter: save",
@@ -2762,7 +2788,9 @@ func (m *Model) addHelpLine() string {
 		parts = []string{"enter: save", "shift+enter: new line", "esc: exit edit"}
 	}
 	parts = append(parts, "esc: cancel")
-	return helpStyle.Render(strings.Join(parts, "  •  "))
+	// helpStyle pads a cell either side, so the text budget is two
+	// short of the interior.
+	return helpStyle.Render(fitHints(strings.Join(parts, bulletSep), bulletSep, m.addInnerWidth()-2))
 }
 
 // ─── Board picker ───────────────────────────────────────────────────

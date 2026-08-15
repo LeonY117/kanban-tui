@@ -4,11 +4,19 @@ package tui
 // type emoji. alt+e is for browsing — you don't know what you want; `:` is for
 // when you do, and never leaves the keyboard or the text you're writing.
 //
-// It is keystroke-driven rather than derived from the field's text: `:` arms
-// it, word characters extend the query, backspace shortens it, and anything
-// else — a space, an arrow, a click — drops it. That means no cursor
-// arithmetic to keep in sync with six different widgets, and it fails safe:
-// the state can only ever be wrong in the direction of not showing.
+// The query is built from keystrokes — `:` arms it, word characters extend it,
+// backspace shortens it, a space or an arrow drops it — but a keystroke log is
+// not on its own a safe thing to splice text with. Only KeyMsg reaches
+// trackTypeahead, so anything that moves the cursor or the text without one
+// leaves a stale query standing: a click onto another field, a wheel over a
+// description, a reload re-seeding the editors, or a rune the widget refused at
+// its character limit. Each of those let enter delete characters the user never
+// typed.
+//
+// So the query is a claim, and showing checks it before anyone acts on it: the
+// armed field must still be the focused one, and the text immediately before
+// the cursor must still read `:query`. Checking the text covers every one of
+// those paths at once, where a guard per path only works if it is complete.
 //
 // Nothing is intercepted until the popup is actually on screen (two characters
 // in, at least one match), so `enter` still submits a ticket titled ":wip" and
@@ -43,7 +51,40 @@ type emojiTypeahead struct {
 // typeahead may take keys off the field underneath it.
 func (m *Model) typeaheadShowing() bool {
 	t := m.emojiType
-	return t.active && len(t.query) >= typeaheadMinChars && len(t.matches) > 0
+	if !t.active || len(t.query) < typeaheadMinChars || len(t.matches) == 0 {
+		return false
+	}
+	// Focus first: a click onto another field leaves the armed one still
+	// holding `:query`, so the text check alone would pass and enter would
+	// splice into the field the user just left.
+	if target, ok := m.focusedTextTarget(); !ok || target != t.target {
+		return false
+	}
+	before, ok := m.textBeforeCursor(t.target)
+	return ok && strings.HasSuffix(before, ":"+t.query)
+}
+
+// textBeforeCursor is the target widget's text up to the cursor.
+func (m *Model) textBeforeCursor(t emojiTarget) (string, bool) {
+	if in := m.textInputFor(t); in != nil {
+		runes := []rune(in.Value())
+		return string(runes[:min(in.Position(), len(runes))]), true
+	}
+	if ta := m.textAreaFor(t); ta != nil {
+		lines := strings.Split(ta.Value(), "\n")
+		row := ta.Line()
+		if row < 0 || row >= len(lines) {
+			return "", false
+		}
+		// LineInfo is relative to the soft-wrapped row the cursor sits on;
+		// StartColumn is where that row begins in the logical line, so the two
+		// together are the cursor's rune offset into it.
+		li := ta.LineInfo()
+		runes := []rune(lines[row])
+		col := min(max(li.StartColumn+li.ColumnOffset, 0), len(runes))
+		return string(runes[:col]), true
+	}
+	return "", false
 }
 
 // shortcode is the `:memo:` form of an entry's name.
@@ -58,6 +99,13 @@ func isShortcodeRune(r rune) bool {
 // focusedTextTarget names the widget the user is typing into right now, or
 // reports false when the keystroke isn't going into text at all.
 func (m *Model) focusedTextTarget() (emojiTarget, bool) {
+	// The shared one-line input floats over whatever view is behind it and
+	// takes keys ahead of that view, so it is checked ahead of it here too.
+	// inputSelect is a chooser rather than text, and has nowhere to put an
+	// emoji.
+	if m.inputMode == inputAdd || m.inputMode == inputAssign {
+		return emojiToMetaInput, true
+	}
 	switch m.view {
 	case addView:
 		if m.addDescEditing {
@@ -251,6 +299,8 @@ func (m *Model) textInputFor(t emojiTarget) *textinput.Model {
 		return &m.addAssign
 	case emojiToEditTitle:
 		return &m.editTitle
+	case emojiToMetaInput:
+		return &m.input
 	}
 	return nil
 }

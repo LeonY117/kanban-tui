@@ -346,10 +346,10 @@ func TestInfoRenameChangesTheName(t *testing.T) {
 	m := pickerModel(t, "kanban")
 	openRename(t, m, "kanban")
 
-	if got := m.infoNameIn.Value(); got != "kanban" {
+	if got := m.infoNameInput.Value(); got != "kanban" {
 		t.Fatalf("name field seeded with %q, want kanban", got)
 	}
-	m.infoNameIn.SetValue("tools")
+	m.infoNameInput.SetValue("tools")
 	m.Update(keyPress("enter"))
 
 	if store.SprintExists("kanban") {
@@ -390,12 +390,12 @@ func TestInfoPrefixRetagsTickets(t *testing.T) {
 	if !m.infoEditing {
 		t.Fatal("enter did not open the prefix field")
 	}
-	if got := m.infoPrefixIn.Value(); got != "KA" {
+	if got := m.infoPrefixInput.Value(); got != "KA" {
 		t.Fatalf("prefix field seeded with %q, want KA", got)
 	}
 
 	// The hint is the part that isn't obvious from typing two letters.
-	m.infoPrefixIn.SetValue("TL")
+	m.infoPrefixInput.SetValue("TL")
 	if hint := m.infoIDHint(); !strings.Contains(hint, "KA1") || !strings.Contains(hint, "TL1") {
 		t.Errorf("id hint = %q, want it to spell out KA1 → TL1", hint)
 	}
@@ -426,7 +426,7 @@ func TestInfoRenameFollowsTheLiveBoard(t *testing.T) {
 	m.enterPicker()
 	openRename(t, m, "kanban")
 
-	m.infoNameIn.SetValue("tools")
+	m.infoNameInput.SetValue("tools")
 	m.Update(keyPress("enter"))
 
 	if m.sprintName != "tools" {
@@ -446,14 +446,14 @@ func TestInfoRenameKeepsTheFieldOpenOnError(t *testing.T) {
 	m := pickerModel(t, "alpha", "beta")
 	openRename(t, m, "beta")
 
-	m.infoNameIn.SetValue("alpha") // already taken
+	m.infoNameInput.SetValue("alpha") // already taken
 	m.Update(keyPress("enter"))
 
 	if !m.infoEditing {
 		t.Error("the field closed on a rejected rename")
 	}
-	if m.infoNameIn.Value() != "alpha" {
-		t.Errorf("typed value lost: %q", m.infoNameIn.Value())
+	if m.infoNameInput.Value() != "alpha" {
+		t.Errorf("typed value lost: %q", m.infoNameInput.Value())
 	}
 	if !strings.Contains(m.notice, "exists") {
 		t.Errorf("notice %q doesn't explain the refusal", m.notice)
@@ -499,7 +499,7 @@ func TestInfoRenameEscapeCancels(t *testing.T) {
 	m := pickerModel(t, "kanban")
 	openRename(t, m, "kanban")
 
-	m.infoNameIn.SetValue("something-else")
+	m.infoNameInput.SetValue("something-else")
 	m.Update(keyPress("esc"))
 
 	if m.infoEditing {
@@ -657,9 +657,9 @@ func TestClickPicksAnInfoPanel(t *testing.T) {
 	}
 	// A blurred input drops every key it is handed, so moving the highlight
 	// alone would leave the user typing into nothing.
-	before := m.infoNameIn.Value()
+	before := m.infoNameInput.Value()
 	m.Update(keyPress("Z"))
-	if m.infoNameIn.Value() == before {
+	if m.infoNameInput.Value() == before {
 		t.Errorf("name still %q after typing — the clicked field never took the keyboard", before)
 	}
 }
@@ -693,7 +693,6 @@ func TestInfoTypeaheadOnlyArmsOverTheDescription(t *testing.T) {
 // fields in it. If they drift apart, moving between them moves the frame.
 func TestInfoPopupMatchesTheAddPopupGeometry(t *testing.T) {
 	m := pickerModel(t, "demo")
-	selectBoard(t, m, "demo")
 
 	for _, size := range [][2]int{{110, 34}, {80, 24}, {60, 16}, {minTerminalWidth, minTerminalHeight}} {
 		m.width, m.height = size[0], size[1]
@@ -737,11 +736,7 @@ func TestInfoDescriptionTakesTheRemainingHeight(t *testing.T) {
 func TestInfoClickAwayFromAnOpenEditorDoesNotCrash(t *testing.T) {
 	m := pickerModel(t, "demo")
 	m.width, m.height = 110, 34
-	selectBoard(t, m, "demo")
-	m.updatePicker(keyPress("r")) // opens the name field for typing
-	if !m.infoEditing || m.infoField != infoFieldName {
-		t.Fatalf("setup: editing=%v field=%d", m.infoEditing, m.infoField)
-	}
+	openRename(t, m, "demo")
 	m.View()
 
 	desc := zoneOf(t, m, zoneInfoField, 0, infoFieldDesc)
@@ -754,9 +749,8 @@ func TestInfoClickAwayFromAnOpenEditorDoesNotCrash(t *testing.T) {
 func TestInfoClickAwayCommitsTheField(t *testing.T) {
 	m := pickerModel(t, "demo")
 	m.width, m.height = 110, 34
-	selectBoard(t, m, "demo")
-	m.updatePicker(keyPress("r"))
-	m.infoNameIn.SetValue("renamed-by-clicking-away")
+	openRename(t, m, "demo")
+	m.infoNameInput.SetValue("renamed-by-clicking-away")
 	m.View()
 
 	desc := zoneOf(t, m, zoneInfoField, 0, infoFieldDesc)
@@ -778,9 +772,8 @@ func TestInfoClickAwayCommitsTheField(t *testing.T) {
 func TestInfoClickAwayFromARefusedEditStaysPut(t *testing.T) {
 	m := pickerModel(t, "alpha", "beta")
 	m.width, m.height = 110, 34
-	selectBoard(t, m, "beta")
-	m.updatePicker(keyPress("r"))
-	m.infoNameIn.SetValue("alpha") // already taken
+	openRename(t, m, "beta")
+	m.infoNameInput.SetValue("alpha") // already taken
 	m.View()
 
 	desc := zoneOf(t, m, zoneInfoField, 0, infoFieldDesc)
@@ -790,8 +783,8 @@ func TestInfoClickAwayFromARefusedEditStaysPut(t *testing.T) {
 		t.Errorf("editing=%v field=%d — a refused save must keep the field and its text",
 			m.infoEditing, m.infoField)
 	}
-	if m.infoNameIn.Value() != "alpha" {
-		t.Errorf("typed value lost: %q", m.infoNameIn.Value())
+	if m.infoNameInput.Value() != "alpha" {
+		t.Errorf("typed value lost: %q", m.infoNameInput.Value())
 	}
 	if !store.SprintExists("beta") {
 		t.Error("beta was renamed anyway")
@@ -868,7 +861,7 @@ func TestInfoRenameLeavesDerivedViews(t *testing.T) {
 			m.mouseClick(mouseAt(badge.x, badge.y))
 			m.infoField = infoFieldName
 			m.Update(keyPress("enter"))
-			m.infoNameIn.SetValue("tools")
+			m.infoNameInput.SetValue("tools")
 			m.Update(keyPress("enter"))
 			m.Update(keyPress("esc"))
 
@@ -888,7 +881,7 @@ func TestInfoRenameFromPickerStillClosesToThePicker(t *testing.T) {
 	m := pickerModel(t, "demo")
 	m.width, m.height = 110, 34
 	openRename(t, m, "demo")
-	m.infoNameIn.SetValue("tools")
+	m.infoNameInput.SetValue("tools")
 	m.Update(keyPress("enter"))
 	m.Update(keyPress("esc"))
 
@@ -950,7 +943,7 @@ func TestInfoLongRefusalIsTruncatedNotClipped(t *testing.T) {
 	m.width, m.height = 110, 34
 	m.reloadPickerEntries()
 	openRename(t, m, "beta")
-	m.infoNameIn.SetValue("alpha") // taken by an archived sprint: a long message
+	m.infoNameInput.SetValue("alpha") // taken by an archived sprint: a long message
 	m.Update(keyPress("enter"))
 
 	if !strings.Contains(m.notice, "unarchive") {

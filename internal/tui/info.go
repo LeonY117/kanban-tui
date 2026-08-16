@@ -92,7 +92,6 @@ func (m *Model) enterInfo(name string) {
 	m.infoField = infoFieldDesc
 }
 
-// readInfoBoard snapshots the fields the popup draws from a loaded board.
 func (m *Model) readInfoBoard(board *model.Board) {
 	m.infoText = board.Description
 	m.infoName = boardDisplayName(m.infoBoard)
@@ -107,8 +106,6 @@ func (m *Model) readInfoBoard(board *model.Board) {
 // board the TUI opens on, which reads as a broken popup rather than a fixed one.
 func (m *Model) infoRenamable() bool { return m.infoBoard != "" }
 
-// mainFieldRefusal explains why main has nothing to put in a field, at the
-// moment the edit is attempted.
 func mainFieldRefusal(field int) string {
 	if field == infoFieldPrefix {
 		return "main's ids are bare numbers — only sprints carry a prefix"
@@ -144,7 +141,6 @@ func (m *Model) moveInfoField(dir int) {
 	}
 }
 
-// moveInfoAcross is h/l on the name row: the name sits left of the prefix.
 func (m *Model) moveInfoAcross(dir int) {
 	if m.infoField == infoFieldDesc {
 		return
@@ -156,7 +152,6 @@ func (m *Model) moveInfoAcross(dir int) {
 	m.infoField = infoFieldPrefix
 }
 
-// startInfoEdit opens the editor for the focused panel.
 func (m *Model) startInfoEdit() (tea.Model, tea.Cmd) {
 	if m.infoBoard != "" && store.IsSprintArchived(m.infoBoard) {
 		m.notice = "sprint " + m.infoBoard + " is archived — unarchive it to edit"
@@ -168,11 +163,11 @@ func (m *Model) startInfoEdit() (tea.Model, tea.Cmd) {
 	}
 	switch m.infoField {
 	case infoFieldPrefix:
-		m.infoPrefixIn = newInfoInput(m.infoPrefix, 4, 4)
-		m.infoPrefixIn.Focus()
+		m.infoPrefixInput = newInfoInput(m.infoPrefix, 4, 4)
+		m.infoPrefixInput.Focus()
 	case infoFieldName:
-		m.infoNameIn = newInfoInput(m.infoName, 64, 28)
-		m.infoNameIn.Focus()
+		m.infoNameInput = newInfoInput(m.infoName, 64, 28)
+		m.infoNameInput.Focus()
 	default:
 		m.infoDesc = newDescArea(m.infoText)
 		m.infoDesc.Focus()
@@ -217,8 +212,8 @@ func (m *Model) startBoardRename(name string, archived bool) (tea.Model, tea.Cmd
 
 func (m *Model) cancelInfoEdit() {
 	m.infoEditing = false // discard, keep the popup open on what was saved
-	m.infoNameIn.Blur()
-	m.infoPrefixIn.Blur()
+	m.infoNameInput.Blur()
+	m.infoPrefixInput.Blur()
 	m.infoDesc.Blur()
 }
 
@@ -238,34 +233,34 @@ func (m *Model) saveInfoEdit() {
 // saveInfoName renames the board — which changes what this popup is describing,
 // and possibly which board the Model is sitting on.
 func (m *Model) saveInfoName() {
-	target := m.infoBoard
-	newName := strings.TrimSpace(m.infoNameIn.Value())
-	if newName == "" || newName == target {
+	oldName := m.infoBoard
+	newName := strings.TrimSpace(m.infoNameInput.Value())
+	if newName == "" || newName == oldName {
 		m.cancelInfoEdit()
 		return
 	}
 	// An empty prefix means "leave it alone", which is UpdateSprint's own
 	// reading of it — this field renames and nothing more.
-	if err := store.UpdateSprint(target, newName, ""); err != nil {
+	if err := store.UpdateSprint(oldName, newName, ""); err != nil {
 		// Stay open on what was typed, reason in the footer: retyping a 40-char
 		// name to fix one character would be the worse trade.
 		m.notice = err.Error()
 		return
 	}
-	m.followBoardRename(target, newName)
-	m.notice = fmt.Sprintf("renamed %q to %q", target, newName)
+	m.followBoardRename(oldName, newName)
+	m.notice = fmt.Sprintf("renamed %q to %q", oldName, newName)
 }
 
 // saveInfoPrefix retags the board's ticket ids. UpdateSprint refuses the whole
 // change if any id it would mint is already issued, so a rejection leaves the
 // board exactly as it was and the field open on what was typed.
 func (m *Model) saveInfoPrefix() {
-	next := strings.TrimSpace(m.infoPrefixIn.Value())
-	if next == "" || strings.EqualFold(next, m.infoPrefix) {
+	newPrefix := strings.TrimSpace(m.infoPrefixInput.Value())
+	if newPrefix == "" || strings.EqualFold(newPrefix, m.infoPrefix) {
 		m.cancelInfoEdit()
 		return
 	}
-	if err := store.UpdateSprint(m.infoBoard, m.infoBoard, next); err != nil {
+	if err := store.UpdateSprint(m.infoBoard, m.infoBoard, newPrefix); err != nil {
 		m.notice = err.Error()
 		return
 	}
@@ -299,7 +294,6 @@ func (m *Model) followBoardRename(oldName, newName string) {
 	m.reloadPickerEntriesOn(newName)
 }
 
-// saveInfoDesc writes the description back.
 func (m *Model) saveInfoDesc() {
 	text := m.infoDesc.Value()
 	s, err := boardStore(m.infoBoard)
@@ -392,9 +386,9 @@ func (m *Model) updateInfo(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		switch m.infoField {
 		case infoFieldPrefix:
-			m.infoPrefixIn, cmd = m.infoPrefixIn.Update(msg)
+			m.infoPrefixInput, cmd = m.infoPrefixInput.Update(msg)
 		case infoFieldName:
-			m.infoNameIn, cmd = m.infoNameIn.Update(msg)
+			m.infoNameInput, cmd = m.infoNameInput.Update(msg)
 		default:
 			m.infoDesc, cmd = m.infoDesc.Update(msg)
 		}
@@ -435,7 +429,6 @@ func (m *Model) viewInfo() string {
 // filled with different fields — see formPopupSize.
 func (m *Model) infoPopupSize() (width, height int) { return m.formPopupSize() }
 
-// infoInnerWidth is the width the popup's inner panels render at.
 func (m *Model) infoInnerWidth() int {
 	w, _ := m.infoPopupSize()
 	return max(10, w-4)
@@ -483,14 +476,12 @@ func (m *Model) renderInfoPopup(width, height int, origin point) string {
 	return renderPanel(m.infoFrameTitle(), content, width, height, cyan, true)
 }
 
-// renderInfoNameRow draws the row holding the board's name and, beside it, the
-// prefix its ticket ids carry.
-func (m *Model) renderInfoNameRow(innerWidth int, at point) string {
+func (m *Model) renderInfoNameRow(innerWidth int, origin point) string {
 	nameWidth, prefixWidth := infoRowSplit(innerWidth)
 	return lipgloss.JoinHorizontal(lipgloss.Top,
-		m.renderInfoPanelAt("Name", infoFieldName, m.renderInfoName(nameWidth), nameWidth, at),
+		m.renderInfoPanelAt("Name", infoFieldName, m.renderInfoName(nameWidth), nameWidth, origin),
 		m.renderInfoPanelAt("Prefix", infoFieldPrefix, m.renderInfoPrefixBox(), prefixWidth,
-			point{x: at.x + nameWidth, y: at.y}),
+			point{x: origin.x + nameWidth, y: origin.y}),
 	)
 }
 
@@ -502,17 +493,16 @@ func infoRowSplit(innerWidth int) (nameWidth, prefixWidth int) {
 	return innerWidth - prefixWidth, prefixWidth
 }
 
-// renderInfoPanelAt draws one field of the name row and registers its zone.
 // Focus is drawn even on main, whose fields hold nothing to change: the cursor
 // still walks through them, and a highlight that refused to move would be the
 // harder thing to explain. The dim value is what says there is nothing here.
-func (m *Model) renderInfoPanelAt(title string, field int, content string, width int, at point) string {
+func (m *Model) renderInfoPanelAt(title string, field int, content string, width int, origin point) string {
 	focused := m.infoField == field
 	color := softWhite
 	if focused {
 		color = cyan
 	}
-	m.addZone(hitZone{kind: zoneInfoField, x: at.x, y: at.y, w: width, h: infoNameHeight, idx: field})
+	m.addZone(hitZone{kind: zoneInfoField, x: origin.x, y: origin.y, w: width, h: infoNameHeight, idx: field})
 	return renderPanel(title, content, width, infoNameHeight, color, focused)
 }
 
@@ -530,7 +520,7 @@ func (m *Model) infoValueStyle() lipgloss.Style {
 // `KA1 → TL1` beside them would be the tail wagging the dog.
 func (m *Model) renderInfoPrefixBox() string {
 	if m.infoEditing && m.infoField == infoFieldPrefix {
-		return m.infoPrefixIn.View()
+		return m.infoPrefixInput.View()
 	}
 	return m.infoValueStyle().Render(prefixLabel(m.infoPrefix))
 }
@@ -545,9 +535,8 @@ func (m *Model) descPanelTitle() string {
 	return "Description"
 }
 
-// infoFrameTitle names the board being edited, the way the new-ticket popup's
-// frame says "New ticket". The archived tag rides here because it explains
-// every refusal the fields below can give.
+// The archived tag rides on the frame because it explains every refusal the
+// fields below can give.
 func (m *Model) infoFrameTitle() string {
 	title := boardDisplayName(m.infoBoard)
 	if m.infoBoard != "" && store.IsSprintArchived(m.infoBoard) {
@@ -556,14 +545,12 @@ func (m *Model) infoFrameTitle() string {
 	return title
 }
 
-// renderInfoMeta is the popup's metadata line: the board's shape at a glance,
-// where the new-ticket form puts a ticket's status, assignee and tags. While
-// the prefix is being edited the counts give way to what the change would do to
-// existing ids — the part that isn't obvious from typing two letters, and more
-// than fits beside a four-character box.
+// While the prefix is being edited, the counts give way to what the change
+// would do to existing ids — the part that isn't obvious from typing two
+// letters, and more than fits beside a four-character box.
 func (m *Model) renderInfoMeta() string {
 	if m.infoEditing && m.infoField == infoFieldPrefix {
-		if hint := strings.TrimSpace(m.infoIDHint()); hint != "" {
+		if hint := m.infoIDHint(); hint != "" {
 			return hint
 		}
 	}
@@ -598,17 +585,17 @@ func (m *Model) infoHelpLine() string {
 // infoIDHint spells out what a changed prefix does to existing ids. Silent
 // while the prefix is untouched.
 func (m *Model) infoIDHint() string {
-	next := strings.ToUpper(strings.TrimSpace(m.infoPrefixIn.Value()))
-	if next == "" || next == strings.ToUpper(m.infoPrefix) {
+	newPrefix := strings.ToUpper(strings.TrimSpace(m.infoPrefixInput.Value()))
+	if newPrefix == "" || newPrefix == strings.ToUpper(m.infoPrefix) {
 		return ""
 	}
-	return dimStyle.Render(fmt.Sprintf("  %s1 → %s1", prefixLabel(m.infoPrefix), next))
+	return dimStyle.Render(fmt.Sprintf("  %s1 → %s1", prefixLabel(m.infoPrefix), newPrefix))
 }
 
 func (m *Model) renderInfoName(width int) string {
 	if m.infoEditing && m.infoField == infoFieldName {
-		m.infoNameIn.Width = max(4, width-2)
-		return m.infoNameIn.View()
+		m.infoNameInput.Width = max(4, width-2)
+		return m.infoNameInput.View()
 	}
 	return m.infoValueStyle().Render(m.infoName)
 }

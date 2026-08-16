@@ -233,20 +233,19 @@ type Model struct {
 	// The board popup — see info.go. infoBoard is the board being edited ("" for
 	// main), which is not always the one this Model is on; the rest is the
 	// snapshot its three panels draw from.
-	infoBoard     string
-	infoName      string
-	infoPrefix    string
-	infoCounts    map[model.Status]int
-	infoText      string
-	infoField     int // infoFieldPrefix | infoFieldName | infoFieldDesc
-	infoScroll    int
-	infoScrollMax int
-	infoEditing   bool
-	infoNameIn    textinput.Model
-	infoPrefixIn  textinput.Model
-
-	infoDesc   textarea.Model
-	infoReturn viewMode // the view this popup closes back onto
+	infoBoard       string
+	infoName        string
+	infoPrefix      string
+	infoCounts      map[model.Status]int
+	infoText        string
+	infoField       int // infoFieldPrefix | infoFieldName | infoFieldDesc
+	infoScroll      int
+	infoScrollMax   int
+	infoEditing     bool
+	infoNameInput   textinput.Model
+	infoPrefixInput textinput.Model
+	infoDesc        textarea.Model
+	infoReturn      viewMode // the view this popup closes back onto
 
 	// Focus sits on the board name in the footer rather than on a card — see
 	// footerfocus.go.

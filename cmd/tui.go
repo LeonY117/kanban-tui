@@ -11,7 +11,8 @@ import (
 )
 
 func runTUI(sprintName string) error {
-	refused, unbound := tui.ApplyConfig(store.LoadConfig())
+	cfg := store.LoadConfig()
+	refused, unbound := tui.ApplyConfig(cfg)
 	if len(refused) > 0 {
 		fmt.Fprintf(os.Stderr, "kanban: ignored %d key binding(s) in config.json: %s\n",
 			len(refused), strings.Join(refused, ", "))
@@ -25,6 +26,12 @@ func runTUI(sprintName string) error {
 	m, err := tui.NewModel(st, sprintName)
 	if err != nil {
 		return err
+	}
+	// An absent terminalWidth means the question has never been asked, not that
+	// the default was chosen — an answer is always written, the default one
+	// included. Asked here because this is where config.json is read.
+	if cfg.TerminalWidth == "" {
+		m.AskTerminalWidth()
 	}
 	// Mouse cell motion gives us clicks and wheel events. Terminal text
 	// selection still works with shift held down.

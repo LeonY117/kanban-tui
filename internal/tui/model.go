@@ -37,6 +37,7 @@ const (
 	tagView               // floating tag picker, feeds the search
 	infoView              // floating board-description popup
 	emojiView             // floating emoji picker over any text field
+	onboardView           // first-run terminal-width question
 )
 
 // inputMode tracks what the user is typing into.
@@ -210,6 +211,7 @@ type Model struct {
 	move moveState
 
 	settings settingsState
+	onboard  onboardState
 
 	// Two filters, one implementation. The board's and the archive browser's
 	// are separate values because they narrow separate lists — see
@@ -639,6 +641,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateInfo(msg)
 		case emojiView:
 			return m.updateEmojiPicker(msg)
+		case onboardView:
+			return m.updateOnboard(msg)
 		}
 	}
 	return m, nil
@@ -684,11 +688,14 @@ func (m *Model) View() string {
 }
 
 // widthProfile is how the terminal in front of us measures emoji right now.
-// While the settings popup is open that is whatever it is previewing, so the
-// board redraws under each option as the cursor moves over it.
+// While the settings popup or the first-run question is open that is whatever
+// the cursor is on, so the board redraws under each option as it moves.
 func (m *Model) widthProfile() termwidth.Profile {
-	if m.view == settingsView {
+	switch m.view {
+	case settingsView:
 		return m.settings.previewProfile()
+	case onboardView:
+		return m.onboardProfile()
 	}
 	return widthProfile
 }
@@ -2659,6 +2666,8 @@ func (m *Model) renderView(v viewMode) string {
 		return m.viewInfo()
 	case emojiView:
 		return m.viewEmoji()
+	case onboardView:
+		return m.viewOnboard()
 	default:
 		return m.viewBoard()
 	}
@@ -2667,7 +2676,7 @@ func (m *Model) renderView(v viewMode) string {
 // popupBackdrop renders the source view as the backdrop behind a popup, but
 // avoids recursing into popup views themselves.
 func (m *Model) popupBackdrop(source viewMode) string {
-	if source == addView || source == pickerView || source == moveView || source == settingsView || source == tagView || source == infoView || source == emojiView {
+	if source == addView || source == pickerView || source == moveView || source == settingsView || source == tagView || source == infoView || source == emojiView || source == onboardView {
 		return m.viewBoard()
 	}
 	return m.renderView(source)

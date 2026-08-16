@@ -115,9 +115,11 @@ type settingsState struct {
 	// Baselines identify the net rows changed during this visit. Saving merges
 	// only those rows into the latest config, so another process's unrelated
 	// edits and settings this build doesn't know about survive.
+	// Width has no baseline: unlike a key or a label, pressing enter on a
+	// Display row is an assertion about the terminal, so it is written out
+	// whether or not it differs from what was loaded.
 	baseline       map[string]string
 	baselineLabels map[model.Status]string
-	baselineWidth  termwidth.Profile
 	changedBinds   map[string]bool
 	changedLabels  map[model.Status]bool
 	changedWidth   bool
@@ -317,7 +319,6 @@ func (m *Model) enterSettings() (tea.Model, tea.Cmd) {
 	m.settings.changedBinds = map[string]bool{}
 	m.settings.changedLabels = map[model.Status]bool{}
 	m.settings.width = widthProfile
-	m.settings.baselineWidth = widthProfile
 	m.settings.changedWidth = false
 	m.settings.idx = 0
 	m.settings.notice = ""
@@ -384,14 +385,12 @@ func (m *Model) saveSettings() bool {
 
 func (s *settingsState) mergeIntoConfig(cfg *store.Config) error {
 	if s.changedWidth {
-		// Only the non-default is stored, matching how keys and labels are
-		// written: a config carrying nothing says "whatever the build defaults
-		// to", which is what someone who never opened this page wants.
-		if s.width == termwidth.Grapheme {
-			cfg.TerminalWidth = ""
-		} else {
-			cfg.TerminalWidth = s.width.String()
-		}
+		// Written out even when it is the default, unlike keys and labels. An
+		// absent value here doesn't mean "whatever the build defaults to", it
+		// means the first-run question has never been in front of anyone — see
+		// onboard.go. Recording a measured property of someone's terminal is
+		// also not something a later change of default should reach into.
+		cfg.TerminalWidth = s.width.String()
 	}
 	for _, a := range bindActions {
 		if !s.changedBinds[a.id] {
@@ -755,12 +754,12 @@ func (m *Model) settingsActivate() (tea.Model, tea.Cmd) {
 		if s.idx < 0 || s.idx >= len(widthProfiles) {
 			return m, nil
 		}
-		p := widthProfiles[s.idx]
-		if s.width == p.profile {
-			return m, nil
-		}
-		s.width = p.profile
-		s.changedWidth = s.width != s.baselineWidth
+		// Recorded even when it matches what is already selected, and even
+		// when it matches the baseline. Enter here asserts "this is how my
+		// terminal draws", and that assertion is what config.json stores — an
+		// absent value means the question has never been answered at all.
+		s.width = widthProfiles[s.idx].profile
+		s.changedWidth = true
 		s.updateDirty()
 	}
 	return m, nil
@@ -1061,14 +1060,9 @@ func (s *settingsState) displayRows(w int) ([]string, []int, int) {
 		idxs = append(idxs, i)
 	}
 
-	for _, line := range []string{
-		"",
-		" ┌──────────────────┐",
-		" │ 🐛 a ticket      │",
-		" │ plain text       │",
-		" └──────────────────┘",
-	} {
-		rows, idxs = append(rows, line), append(idxs, -1)
+	rows, idxs = append(rows, ""), append(idxs, -1)
+	for _, line := range widthSample() {
+		rows, idxs = append(rows, " "+line), append(idxs, -1)
 	}
 	return rows, idxs, cursorRow
 }

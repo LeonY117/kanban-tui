@@ -29,15 +29,14 @@ import (
 
 // infoField values — also the j/k order, and the zone idx a click carries.
 const (
-	infoFieldMeta = iota // the Info panel: the ticket-id prefix
+	infoFieldMeta = iota // the metadata line: the ticket-id prefix
 	infoFieldName        // the board's name
 	infoFieldDesc        // the description
 )
 
-// Panel heights. The first two hold one line inside a border; the description
-// takes whatever is left, down to a single line.
+// The name panel holds one line inside a border; the description takes whatever
+// the frame has left, down to a single line.
 const (
-	infoMetaHeight = 3
 	infoNameHeight = 3
 	infoMinDesc    = 3
 )
@@ -351,86 +350,129 @@ func (m *Model) viewInfo() string {
 	return overlayAt(backdrop, popup, origin.x, origin.y)
 }
 
-// infoPopupSize is wider than the board list — this holds prose, not names, and
-// a 2000-character description at 40 columns is a column of confetti. It grows
-// to fit the description so most boards need no scrolling at all, then gives
-// the terminal back its last line: the footer is what says how to get out.
-func (m *Model) infoPopupSize() (width, height int) {
-	const (
-		minWidth = 40
-		maxWidth = 76
-	)
-	width = min(maxWidth, max(minWidth, m.width-8))
-	if width > m.width-4 {
-		width = m.width - 4
-	}
+// infoPopupSize is the new-ticket form's size, because this is the same object
+// filled with different fields — see formPopupSize.
+func (m *Model) infoPopupSize() (width, height int) { return m.formPopupSize() }
 
-	descLines := 1
-	if m.infoText != "" {
-		descLines = len(strings.Split(wrapDesc(m.infoText, width-4), "\n"))
-	}
-	height = infoMetaHeight + infoNameHeight + max(infoMinDesc, descLines+2)
-	if floor := infoMetaHeight + infoNameHeight + infoMinDesc; height < floor {
-		height = floor
-	}
-	// Last, so it wins: at the smallest terminal the floor and the ceiling are
-	// the same number, and a popup one row taller than the screen would push
-	// the description panel off the bottom.
-	if ceiling := m.height - 1; height > ceiling {
-		height = ceiling
-	}
-	return width, height
+// infoInnerWidth is the width the popup's inner panels render at.
+func (m *Model) infoInnerWidth() int {
+	w, _ := m.infoPopupSize()
+	return max(10, w-4)
 }
 
+// renderInfoPopup lays the board out the way the new-ticket form lays a ticket
+// out: a bare meta line, a one-line field, a description taking everything
+// left, a help line, all inside one frame titled with what is being edited.
 func (m *Model) renderInfoPopup(width, height int, origin point) string {
-	innerWidth := max(10, width-4)
-	descHeight := max(infoMinDesc, height-infoMetaHeight-infoNameHeight)
+	innerWidth := m.infoInnerWidth()
+	// Content starts one row below the frame's top border and one column in
+	// from its left, plus the left pad every line below carries.
+	rowX, rowY := origin.x+2, origin.y+1
 
-	panels := []string{
-		m.renderInfoPanel(infoFieldMeta, "Info", m.renderInfoMeta(), width, infoMetaHeight, origin, 0),
-		m.renderInfoPanel(infoFieldName, "Name", m.renderInfoName(innerWidth), width, infoNameHeight, origin, infoMetaHeight),
-		m.renderInfoPanel(infoFieldDesc, m.descPanelTitle(), m.renderInfoDesc(innerWidth, descHeight-2),
-			width, descHeight, origin, infoMetaHeight+infoNameHeight),
+	meta := m.renderInfoMeta(point{x: rowX, y: rowY})
+
+	nameColor := softWhite
+	if m.infoField == infoFieldName {
+		nameColor = cyan
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, panels...)
+	namePanel := renderPanel("Name", m.renderInfoName(innerWidth), innerWidth, infoNameHeight,
+		m.inertOr(infoFieldName, nameColor), m.infoField == infoFieldName && m.infoRenamable())
+	if m.infoRenamable() {
+		m.addZone(hitZone{kind: zoneInfoField, x: rowX, y: rowY + 1, w: innerWidth, h: infoNameHeight, idx: infoFieldName})
+	}
+
+	descColor := softWhite
+	if m.infoField == infoFieldDesc {
+		descColor = cyan
+	}
+	// Frame borders (2) + meta (1) + name panel (3) + help (1) = 7. The
+	// description takes the remainder, which is the point of a fixed-size box:
+	// a board's context gets room to be read rather than a line and a half.
+	descHeight := max(infoMinDesc, height-7)
+	descPanel := renderPanel("Description", m.renderInfoDesc(innerWidth-2, descHeight-2),
+		innerWidth, descHeight, descColor, m.infoField == infoFieldDesc)
+	m.addZone(hitZone{kind: zoneInfoField, x: rowX, y: rowY + 4, w: innerWidth, h: descHeight, idx: infoFieldDesc})
+
+	// lipgloss PaddingLeft on a multi-line block pads every line, so sub-panel
+	// borders don't collide with the frame's left border.
+	pad := lipgloss.NewStyle().PaddingLeft(1)
+	content := strings.Join([]string{
+		pad.Render(meta),
+		pad.Render(namePanel),
+		pad.Render(descPanel),
+		pad.Render(m.infoHelpLine()),
+	}, "\n")
+
+	return renderPanel(m.infoFrameTitle(), content, width, height, cyan, true)
 }
 
-// descPanelTitle carries the archived tag: it is the one panel an archived
-// board still draws in full, and the tag has to be somewhere the eye lands
-// before the edit is refused.
-func (m *Model) descPanelTitle() string {
+// infoFrameTitle names the board being edited, the way the new-ticket popup's
+// frame says "New ticket". The archived tag rides here because it explains
+// every refusal the fields below can give.
+func (m *Model) infoFrameTitle() string {
+	title := boardDisplayName(m.infoBoard)
 	if m.infoBoard != "" && store.IsSprintArchived(m.infoBoard) {
-		return "Description [archived]"
+		title += " [archived]"
 	}
-	return "Description"
+	return title
 }
 
-// renderInfoPanel draws one panel and registers its click zone. Panels main
-// can't edit are drawn dim and register nothing, so neither j/k nor the mouse
-// can land on a field that would only refuse.
-func (m *Model) renderInfoPanel(field int, title, content string, width, height int, origin point, dy int) string {
+// inertOr dims a field main has nothing to put in it. Its directory is the root
+// rather than a name and its ids are bare numbers, so neither the cursor nor
+// the mouse is allowed to land there.
+func (m *Model) inertOr(field int, color lipgloss.Color) lipgloss.Color {
 	if field != infoFieldDesc && !m.infoRenamable() {
-		return renderPanel(title, dimStyle.Render(content), width, height, dimGray, false)
+		return dimGray
 	}
-	focused := m.infoField == field
-	color := softWhite
-	if focused {
-		color = cyan
-	}
-	m.addZone(hitZone{kind: zoneInfoField, x: origin.x, y: origin.y + dy, w: width, h: height, idx: field})
-	return renderPanel(title, content, width, height, color, focused)
+	return color
 }
 
-// renderInfoMeta is the Info panel's one line: the prefix new ticket ids carry,
-// and the board's shape at a glance. While the prefix is being edited the
-// counts give way to what the change would do to existing ids — the part that
-// isn't obvious from typing two letters into a field.
-func (m *Model) renderInfoMeta() string {
-	if m.infoEditing && m.infoField == infoFieldMeta {
+// renderInfoMeta is the popup's metadata line — the prefix new ticket ids
+// carry, and the board's shape at a glance. It is unbordered and reverse-
+// highlights when selected, the way the new-ticket form's assignee and tags do.
+// While the prefix is being edited the counts give way to what the change would
+// do to existing ids, the part that isn't obvious from typing two letters.
+func (m *Model) renderInfoMeta(origin point) string {
+	label := prefixLabel(m.infoPrefix)
+	var prefix string
+	switch {
+	case !m.infoRenamable():
+		prefix = dimStyle.Render(label)
+	case m.infoEditing && m.infoField == infoFieldMeta:
+		// The widget's own View, not a styled copy of its value: stacking a
+		// style on it mangles the cursor, and the cursor is what separates
+		// "typing here" from "selected".
 		return m.infoPrefixIn.View() + m.infoIDHint()
+	case m.infoField == infoFieldMeta:
+		prefix = selectedFieldStyle.Render(label)
+	default:
+		prefix = lipgloss.NewStyle().Foreground(white).Bold(true).Render(label)
 	}
-	prefix := lipgloss.NewStyle().Foreground(white).Bold(true).Render(prefixLabel(m.infoPrefix))
+	if m.infoRenamable() {
+		m.addZone(hitZone{kind: zoneInfoField, x: origin.x, y: origin.y, w: lipgloss.Width(prefix), h: 1, idx: infoFieldMeta})
+	}
 	return prefix + "  " + formatCounts(m.infoCounts)
+}
+
+// infoHelpLine is the popup's own hint line, and where a refusal lands — the
+// footer says the same thing, but a rename rejected mid-edit should say why
+// next to the field that rejected it.
+func (m *Model) infoHelpLine() string {
+	if m.notice != "" {
+		return lipgloss.NewStyle().Foreground(peach).Render(m.notice)
+	}
+	var parts []string
+	switch {
+	case m.infoEditing && m.infoField == infoFieldDesc:
+		parts = []string{"enter: save", "shift+enter: new line", "esc: discard"}
+	case m.infoEditing:
+		parts = []string{"enter: save", "esc: discard"}
+	default:
+		parts = []string{"j/k: field", "enter: edit", "esc: close"}
+	}
+	// helpStyle pads a cell either side, so the budget is two short of the
+	// interior.
+	return helpStyle.Render(fitHints(strings.Join(parts, bulletSep), bulletSep, m.infoInnerWidth()-2))
 }
 
 // infoIDHint spells out what a changed prefix does to existing ids. Silent

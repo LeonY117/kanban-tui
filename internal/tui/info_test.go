@@ -595,9 +595,9 @@ func TestInfoPanelsSurviveTheSmallestTerminal(t *testing.T) {
 	m.Update(keyPress("i"))
 
 	view := m.View()
-	for _, want := range []string{"Info", "Name", "Description"} {
+	for _, want := range []string{"demo", "Name", "Description"} {
 		if !strings.Contains(view, want) {
-			t.Errorf("panel %q lost at %dx%d:\n%s", want, minTerminalWidth, minTerminalHeight, view)
+			t.Errorf("%q lost at %dx%d:\n%s", want, minTerminalWidth, minTerminalHeight, view)
 		}
 	}
 	for i, line := range strings.Split(view, "\n") {
@@ -662,5 +662,45 @@ func TestInfoTypeaheadOnlyArmsOverTheDescription(t *testing.T) {
 		if _, ok := m.focusedTextTarget(); ok != tc.want {
 			t.Errorf("typeahead armed=%v over the %s field, want %v", ok, tc.name, tc.want)
 		}
+	}
+}
+
+// The board popup and the new-ticket form are the same box with different
+// fields in it. If they drift apart, moving between them moves the frame.
+func TestInfoPopupMatchesTheAddPopupGeometry(t *testing.T) {
+	m := pickerModel(t, "demo")
+	selectBoard(t, m, "demo")
+
+	for _, size := range [][2]int{{110, 34}, {80, 24}, {60, 16}, {minTerminalWidth, minTerminalHeight}} {
+		m.width, m.height = size[0], size[1]
+		gotW, gotH := m.infoPopupSize()
+		wantW, wantH := m.addPopupSize()
+		if gotW != wantW || gotH != wantH {
+			t.Errorf("at %dx%d the board popup is %dx%d, the add popup %dx%d",
+				size[0], size[1], gotW, gotH, wantW, wantH)
+		}
+		if m.infoInnerWidth() != m.addInnerWidth() {
+			t.Errorf("at %dx%d inner widths differ: %d vs %d",
+				size[0], size[1], m.infoInnerWidth(), m.addInnerWidth())
+		}
+	}
+}
+
+// The description is the reason the box is a fixed size: it gets everything the
+// frame has left over, rather than hugging however much text is there.
+func TestInfoDescriptionTakesTheRemainingHeight(t *testing.T) {
+	m := pickerModel(t, "demo")
+	setDesc(t, "demo", "one short line")
+	selectBoard(t, m, "demo")
+	m.width, m.height = 110, 34
+	m.Update(keyPress("i"))
+	m.View()
+
+	_, popupHeight := m.infoPopupSize()
+	desc := zoneOf(t, m, zoneInfoField, 0, infoFieldDesc)
+	// Frame borders (2) + meta (1) + name panel (3) + help (1).
+	if want := popupHeight - 7; desc.h != want {
+		t.Errorf("description panel is %d rows, want %d — a one-line board should still get the full box",
+			desc.h, want)
 	}
 }

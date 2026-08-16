@@ -2581,7 +2581,13 @@ func (m *Model) submitAdd() {
 // addPopupSize is the new-ticket popup's outer size. Split out from viewAdd so
 // the help-line width test can assert against the same geometry the renderer
 // uses, rather than restating the numbers.
-func (m *Model) addPopupSize() (int, int) {
+func (m *Model) addPopupSize() (int, int) { return m.formPopupSize() }
+
+// formPopupSize is the shape of an editing popup: a meta line, a one-line
+// field, a description that takes the rest, a help line. The new-ticket form
+// and the board popup are the same object filled with different fields, so
+// they are the same box — moving between them must not move the frame.
+func (m *Model) formPopupSize() (int, int) {
 	popupWidth := 66
 	if popupWidth > m.width-4 {
 		popupWidth = m.width - 4

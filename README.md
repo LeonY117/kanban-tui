@@ -121,9 +121,9 @@ ZWJ sequence (`👨‍👩‍👧`) on a narrow terminal, and a keycap (`#️⃣
 Both are drawn wider than kanban laid out for, and both are best avoided in
 titles.
 
-The board popup is a board's own detail view: three stacked panels — the
-ticket-id prefix, the name, the description — walked with `j`/`k` and edited
-with `enter`, the same motion as a ticket's. `i` opens it from the board and
+The board popup is the new-ticket form with a board in it — the same frame and
+the same size, holding the ticket-id prefix, the name and the description.
+`j`/`k` walk the three, `enter` edits the focused one. `i` opens it from the board and
 from the board picker, clicking the board name in the footer opens it from any
 view, and `j` past the last card of a column moves focus onto that name so
 `enter` opens it from there. While the

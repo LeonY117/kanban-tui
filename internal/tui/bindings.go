@@ -39,7 +39,6 @@ func bindingTargets(km *keyMap) map[string]*key.Binding {
 		"board.archiveView": &km.ArchiveView,
 		"board.unarchive":   &km.Unarchive,
 		"board.pin":         &km.Pin,
-		"board.rename":      &km.Rename,
 		"board.layout":      &km.Bigger,
 		"board.layoutDown":  &km.Smaller,
 		"board.zoom":        &km.Zoom,

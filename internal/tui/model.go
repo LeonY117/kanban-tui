@@ -2968,12 +2968,6 @@ func (m *Model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.pickerTogglePin()
 	case key.Matches(msg, keys.TagPicker):
 		return m.enterTagPicker()
-	case key.Matches(msg, keys.Rename):
-		// The board popup owns renaming; `r` is the door that opens it with the
-		// name already under the cursor.
-		if e, ok := m.selectedPickerBoard(); ok {
-			return m.startBoardRename(e.name, e.archived)
-		}
 	case key.Matches(msg, keys.MoveUp):
 		return m.pickerReorderPin(-1)
 	case key.Matches(msg, keys.MoveDown):
@@ -3458,12 +3452,12 @@ func (m *Model) helpText() string {
 			return fmt.Sprintf("archive %q? y / n", m.confirmArchive)
 		}
 		if m.pickerShowArchived {
-			return fmt.Sprintf("j/k select | enter switch | %s info | %s tags | %s rename | %s pin | %s/%s reorder | %s archive | %s unarchive | %s hide archived | esc/%s close",
-				hk("board.info"), hk("board.tags"), hk("board.rename"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
+			return fmt.Sprintf("j/k select | enter switch | %s info | %s tags | %s pin | %s/%s reorder | %s archive | %s unarchive | %s hide archived | esc/%s close",
+				hk("board.info"), hk("board.tags"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
 				hk("card.archive"), hk("board.unarchive"), hk("board.archiveView"), hk("board.picker"))
 		}
-		return fmt.Sprintf("j/k select | enter switch | %s info | %s tags | %s rename | %s pin | %s/%s reorder | %s archive | %s show archived | esc/%s close",
-			hk("board.info"), hk("board.tags"), hk("board.rename"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
+		return fmt.Sprintf("j/k select | enter switch | %s info | %s tags | %s pin | %s/%s reorder | %s archive | %s show archived | esc/%s close",
+			hk("board.info"), hk("board.tags"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
 			hk("card.archive"), hk("board.archiveView"), hk("board.picker"))
 	case archiveView:
 		if m.archiveSearch.active() {

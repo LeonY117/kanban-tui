@@ -331,13 +331,16 @@ func TestInfoDoesNotRefreshWhileEditing(t *testing.T) {
 
 // ─── Name and prefix ────────────────────────────────────────────────
 
-// openRename does what `r` in the picker does, through the real binding.
+// openRename opens a board's name for typing the way a person does: `i` onto
+// the popup, `k` up to the name row, `enter` into the field.
 func openRename(t *testing.T, m *Model, name string) {
 	t.Helper()
 	selectBoard(t, m, name)
-	m.updatePicker(keyPress("r"))
+	m.Update(keyPress("i"))
+	m.Update(keyPress("k"))
+	m.Update(keyPress("enter"))
 	if m.view != infoView || !m.infoEditing || m.infoField != infoFieldName {
-		t.Fatalf("r left view=%v editing=%v field=%d, want the name open for typing",
+		t.Fatalf("i,k,enter left view=%v editing=%v field=%d, want the name open for typing",
 			m.view, m.infoEditing, m.infoField)
 	}
 }
@@ -460,38 +463,6 @@ func TestInfoRenameKeepsTheFieldOpenOnError(t *testing.T) {
 	}
 	if !store.SprintExists("beta") {
 		t.Error("beta was renamed anyway")
-	}
-}
-
-// `r` refuses before it opens anything: main has no directory name to change,
-// and an archived sprint is frozen. The popup itself still opens on both — that
-// is how you read them.
-func TestInfoRenameRefusesMainAndArchived(t *testing.T) {
-	m := pickerModel(t, "alpha")
-
-	selectBoard(t, m, "")
-	m.updatePicker(keyPress("r"))
-	if m.view != pickerView {
-		t.Errorf("r opened the rename on main (view %v)", m.view)
-	}
-	if !strings.Contains(m.notice, "main") {
-		t.Errorf("notice %q doesn't say main can't be renamed", m.notice)
-	}
-
-	selectBoard(t, m, "alpha")
-	m.startPickerArchive()
-	m.updatePickerConfirm(keyPress("y"))
-	m.pickerShowArchived = true
-	m.reloadPickerEntries()
-	selectBoard(t, m, "alpha")
-	m.notice = ""
-
-	m.updatePicker(keyPress("r"))
-	if m.view != pickerView {
-		t.Errorf("r opened the rename on an archived sprint (view %v)", m.view)
-	}
-	if !strings.Contains(m.notice, "unarchive") {
-		t.Errorf("notice %q doesn't point at unarchive", m.notice)
 	}
 }
 

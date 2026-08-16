@@ -59,7 +59,6 @@ Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden
 | `tab` | Open board picker (main + sprints) |
 | `i` | Board popup — name, ticket-id prefix and description of the current board, or the highlighted one in the picker |
 | `p` | Pin / unpin the highlighted board (in board picker) |
-| `r` | Rename the highlighted sprint — opens the board popup on its name (in board picker) |
 | `d` | Delete ticket (in detail view) |
 | `?` | Help |
 | `q` | Quit |
@@ -265,8 +264,8 @@ statement that you still want it in front of you.
 
 ### Renaming a board
 
-`r` in the picker opens the board popup with the sprint's name ready to type;
-the box beside it holds the prefix its ticket ids carry, reached with `l`.
+The board popup holds a sprint's name and, beside it, the prefix its ticket ids
+carry — `k` up from the description, then `h`/`l` between the two.
 Changing the prefix rewrites the short id of every ticket on the board **and in
 its archive**, keeping the number — `KA7` becomes `KB7` — so the part people
 actually quote survives. It's refused outright if another board already issued one of the

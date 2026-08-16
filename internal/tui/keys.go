@@ -39,7 +39,6 @@ type keyMap struct {
 	Unarchive   key.Binding
 	BoardPicker key.Binding
 	Pin         key.Binding
-	Rename      key.Binding
 	Search      key.Binding
 	TagPicker   key.Binding
 	Info        key.Binding
@@ -100,7 +99,6 @@ func defaultKeyMap() keyMap {
 		Unarchive:   key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "unarchive")),
 		BoardPicker: key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "board picker")),
 		Pin:         key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pin board")),
-		Rename:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rename board")),
 		Search:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
 		// `#` is what the board advertises; `t` stays because the tag list was
 		// reached with it from the picker for long enough to be muscle memory.

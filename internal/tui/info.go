@@ -189,27 +189,6 @@ func newInfoInput(value string, charLimit, width int) textinput.Model {
 	return in
 }
 
-// startBoardRename opens the popup on a board with its name ready to type —
-// what `r` means. Kept as its own entry point because the refusals are about
-// renaming specifically: the popup itself opens happily on main and on archived
-// sprints, which is how you read them.
-func (m *Model) startBoardRename(name string, archived bool) (tea.Model, tea.Cmd) {
-	if name == "" {
-		m.notice = "main board can't be renamed"
-		return m, nil
-	}
-	if archived {
-		m.notice = "archived sprints are read-only — press u to unarchive"
-		return m, nil
-	}
-	m.enterInfo(name)
-	if m.view != infoView {
-		return m, nil // enterInfo refused; it has already set the notice
-	}
-	m.infoField = infoFieldName
-	return m.startInfoEdit()
-}
-
 func (m *Model) cancelInfoEdit() {
 	m.infoEditing = false // discard, keep the popup open on what was saved
 	m.infoNameInput.Blur()

@@ -29,9 +29,9 @@ import (
 
 // infoField values — also the j/k order, and the zone idx a click carries.
 const (
-	infoFieldMeta = iota // the metadata line: the ticket-id prefix
-	infoFieldName        // the board's name
-	infoFieldDesc        // the description
+	infoFieldPrefix = iota // the ticket-id prefix new cards here will carry
+	infoFieldName          // the board's name
+	infoFieldDesc          // the description
 )
 
 // The name panel holds one line inside a border; the description takes whatever
@@ -101,13 +101,38 @@ func (m *Model) infoRenamable() bool { return m.infoBoard != "" }
 // infoFirstField is where j/k stops going up — the description alone on main.
 func (m *Model) infoFirstField() int {
 	if m.infoRenamable() {
-		return infoFieldMeta
+		return infoFieldPrefix
 	}
 	return infoFieldDesc
 }
 
+// moveInfoField walks j/k down the popup. Stacked, that is three stops; split,
+// the name and prefix share a row and so count as one, with h/l choosing
+// between them.
 func (m *Model) moveInfoField(dir int) {
-	m.infoField = min(infoFieldDesc, max(m.infoFirstField(), m.infoField+dir))
+	if !m.infoSplitRow {
+		m.infoField = min(infoFieldDesc, max(m.infoFirstField(), m.infoField+dir))
+		return
+	}
+	if dir > 0 {
+		m.infoField = infoFieldDesc
+		return
+	}
+	if m.infoField == infoFieldDesc && m.infoRenamable() {
+		m.infoField = infoFieldName
+	}
+}
+
+// moveInfoAcross is h/l on the split row: the name sits left of the prefix.
+func (m *Model) moveInfoAcross(dir int) {
+	if !m.infoSplitRow || !m.infoRenamable() || m.infoField == infoFieldDesc {
+		return
+	}
+	if dir < 0 {
+		m.infoField = infoFieldName
+		return
+	}
+	m.infoField = infoFieldPrefix
 }
 
 // startInfoEdit opens the editor for the focused panel.
@@ -117,7 +142,7 @@ func (m *Model) startInfoEdit() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch m.infoField {
-	case infoFieldMeta:
+	case infoFieldPrefix:
 		m.infoPrefixIn = newInfoInput(m.infoPrefix, 4, 4)
 		m.infoPrefixIn.Focus()
 	case infoFieldName:
@@ -176,7 +201,7 @@ func (m *Model) cancelInfoEdit() {
 // the one this Model is sitting on.
 func (m *Model) saveInfoEdit() {
 	switch m.infoField {
-	case infoFieldMeta:
+	case infoFieldPrefix:
 		m.saveInfoPrefix()
 	case infoFieldName:
 		m.saveInfoName()
@@ -314,7 +339,7 @@ func (m *Model) updateInfo(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		switch m.infoField {
-		case infoFieldMeta:
+		case infoFieldPrefix:
 			m.infoPrefixIn, cmd = m.infoPrefixIn.Update(msg)
 		case infoFieldName:
 			m.infoNameIn, cmd = m.infoNameIn.Update(msg)
@@ -335,6 +360,18 @@ func (m *Model) updateInfo(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveInfoField(1)
 	case key.Matches(msg, keys.Up):
 		m.moveInfoField(-1)
+	case key.Matches(msg, keys.Left):
+		m.moveInfoAcross(-1)
+	case key.Matches(msg, keys.Right):
+		m.moveInfoAcross(1)
+	case msg.String() == "z":
+		// COMPARISON TOGGLE — delete with the losing layout once one is picked.
+		// Two ways to sit the name and the prefix in the frame, side by side
+		// rather than described, because that is the only way to choose.
+		m.infoSplitRow = !m.infoSplitRow
+		if m.infoField == infoFieldPrefix && m.infoSplitRow {
+			m.infoField = infoFieldName
+		}
 	}
 	return m, nil
 }
@@ -370,16 +407,7 @@ func (m *Model) renderInfoPopup(width, height int, origin point) string {
 	rowX, rowY := origin.x+2, origin.y+1
 
 	meta := m.renderInfoMeta(point{x: rowX, y: rowY})
-
-	nameColor := softWhite
-	if m.infoField == infoFieldName {
-		nameColor = cyan
-	}
-	namePanel := renderPanel("Name", m.renderInfoName(innerWidth), innerWidth, infoNameHeight,
-		m.inertOr(infoFieldName, nameColor), m.infoField == infoFieldName && m.infoRenamable())
-	if m.infoRenamable() {
-		m.addZone(hitZone{kind: zoneInfoField, x: rowX, y: rowY + 1, w: innerWidth, h: infoNameHeight, idx: infoFieldName})
-	}
+	nameRow := m.renderInfoNameRow(innerWidth, point{x: rowX, y: rowY + 1})
 
 	descColor := softWhite
 	if m.infoField == infoFieldDesc {
@@ -398,12 +426,60 @@ func (m *Model) renderInfoPopup(width, height int, origin point) string {
 	pad := lipgloss.NewStyle().PaddingLeft(1)
 	content := strings.Join([]string{
 		pad.Render(meta),
-		pad.Render(namePanel),
+		pad.Render(nameRow),
 		pad.Render(descPanel),
 		pad.Render(m.infoHelpLine()),
 	}, "\n")
 
 	return renderPanel(m.infoFrameTitle(), content, width, height, cyan, true)
+}
+
+// renderInfoNameRow draws the row holding the board's name — and, under the
+// split layout, the ticket-id prefix beside it.
+func (m *Model) renderInfoNameRow(innerWidth int, at point) string {
+	if !m.infoSplitRow {
+		return m.renderInfoPanelAt("Name", infoFieldName, m.renderInfoName(innerWidth), innerWidth, at)
+	}
+	nameWidth, prefixWidth := infoRowSplit(innerWidth)
+	return lipgloss.JoinHorizontal(lipgloss.Top,
+		m.renderInfoPanelAt("Name", infoFieldName, m.renderInfoName(nameWidth), nameWidth, at),
+		m.renderInfoPanelAt("Prefix", infoFieldPrefix, m.renderInfoPrefixBox(), prefixWidth,
+			point{x: at.x + nameWidth, y: at.y}),
+	)
+}
+
+// infoRowSplit divides the name row roughly 70/30. The prefix is four
+// characters at most, but its box still has to hold the word "Prefix", so it
+// takes a floor rather than a strict share of a narrow popup.
+func infoRowSplit(innerWidth int) (nameWidth, prefixWidth int) {
+	prefixWidth = min(max(10, innerWidth*3/10), innerWidth/2)
+	return innerWidth - prefixWidth, prefixWidth
+}
+
+// renderInfoPanelAt draws one field of the name row and registers its zone.
+// Fields main has nothing to put in draw dim and register nothing, so neither
+// the cursor nor the mouse can land on one that would only refuse.
+func (m *Model) renderInfoPanelAt(title string, field int, content string, width int, at point) string {
+	focused := m.infoField == field && m.infoRenamable()
+	color := softWhite
+	if focused {
+		color = cyan
+	}
+	if !m.infoRenamable() {
+		return renderPanel(title, dimStyle.Render(content), width, infoNameHeight, dimGray, false)
+	}
+	m.addZone(hitZone{kind: zoneInfoField, x: at.x, y: at.y, w: width, h: infoNameHeight, idx: field})
+	return renderPanel(title, content, width, infoNameHeight, color, focused)
+}
+
+// renderInfoPrefixBox is the split layout's prefix field. The id preview lives
+// on the meta line rather than in here: this box is four characters wide in
+// spirit, and `KA1 → TL1` beside them would be the tail wagging the dog.
+func (m *Model) renderInfoPrefixBox() string {
+	if m.infoEditing && m.infoField == infoFieldPrefix {
+		return m.infoPrefixIn.View()
+	}
+	return lipgloss.NewStyle().Bold(true).Foreground(white).Render(prefixLabel(m.infoPrefix))
 }
 
 // infoFrameTitle names the board being edited, the way the new-ticket popup's
@@ -433,23 +509,35 @@ func (m *Model) inertOr(field int, color lipgloss.Color) lipgloss.Color {
 // While the prefix is being edited the counts give way to what the change would
 // do to existing ids, the part that isn't obvious from typing two letters.
 func (m *Model) renderInfoMeta(origin point) string {
+	// Under the split layout the prefix has a box of its own on the row below,
+	// so this line is the board's shape — and, mid-edit, the id preview, which
+	// wants more room than a four-character box has beside it.
+	if m.infoSplitRow {
+		if m.infoEditing && m.infoField == infoFieldPrefix {
+			if hint := strings.TrimSpace(m.infoIDHint()); hint != "" {
+				return hint
+			}
+		}
+		return formatCounts(m.infoCounts)
+	}
+
 	label := prefixLabel(m.infoPrefix)
 	var prefix string
 	switch {
 	case !m.infoRenamable():
 		prefix = dimStyle.Render(label)
-	case m.infoEditing && m.infoField == infoFieldMeta:
+	case m.infoEditing && m.infoField == infoFieldPrefix:
 		// The widget's own View, not a styled copy of its value: stacking a
 		// style on it mangles the cursor, and the cursor is what separates
 		// "typing here" from "selected".
 		return m.infoPrefixIn.View() + m.infoIDHint()
-	case m.infoField == infoFieldMeta:
+	case m.infoField == infoFieldPrefix:
 		prefix = selectedFieldStyle.Render(label)
 	default:
 		prefix = lipgloss.NewStyle().Foreground(white).Bold(true).Render(label)
 	}
 	if m.infoRenamable() {
-		m.addZone(hitZone{kind: zoneInfoField, x: origin.x, y: origin.y, w: lipgloss.Width(prefix), h: 1, idx: infoFieldMeta})
+		m.addZone(hitZone{kind: zoneInfoField, x: origin.x, y: origin.y, w: lipgloss.Width(prefix), h: 1, idx: infoFieldPrefix})
 	}
 	return prefix + "  " + formatCounts(m.infoCounts)
 }
@@ -468,7 +556,11 @@ func (m *Model) infoHelpLine() string {
 	case m.infoEditing:
 		parts = []string{"enter: save", "esc: discard"}
 	default:
-		parts = []string{"j/k: field", "enter: edit", "esc: close"}
+		nav := "j/k: field"
+		if m.infoSplitRow && m.infoRenamable() {
+			nav = "j/k/h/l: field"
+		}
+		parts = []string{nav, "enter: edit", "z: layout", "esc: close"}
 	}
 	// helpStyle pads a cell either side, so the budget is two short of the
 	// interior.

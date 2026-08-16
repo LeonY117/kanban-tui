@@ -384,7 +384,7 @@ func TestInfoPrefixRetagsTickets(t *testing.T) {
 
 	selectBoard(t, m, "kanban")
 	m.Update(keyPress("i"))
-	m.infoField = infoFieldMeta
+	m.infoField = infoFieldPrefix
 	m.Update(keyPress("enter"))
 	if !m.infoEditing {
 		t.Fatal("enter did not open the prefix field")
@@ -560,26 +560,76 @@ func TestInfoMainHasNoNameOrPrefixField(t *testing.T) {
 	}
 }
 
-// j/k walk the panels, the way they do in the ticket detail.
+// j/k walk the panels, the way they do in the ticket detail. Stacked that is
+// three stops; split, the name and prefix share a row and h/l picks between
+// them. Both layouts live behind `z` until one is chosen.
 func TestInfoFieldsWalkWithJK(t *testing.T) {
-	m := pickerModel(t, "demo")
-	selectBoard(t, m, "demo")
+	for _, layout := range []struct {
+		split bool
+		name  string
+		steps []struct {
+			key  string
+			want int
+		}
+	}{
+		{false, "stacked", []struct {
+			key  string
+			want int
+		}{
+			{"k", infoFieldName},
+			{"k", infoFieldPrefix},
+			{"k", infoFieldPrefix}, // clamps at the top
+			{"j", infoFieldName},
+			{"j", infoFieldDesc},
+			{"j", infoFieldDesc}, // clamps at the bottom
+		}},
+		{true, "split", []struct {
+			key  string
+			want int
+		}{
+			{"k", infoFieldName}, // the row, entered on its left cell
+			{"l", infoFieldPrefix},
+			{"l", infoFieldPrefix}, // clamps at the right edge
+			{"h", infoFieldName},
+			{"h", infoFieldName}, // clamps at the left edge
+			{"k", infoFieldName}, // already on the top row
+			{"j", infoFieldDesc},
+			{"j", infoFieldDesc},
+			{"h", infoFieldDesc}, // h/l is the row's business, not the description's
+		}},
+	} {
+		t.Run(layout.name, func(t *testing.T) {
+			m := pickerModel(t, "demo")
+			selectBoard(t, m, "demo")
+			m.infoSplitRow = layout.split
+			m.Update(keyPress("i"))
+			for _, step := range layout.steps {
+				m.Update(keyPress(step.key))
+				if m.infoField != step.want {
+					t.Fatalf("%q left the cursor on field %d, want %d", step.key, m.infoField, step.want)
+				}
+			}
+		})
+	}
+}
+
+// Main has no name and no prefix, so the split row is inert end to end — h/l
+// must not park the cursor on a box that would only refuse.
+func TestInfoSplitRowInertOnMain(t *testing.T) {
+	m := testModel(t, "a ticket")
+	m.infoSplitRow = true
 	m.Update(keyPress("i"))
 
-	for _, step := range []struct {
-		key  string
-		want int
-	}{
-		{"k", infoFieldName},
-		{"k", infoFieldMeta},
-		{"k", infoFieldMeta}, // clamps at the top
-		{"j", infoFieldName},
-		{"j", infoFieldDesc},
-		{"j", infoFieldDesc}, // clamps at the bottom
-	} {
-		m.Update(keyPress(step.key))
-		if m.infoField != step.want {
-			t.Fatalf("%q left the cursor on field %d, want %d", step.key, m.infoField, step.want)
+	for _, k := range []string{"k", "h", "l", "k"} {
+		m.Update(keyPress(k))
+		if m.infoField != infoFieldDesc {
+			t.Fatalf("%q reached field %d on main, want to stay on the description", k, m.infoField)
+		}
+	}
+	m.View()
+	for _, z := range m.zones {
+		if z.kind == zoneInfoField && z.idx != infoFieldDesc {
+			t.Errorf("main's %d box is clickable under the split layout", z.idx)
 		}
 	}
 }
@@ -655,7 +705,7 @@ func TestInfoTypeaheadOnlyArmsOverTheDescription(t *testing.T) {
 	}{
 		{infoFieldDesc, true, "description"},
 		{infoFieldName, false, "name"},
-		{infoFieldMeta, false, "prefix"},
+		{infoFieldPrefix, false, "prefix"},
 	} {
 		m.infoField = tc.field
 		m.infoEditing = true

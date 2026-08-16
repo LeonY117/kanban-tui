@@ -238,14 +238,16 @@ type Model struct {
 	infoPrefix    string
 	infoCounts    map[model.Status]int
 	infoText      string
-	infoField     int // infoFieldMeta | infoFieldName | infoFieldDesc
+	infoField     int // infoFieldPrefix | infoFieldName | infoFieldDesc
 	infoScroll    int
 	infoScrollMax int
 	infoEditing   bool
 	infoNameIn    textinput.Model
 	infoPrefixIn  textinput.Model
-	infoDesc      textarea.Model
-	infoReturn    viewMode // the view this popup closes back onto
+	infoSplitRow  bool // COMPARISON TOGGLE (z): name and prefix share a row
+
+	infoDesc   textarea.Model
+	infoReturn viewMode // the view this popup closes back onto
 
 	// Focus sits on the board name in the footer rather than on a card — see
 	// footerfocus.go.
@@ -362,6 +364,7 @@ func NewModel(s *store.Store, sprintName string) (*Model, error) {
 		focusedCol:    1, // default to Todo
 		lastModTime:   modTime,
 		archived:      archived,
+		infoSplitRow:  true, // COMPARISON TOGGLE (z) — see info.go
 	}, nil
 }
 

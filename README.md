@@ -108,9 +108,6 @@ whose sample box lines up rather than guessing:
 ```
 
 `enter` chooses it, and it is saved to `config.json` so it outlives the session.
-`kanban doctor` answers the same question non-interactively: it prints each
-sample, reads back where the cursor landed, and tabulates that against what
-kanban laid out for.
 
 Under a narrow profile the board lays out a few columns short of the window and
 injects the missing cells behind the glyph that owes them. That is the only

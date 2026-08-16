@@ -12,8 +12,10 @@ func firstCluster(s string, state int) (string, string, int, int) {
 	return uniseg.FirstGraphemeClusterInString(s, state)
 }
 
-// The measurements `kanban doctor` took in each terminal, which is what the
-// two profiles exist to model.
+// Real measurements from each terminal, which is what the two profiles exist
+// to model. Taken by printing each glyph and reading back the cursor column —
+// `go run ./tools/doctor` still does that, and is how to check these against a
+// terminal that disagrees. It is deliberately not part of the shipped binary.
 func TestProfileMatchesMeasuredTerminals(t *testing.T) {
 	cases := []struct {
 		text           string

@@ -44,7 +44,7 @@ type Config struct {
 
 	// TerminalWidth names how the terminal measures emoji: "grapheme" (the
 	// default, and what lipgloss assumes) or "narrow" for one that spends a
-	// single cell on them. `kanban doctor` measures which you have. It is a
+	// single cell on them. `?` → Display picks it by showing you. It is a
 	// property of the terminal rather than of the board, but config.json is
 	// per-root and that is close enough to per-machine to be useful.
 	TerminalWidth string `json:"terminalWidth,omitempty"`

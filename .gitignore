@@ -1,3 +1,11 @@
 kanban
 *.backup.*.zip
 notes/
+
+# Local width-measurement tool. Kept out of the repo deliberately: it puts the
+# terminal in raw mode and reads cursor-position replies to measure what a glyph
+# really costs, which is how the width profiles were derived and how to check
+# them against a terminal that disagrees. Useful when a board looks skewed;
+# not something a task tracker should carry a subcommand for.
+#   go run ./tools/doctor          # or --json
+tools/

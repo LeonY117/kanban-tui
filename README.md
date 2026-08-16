@@ -92,9 +92,10 @@ with it. Terminals disagree about emoji more than you would expect: the tables
 they carry range from Unicode 6, which predates emoji being wide at all, to
 modern grapheme-aware ones.
 
-`?` → **Display** lists the profiles and redraws the board under whichever the
-cursor is on, so you choose the one whose sample box lines up rather than
-guessing:
+kanban asks which one you have the first time it runs, and remembers the
+answer. `?` → **Display** is the same question afterwards. Both list the
+profiles and redraw under whichever the cursor is on, so you choose the one
+whose sample box lines up rather than guessing:
 
 ```
   * ● grapheme    Ghostty, iTerm2, WezTerm, VS Code

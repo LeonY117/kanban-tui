@@ -57,9 +57,9 @@ Columns: **Backlog**, **Todo**, **Doing**, **Done**, **Hold**. Backlog is hidden
 | `X` | Open archive browser |
 | `u` | Unarchive (in archive browser) |
 | `tab` | Open board picker (main + sprints) |
-| `i` | Board description — the current board, or the highlighted one in the picker |
+| `i` | Board popup — name, ticket-id prefix and description of the current board, or the highlighted one in the picker |
 | `p` | Pin / unpin the highlighted board (in board picker) |
-| `r` | Rename the highlighted sprint + its ticket-id prefix (in board picker) |
+| `r` | Rename the highlighted sprint — opens the board popup on its name (in board picker) |
 | `d` | Delete ticket (in detail view) |
 | `?` | Help |
 | `q` | Quit |
@@ -121,7 +121,9 @@ ZWJ sequence (`👨‍👩‍👧`) on a narrow terminal, and a keycap (`#️⃣
 Both are drawn wider than kanban laid out for, and both are best avoided in
 titles.
 
-There are three ways to the board's description. `i` opens it from the board and
+The board popup is a board's own detail view: three stacked panels — the
+ticket-id prefix, the name, the description — walked with `j`/`k` and edited
+with `enter`, the same motion as a ticket's. `i` opens it from the board and
 from the board picker, clicking the board name in the footer opens it from any
 view, and `j` past the last card of a column moves focus onto that name so
 `enter` opens it from there. While the
@@ -162,7 +164,7 @@ applying a tag, committing a move, editing the title or description. Nothing
 commits on a click that was only meant to look.
 
 Clicks reach the small targets too: the status, assignee and tag fields in the
-Info bar, each field of the add popup, the rename form's inputs. The wheel moves
+Info bar, each field of the add popup, each panel of the board popup. The wheel moves
 through tickets in a list or scrolls the description body under the pointer.
 Hold `shift` to select text as usual.
 
@@ -262,16 +264,21 @@ statement that you still want it in front of you.
 
 ### Renaming a board
 
-`r` in the picker opens a two-field form: the sprint's name, and the prefix its
-ticket ids carry. Changing the prefix rewrites the short id of every ticket on
-the board **and in its archive**, keeping the number — `KA7` becomes `KB7` — so
-the part people actually quote survives. It's refused outright if another board
-already issued one of the target ids, per id rather than per prefix, since two
-boards are allowed to share a prefix and interleave their numbers.
+`r` in the picker opens the board popup with the sprint's name ready to type;
+the panel above it holds the prefix its ticket ids carry. Changing the prefix
+rewrites the short id of every ticket on the board **and in its archive**,
+keeping the number — `KA7` becomes `KB7` — so the part people actually quote
+survives. It's refused outright if another board already issued one of the
+target ids, per id rather than per prefix, since two boards are allowed to share
+a prefix and interleave their numbers.
 
 Renaming the name alone never touches ids. It does pin down a prefix that was
 being derived from the name, so a board created before prefixes existed doesn't
 quietly change which ids it hands out next.
+
+Main has neither to change: its directory is the root rather than a name, and
+its ids are bare numbers. Its two upper panels draw dim and the cursor skips
+past them to the description.
 
 ## Storage
 

@@ -22,11 +22,11 @@ const (
 	zoneSettingsRow
 	zoneSettingsTab
 	zoneTagRow
-	zoneMetaField   // one field inside a detail Info panel: 0 status, 1 assign, 2 tags
-	zoneAddField    // one field of the new-ticket popup, an addFocus* value
-	zoneEmojiCell   // one emoji in the add popup's picker grid, a filtered index
-	zoneRenameField // one input of the sprint rename form, a renameFocus* value
-	zoneBoardBadge  // the board name in the footer — opens the board description
+	zoneMetaField  // one field inside a detail Info panel: 0 status, 1 assign, 2 tags
+	zoneAddField   // one field of the new-ticket popup, an addFocus* value
+	zoneEmojiCell  // one emoji in the add popup's picker grid, a filtered index
+	zoneInfoField  // one panel of the board popup, an infoField* value
+	zoneBoardBadge // the board name in the footer — opens the board popup
 )
 
 // hitZone is a rectangle registered during render so mouse events can be
@@ -110,6 +110,12 @@ func (m *Model) mouseScroll(msg tea.MouseMsg, dir int) (tea.Model, tea.Cmd) {
 		m.descScroll = 0
 	case zoneArchiveDetail:
 		m.scrollDescription(dir)
+	case zoneInfoField:
+		// j/k walk the panels here, the way they do in the ticket detail, so
+		// the wheel is what a description too long for the popup scrolls with.
+		if z.idx == infoFieldDesc {
+			m.scrollInfo(dir)
+		}
 	case zonePickerRow:
 		m.movePickerCursor(dir)
 	case zoneMoveRow:
@@ -318,8 +324,18 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if filtered := m.emojiFiltered(); z.idx < len(filtered) {
 			m.applyPickedEmoji(filtered[z.idx].Emoji)
 		}
-	case zoneRenameField:
-		m.setRenameFocus(z.idx)
+	case zoneInfoField:
+		// Same first-click-selects rule as the ticket detail's panels, and for
+		// the same reason: a misjudged click must not open an editor over the
+		// board you were only reading.
+		already := repeat && m.infoField == z.idx
+		if z.idx != infoFieldDesc && !m.infoRenamable() {
+			return m, nil
+		}
+		m.infoField = z.idx
+		if already {
+			return m.startInfoEdit()
+		}
 	case zoneSettingsRow:
 		// Where this rule started: a single click that began key capture
 		// swallowed the next thing the user pressed.

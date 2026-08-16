@@ -4,6 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/LeonY117/kanban-tui/internal/model"
 	"github.com/LeonY117/kanban-tui/internal/store"
 )
 
@@ -322,5 +325,342 @@ func TestInfoDoesNotRefreshWhileEditing(t *testing.T) {
 
 	if got := m.infoDesc.Value(); got != "half-typed thought" {
 		t.Errorf("editor content = %q, want the typing left alone", got)
+	}
+}
+
+// ─── Name and prefix ────────────────────────────────────────────────
+
+// openRename does what `r` in the picker does, through the real binding.
+func openRename(t *testing.T, m *Model, name string) {
+	t.Helper()
+	selectBoard(t, m, name)
+	m.updatePicker(keyPress("r"))
+	if m.view != infoView || !m.infoEditing || m.infoField != infoFieldName {
+		t.Fatalf("r left view=%v editing=%v field=%d, want the name open for typing",
+			m.view, m.infoEditing, m.infoField)
+	}
+}
+
+func TestInfoRenameChangesTheName(t *testing.T) {
+	m := pickerModel(t, "kanban")
+	openRename(t, m, "kanban")
+
+	if got := m.infoNameIn.Value(); got != "kanban" {
+		t.Fatalf("name field seeded with %q, want kanban", got)
+	}
+	m.infoNameIn.SetValue("tools")
+	m.Update(keyPress("enter"))
+
+	if store.SprintExists("kanban") {
+		t.Error("the old sprint name still resolves")
+	}
+	if !store.SprintExists("tools") {
+		t.Fatal("the renamed sprint does not exist")
+	}
+	// The popup is describing the board that just moved, so its own subject and
+	// the list behind it both have to follow.
+	if m.infoBoard != "tools" || m.infoName != "tools" {
+		t.Errorf("popup still on (%q, %q), want tools", m.infoBoard, m.infoName)
+	}
+	if got, want := pickerNames(m), []string{"main", "tools"}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("picker = %v, want %v", got, want)
+	}
+	if m.infoEditing {
+		t.Error("still editing after a successful save")
+	}
+}
+
+// The prefix field rewrites every short id on the board, keeping the number.
+func TestInfoPrefixRetagsTickets(t *testing.T) {
+	m := pickerModel(t, "kanban")
+	sprint, err := store.NewSprint("kanban")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sprint.Add("a task", "", model.StatusTodo, nil, "", "test"); err != nil {
+		t.Fatal(err)
+	}
+	m.reloadPickerEntries()
+
+	selectBoard(t, m, "kanban")
+	m.Update(keyPress("i"))
+	m.infoField = infoFieldMeta
+	m.Update(keyPress("enter"))
+	if !m.infoEditing {
+		t.Fatal("enter did not open the prefix field")
+	}
+	if got := m.infoPrefixIn.Value(); got != "KA" {
+		t.Fatalf("prefix field seeded with %q, want KA", got)
+	}
+
+	// The hint is the part that isn't obvious from typing two letters.
+	m.infoPrefixIn.SetValue("TL")
+	if hint := m.infoIDHint(); !strings.Contains(hint, "KA1") || !strings.Contains(hint, "TL1") {
+		t.Errorf("id hint = %q, want it to spell out KA1 → TL1", hint)
+	}
+	m.Update(keyPress("enter"))
+
+	board, err := sprint.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(board.Tickets) != 1 || board.Tickets[0].ShortID != "TL1" {
+		t.Errorf("tickets = %+v, want one TL1", board.Tickets)
+	}
+	if m.infoPrefix != "TL" {
+		t.Errorf("popup still showing prefix %q, want TL", m.infoPrefix)
+	}
+	if !strings.Contains(m.notice, "TL") {
+		t.Errorf("notice %q doesn't name the new prefix", m.notice)
+	}
+}
+
+// Renaming the board you're sitting on has to re-point the model, or its next
+// read hits a directory that no longer exists.
+func TestInfoRenameFollowsTheLiveBoard(t *testing.T) {
+	m := pickerModel(t, "kanban")
+	if err := m.switchBoard("kanban"); err != nil {
+		t.Fatal(err)
+	}
+	m.enterPicker()
+	openRename(t, m, "kanban")
+
+	m.infoNameIn.SetValue("tools")
+	m.Update(keyPress("enter"))
+
+	if m.sprintName != "tools" {
+		t.Fatalf("model still on %q, want tools", m.sprintName)
+	}
+	if _, err := m.store.Load(); err != nil {
+		t.Errorf("the live store no longer reads: %v", err)
+	}
+	if _, err := m.store.Add("after", "", model.StatusTodo, nil, "", "test"); err != nil {
+		t.Errorf("the live store no longer writes: %v", err)
+	}
+}
+
+// A rejected rename keeps the field open on what was typed — retyping a 40-char
+// name to fix one character would be the worse trade.
+func TestInfoRenameKeepsTheFieldOpenOnError(t *testing.T) {
+	m := pickerModel(t, "alpha", "beta")
+	openRename(t, m, "beta")
+
+	m.infoNameIn.SetValue("alpha") // already taken
+	m.Update(keyPress("enter"))
+
+	if !m.infoEditing {
+		t.Error("the field closed on a rejected rename")
+	}
+	if m.infoNameIn.Value() != "alpha" {
+		t.Errorf("typed value lost: %q", m.infoNameIn.Value())
+	}
+	if !strings.Contains(m.notice, "exists") {
+		t.Errorf("notice %q doesn't explain the refusal", m.notice)
+	}
+	if !store.SprintExists("beta") {
+		t.Error("beta was renamed anyway")
+	}
+}
+
+// `r` refuses before it opens anything: main has no directory name to change,
+// and an archived sprint is frozen. The popup itself still opens on both — that
+// is how you read them.
+func TestInfoRenameRefusesMainAndArchived(t *testing.T) {
+	m := pickerModel(t, "alpha")
+
+	selectBoard(t, m, "")
+	m.updatePicker(keyPress("r"))
+	if m.view != pickerView {
+		t.Errorf("r opened the rename on main (view %v)", m.view)
+	}
+	if !strings.Contains(m.notice, "main") {
+		t.Errorf("notice %q doesn't say main can't be renamed", m.notice)
+	}
+
+	selectBoard(t, m, "alpha")
+	m.startPickerArchive()
+	m.updatePickerConfirm(keyPress("y"))
+	m.pickerShowArchived = true
+	m.reloadPickerEntries()
+	selectBoard(t, m, "alpha")
+	m.notice = ""
+
+	m.updatePicker(keyPress("r"))
+	if m.view != pickerView {
+		t.Errorf("r opened the rename on an archived sprint (view %v)", m.view)
+	}
+	if !strings.Contains(m.notice, "unarchive") {
+		t.Errorf("notice %q doesn't point at unarchive", m.notice)
+	}
+}
+
+func TestInfoRenameEscapeCancels(t *testing.T) {
+	m := pickerModel(t, "kanban")
+	openRename(t, m, "kanban")
+
+	m.infoNameIn.SetValue("something-else")
+	m.Update(keyPress("esc"))
+
+	if m.infoEditing {
+		t.Error("the field stayed open after esc")
+	}
+	if !store.SprintExists("kanban") || store.SprintExists("something-else") {
+		t.Error("esc applied the rename anyway")
+	}
+	// esc leaves the editor, not the popup — the board is still described.
+	if m.view != infoView {
+		t.Errorf("view = %v, want the popup still open", m.view)
+	}
+	if m.infoName != "kanban" {
+		t.Errorf("name shows %q, want the stored name back", m.infoName)
+	}
+}
+
+// An unedited save must not cost the user their place on the board — a rename
+// re-points the whole model, and doing that for nothing throws away the cursor.
+func TestInfoNoOpSaveKeepsBoardPosition(t *testing.T) {
+	m := pickerModel(t, "kanban")
+	if err := m.switchBoard("kanban"); err != nil {
+		t.Fatal(err)
+	}
+	m.focusedCol = 2
+	m.cursors = [5]int{0, 0, 3, 0, 0}
+	m.enterPicker()
+	openRename(t, m, "kanban")
+
+	m.Update(keyPress("enter")) // nothing typed
+
+	if m.focusedCol != 2 {
+		t.Errorf("focusedCol = %d, want 2 — an unchanged save moved the user", m.focusedCol)
+	}
+	if m.cursors[2] != 3 {
+		t.Errorf("cursors = %v, want the Doing cursor still on index 3", m.cursors)
+	}
+}
+
+// Main's name is its root directory and its ids are bare numbers, so neither
+// panel is a field. They render dim and the cursor cannot reach them.
+func TestInfoMainHasNoNameOrPrefixField(t *testing.T) {
+	m := testModel(t, "a ticket")
+	m.Update(keyPress("i"))
+
+	if m.infoField != infoFieldDesc {
+		t.Fatalf("landed on field %d, want the description", m.infoField)
+	}
+	m.Update(keyPress("k"))
+	if m.infoField != infoFieldDesc {
+		t.Errorf("k reached field %d on main, want to stay on the description", m.infoField)
+	}
+
+	m.View()
+	for _, z := range m.zones {
+		if z.kind == zoneInfoField && z.idx != infoFieldDesc {
+			t.Errorf("main's panel %d is clickable", z.idx)
+		}
+	}
+}
+
+// j/k walk the panels, the way they do in the ticket detail.
+func TestInfoFieldsWalkWithJK(t *testing.T) {
+	m := pickerModel(t, "demo")
+	selectBoard(t, m, "demo")
+	m.Update(keyPress("i"))
+
+	for _, step := range []struct {
+		key  string
+		want int
+	}{
+		{"k", infoFieldName},
+		{"k", infoFieldMeta},
+		{"k", infoFieldMeta}, // clamps at the top
+		{"j", infoFieldName},
+		{"j", infoFieldDesc},
+		{"j", infoFieldDesc}, // clamps at the bottom
+	} {
+		m.Update(keyPress(step.key))
+		if m.infoField != step.want {
+			t.Fatalf("%q left the cursor on field %d, want %d", step.key, m.infoField, step.want)
+		}
+	}
+}
+
+// The popup is three panels deep, and the smallest terminal we render at must
+// still show all three — a name field scrolled off screen is one being typed
+// into blind.
+func TestInfoPanelsSurviveTheSmallestTerminal(t *testing.T) {
+	m := pickerModel(t, "demo")
+	setDesc(t, "demo", strings.Repeat("long enough to overflow. ", 40))
+	selectBoard(t, m, "demo")
+	m.width, m.height = minTerminalWidth, minTerminalHeight
+	m.Update(keyPress("i"))
+
+	view := m.View()
+	for _, want := range []string{"Info", "Name", "Description"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("panel %q lost at %dx%d:\n%s", want, minTerminalWidth, minTerminalHeight, view)
+		}
+	}
+	for i, line := range strings.Split(view, "\n") {
+		if w := lipgloss.Width(line); w > minTerminalWidth {
+			t.Errorf("line %d overflows the terminal: %d cells", i, w)
+			break
+		}
+	}
+	if lines := strings.Split(view, "\n"); len(lines) > minTerminalHeight {
+		t.Errorf("view is %d rows on a %d-row terminal", len(lines), minTerminalHeight)
+	}
+}
+
+// First click selects the panel, second opens its editor — the same rule the
+// ticket detail's panels follow, so a misjudged click can't start an edit.
+func TestClickPicksAnInfoPanel(t *testing.T) {
+	m := pickerModel(t, "demo")
+	selectBoard(t, m, "demo")
+	m.Update(keyPress("i"))
+	m.View()
+
+	name := zoneOf(t, m, zoneInfoField, 0, infoFieldName)
+	m.mouseClick(mouseAt(name.x, name.y))
+	if m.infoField != infoFieldName {
+		t.Fatalf("field = %d, want the name panel", m.infoField)
+	}
+	if m.infoEditing {
+		t.Fatal("the first click opened the editor")
+	}
+	m.mouseClick(mouseAt(name.x, name.y))
+	if !m.infoEditing {
+		t.Fatal("the second click did not open the editor")
+	}
+	// A blurred input drops every key it is handed, so moving the highlight
+	// alone would leave the user typing into nothing.
+	before := m.infoNameIn.Value()
+	m.Update(keyPress("Z"))
+	if m.infoNameIn.Value() == before {
+		t.Errorf("name still %q after typing — the clicked field never took the keyboard", before)
+	}
+}
+
+// The `:shortcode:` typeahead follows the field, not the popup. A sprint name
+// is letters, digits, '_' and '-' and a prefix is four letters at most, so an
+// expansion into either writes something the store would refuse.
+func TestInfoTypeaheadOnlyArmsOverTheDescription(t *testing.T) {
+	m := pickerModel(t, "demo")
+	selectBoard(t, m, "demo")
+	m.Update(keyPress("i"))
+
+	for _, tc := range []struct {
+		field int
+		want  bool
+		name  string
+	}{
+		{infoFieldDesc, true, "description"},
+		{infoFieldName, false, "name"},
+		{infoFieldMeta, false, "prefix"},
+	} {
+		m.infoField = tc.field
+		m.infoEditing = true
+		if _, ok := m.focusedTextTarget(); ok != tc.want {
+			t.Errorf("typeahead armed=%v over the %s field, want %v", ok, tc.name, tc.want)
+		}
 	}
 }

@@ -1,24 +1,46 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/LeonY117/kanban-tui/internal/model"
 	"github.com/LeonY117/kanban-tui/internal/store"
 )
 
-// The board-description popup. Read-first: `i` opens it to show what a board is
-// for, and `e` inside it switches to editing — the common case is remembering
-// what a sprint covers, not rewriting it, and a read-only landing means a
-// stray keystroke can't touch 2000 characters.
+// The board popup: what the ticket detail is to a ticket, this is to a board.
+// Three stacked panels — the ticket-id prefix, the board's name, its
+// description — with j/k between them and enter to edit the focused one, so
+// editing a board is the same motion as editing a card.
+//
+// Read-first: it lands on the description, and the common case is remembering
+// what a sprint covers rather than rewriting it. `r` from the picker is the
+// exception, arriving with the name already open for typing.
 //
 // It describes whichever board it was opened over: the current one from the
 // board view, the highlighted one from the picker, so a sprint's context can be
 // read before switching into it.
+
+// infoField values — also the j/k order, and the zone idx a click carries.
+const (
+	infoFieldMeta = iota // the Info panel: the ticket-id prefix
+	infoFieldName        // the board's name
+	infoFieldDesc        // the description
+)
+
+// Panel heights. The first two hold one line inside a border; the description
+// takes whatever is left, down to a single line.
+const (
+	infoMetaHeight = 3
+	infoNameHeight = 3
+	infoMinDesc    = 3
+)
 
 // boardExists reports whether a board's file is still on disk. Load can't
 // answer this: a missing board reads as an empty one, which is what lets a
@@ -28,24 +50,22 @@ func boardExists(s *store.Store) bool {
 	return err == nil
 }
 
-// enterInfo opens the description popup for a board. name is a sprint name, or
-// "" for the main board.
+// enterInfo opens the board popup. name is a sprint name, or "" for the main
+// board.
 func (m *Model) enterInfo(name string) {
-	desc := m.board.Description
+	board := m.board
 	if name != m.sprintName {
-		// Another board's description isn't in memory — pickerEntry carries
-		// only what ListSprints returns, and that's the first line.
+		// Another board isn't in memory — pickerEntry carries only what
+		// ListSprints returns, and that's the description's first line.
 		s, err := boardStore(name)
 		if err != nil {
 			m.notice = "can't read that board: " + err.Error()
 			return
 		}
-		board, err := s.Load()
-		if err != nil {
+		if board, err = s.Load(); err != nil {
 			m.notice = "can't read that board: " + err.Error()
 			return
 		}
-		desc = board.Description
 	}
 
 	// Its own return slot rather than popupReturnView: opened over the board
@@ -58,25 +78,177 @@ func (m *Model) enterInfo(name string) {
 	}
 	m.view = infoView
 	m.infoBoard = name
-	m.infoText = desc
+	m.readInfoBoard(board)
 	m.infoScroll = 0
 	m.infoEditing = false
+	// The description, not the prefix: this popup is opened to read far more
+	// often than to rename, and enter should land where the reading is.
+	m.infoField = infoFieldDesc
 }
 
-// startInfoEdit swaps the popup from reading to editing.
-func (m *Model) startInfoEdit() {
-	if archived := m.infoBoard != "" && store.IsSprintArchived(m.infoBoard); archived {
+// readInfoBoard snapshots the fields the popup draws from a loaded board.
+func (m *Model) readInfoBoard(board *model.Board) {
+	m.infoText = board.Description
+	m.infoName = boardDisplayName(m.infoBoard)
+	m.infoPrefix = store.EffectivePrefix(board, m.infoBoard)
+	m.infoCounts = store.CountByStatus(board)
+}
+
+// infoRenamable reports whether this board's name and prefix are editable at
+// all. Main's are not: its directory is the root rather than a name, and its
+// ids are bare numbers. Its two upper panels render dim and j/k skips them.
+func (m *Model) infoRenamable() bool { return m.infoBoard != "" }
+
+// infoFirstField is where j/k stops going up — the description alone on main.
+func (m *Model) infoFirstField() int {
+	if m.infoRenamable() {
+		return infoFieldMeta
+	}
+	return infoFieldDesc
+}
+
+func (m *Model) moveInfoField(dir int) {
+	m.infoField = min(infoFieldDesc, max(m.infoFirstField(), m.infoField+dir))
+}
+
+// startInfoEdit opens the editor for the focused panel.
+func (m *Model) startInfoEdit() (tea.Model, tea.Cmd) {
+	if m.infoBoard != "" && store.IsSprintArchived(m.infoBoard) {
 		m.notice = "sprint " + m.infoBoard + " is archived — unarchive it to edit"
+		return m, nil
+	}
+	switch m.infoField {
+	case infoFieldMeta:
+		m.infoPrefixIn = newInfoInput(m.infoPrefix, 4, 4)
+		m.infoPrefixIn.Focus()
+	case infoFieldName:
+		m.infoNameIn = newInfoInput(m.infoName, 64, 28)
+		m.infoNameIn.Focus()
+	default:
+		m.infoDesc = newDescArea(m.infoText)
+		m.infoDesc.Focus()
+	}
+	m.infoEditing = true
+	return m, textinput.Blink
+}
+
+// newInfoInput is one field of the popup, seeded with what it is replacing.
+// width is capped well under the popup so a 64-character name can't push the
+// panel border past the edge it registered its click zone at.
+func newInfoInput(value string, charLimit, width int) textinput.Model {
+	in := textinput.New()
+	in.Prompt = ""
+	in.CharLimit = charLimit
+	in.Width = width
+	in.SetValue(value)
+	in.CursorEnd()
+	return in
+}
+
+// startBoardRename opens the popup on a board with its name ready to type —
+// what `r` means. Kept as its own entry point because the refusals are about
+// renaming specifically: the popup itself opens happily on main and on archived
+// sprints, which is how you read them.
+func (m *Model) startBoardRename(name string, archived bool) (tea.Model, tea.Cmd) {
+	if name == "" {
+		m.notice = "main board can't be renamed"
+		return m, nil
+	}
+	if archived {
+		m.notice = "archived sprints are read-only — press u to unarchive"
+		return m, nil
+	}
+	m.enterInfo(name)
+	if m.view != infoView {
+		return m, nil // enterInfo refused; it has already set the notice
+	}
+	m.infoField = infoFieldName
+	return m.startInfoEdit()
+}
+
+func (m *Model) cancelInfoEdit() {
+	m.infoEditing = false // discard, keep the popup open on what was saved
+	m.infoNameIn.Blur()
+	m.infoPrefixIn.Blur()
+	m.infoDesc.Blur()
+}
+
+// saveInfoEdit writes the focused field back to its own board, which may not be
+// the one this Model is sitting on.
+func (m *Model) saveInfoEdit() {
+	switch m.infoField {
+	case infoFieldMeta:
+		m.saveInfoPrefix()
+	case infoFieldName:
+		m.saveInfoName()
+	default:
+		m.saveInfoDesc()
+	}
+}
+
+// saveInfoName renames the board — which changes what this popup is describing,
+// and possibly which board the Model is sitting on.
+func (m *Model) saveInfoName() {
+	target := m.infoBoard
+	newName := strings.TrimSpace(m.infoNameIn.Value())
+	if newName == "" || newName == target {
+		m.cancelInfoEdit()
 		return
 	}
-	m.infoDesc = newDescArea(m.infoText)
-	m.infoDesc.Focus()
-	m.infoEditing = true
+	// An empty prefix means "leave it alone", which is UpdateSprint's own
+	// reading of it — this field renames and nothing more.
+	if err := store.UpdateSprint(target, newName, ""); err != nil {
+		// Stay open on what was typed, reason in the footer: retyping a 40-char
+		// name to fix one character would be the worse trade.
+		m.notice = err.Error()
+		return
+	}
+	m.followBoardRename(target, newName)
+	m.notice = fmt.Sprintf("renamed %q to %q", target, newName)
 }
 
-// saveInfoEdit writes the edited description back to its own board, which may
-// not be the one this Model is sitting on.
-func (m *Model) saveInfoEdit() {
+// saveInfoPrefix retags the board's ticket ids. UpdateSprint refuses the whole
+// change if any id it would mint is already issued, so a rejection leaves the
+// board exactly as it was and the field open on what was typed.
+func (m *Model) saveInfoPrefix() {
+	next := strings.TrimSpace(m.infoPrefixIn.Value())
+	if next == "" || strings.EqualFold(next, m.infoPrefix) {
+		m.cancelInfoEdit()
+		return
+	}
+	if err := store.UpdateSprint(m.infoBoard, m.infoBoard, next); err != nil {
+		m.notice = err.Error()
+		return
+	}
+	m.cancelInfoEdit()
+	m.refreshInfoBoard()
+	// Every short id on the board just changed, so anything drawing them is
+	// stale — the cards behind the popup included.
+	if m.infoBoard == m.sprintName {
+		m.reload()
+	}
+	m.reloadPickerEntriesOn(m.infoBoard)
+	m.notice = fmt.Sprintf("%q ids now carry %s", m.infoBoard, m.infoPrefix)
+}
+
+// followBoardRename re-points everything that knew the board by its old name:
+// this popup's own subject, the live model when it was the board that moved,
+// and the board list behind the popup.
+func (m *Model) followBoardRename(oldName, newName string) {
+	m.cancelInfoEdit()
+	m.infoBoard = newName
+	if m.sprintName == oldName {
+		if err := m.switchBoard(newName); err != nil {
+			m.err = err
+			return
+		}
+	}
+	m.refreshInfoBoard()
+	m.reloadPickerEntriesOn(newName)
+}
+
+// saveInfoDesc writes the description back.
+func (m *Model) saveInfoDesc() {
 	text := m.infoDesc.Value()
 	s, err := boardStore(m.infoBoard)
 	if err != nil {
@@ -112,7 +284,7 @@ func (m *Model) saveInfoEdit() {
 		return
 	}
 	m.infoText = strings.TrimSpace(text)
-	m.infoEditing = false
+	m.cancelInfoEdit()
 	if m.infoBoard == m.sprintName {
 		m.board.Description = m.infoText
 	}
@@ -121,23 +293,35 @@ func (m *Model) saveInfoEdit() {
 
 func (m *Model) closeInfo() {
 	m.view = m.infoReturn
-	m.infoEditing = false
+	m.cancelInfoEdit()
 }
 
 func (m *Model) updateInfo(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.infoEditing {
 		switch {
 		case key.Matches(msg, keys.Esc):
-			m.infoEditing = false // discard, keep the popup open on the saved text
+			m.cancelInfoEdit()
 			return m, nil
 		case key.Matches(msg, keys.Enter):
 			m.saveInfoEdit()
 			return m, nil
 		case key.Matches(msg, keys.Emoji):
-			return m.openEmojiPicker(emojiToInfoDesc)
+			// Only the description takes one: a sprint name is letters, digits,
+			// '_' and '-', and a prefix is four letters at most.
+			if m.infoField == infoFieldDesc {
+				return m.openEmojiPicker(emojiToInfoDesc)
+			}
+			return m, nil
 		}
 		var cmd tea.Cmd
-		m.infoDesc, cmd = m.infoDesc.Update(msg)
+		switch m.infoField {
+		case infoFieldMeta:
+			m.infoPrefixIn, cmd = m.infoPrefixIn.Update(msg)
+		case infoFieldName:
+			m.infoNameIn, cmd = m.infoNameIn.Update(msg)
+		default:
+			m.infoDesc, cmd = m.infoDesc.Update(msg)
+		}
 		return m, cmd
 	}
 
@@ -147,15 +331,11 @@ func (m *Model) updateInfo(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Esc), key.Matches(msg, keys.Info):
 		m.closeInfo()
 	case key.Matches(msg, keys.Enter), key.Matches(msg, keys.Edit):
-		m.startInfoEdit()
+		return m.startInfoEdit()
 	case key.Matches(msg, keys.Down):
-		if m.infoScroll < m.infoScrollMax {
-			m.infoScroll++
-		}
+		m.moveInfoField(1)
 	case key.Matches(msg, keys.Up):
-		if m.infoScroll > 0 {
-			m.infoScroll--
-		}
+		m.moveInfoField(-1)
 	}
 	return m, nil
 }
@@ -167,12 +347,14 @@ func (m *Model) viewInfo() string {
 	backdrop := m.popupBackdrop(m.infoReturn)
 	m.resetZones()
 	origin := m.popupOrigin(popupWidth, popupHeight)
-	popup := m.renderInfoPopup(popupWidth, popupHeight)
+	popup := m.renderInfoPopup(popupWidth, popupHeight, origin)
 	return overlayAt(backdrop, popup, origin.x, origin.y)
 }
 
 // infoPopupSize is wider than the board list — this holds prose, not names, and
-// a 2000-character description at 40 columns is a column of confetti.
+// a 2000-character description at 40 columns is a column of confetti. It grows
+// to fit the description so most boards need no scrolling at all, then gives
+// the terminal back its last line: the footer is what says how to get out.
 func (m *Model) infoPopupSize() (width, height int) {
 	const (
 		minWidth = 40
@@ -183,53 +365,99 @@ func (m *Model) infoPopupSize() (width, height int) {
 		width = m.width - 4
 	}
 
-	bodyLines := 1
+	descLines := 1
 	if m.infoText != "" {
-		bodyLines = len(strings.Split(wrapDesc(m.infoText, width-4), "\n"))
+		descLines = len(strings.Split(wrapDesc(m.infoText, width-4), "\n"))
 	}
-	height = bodyLines + 4 // border (2), a blank, the hint line
-	if height > m.height-4 {
-		height = m.height - 4
+	height = infoMetaHeight + infoNameHeight + max(infoMinDesc, descLines+2)
+	if floor := infoMetaHeight + infoNameHeight + infoMinDesc; height < floor {
+		height = floor
 	}
-	// A description is prose, and a box that hugs one short line reads as an
-	// error message rather than a place to write.
-	if height < 12 {
-		height = 12
+	// Last, so it wins: at the smallest terminal the floor and the ceiling are
+	// the same number, and a popup one row taller than the screen would push
+	// the description panel off the bottom.
+	if ceiling := m.height - 1; height > ceiling {
+		height = ceiling
 	}
 	return width, height
 }
 
-func (m *Model) renderInfoPopup(width, height int) string {
+func (m *Model) renderInfoPopup(width, height int, origin point) string {
 	innerWidth := max(10, width-4)
-	bodyHeight := max(1, height-4)
+	descHeight := max(infoMinDesc, height-infoMetaHeight-infoNameHeight)
 
-	// The board's name titles the box rather than heading its contents: the
-	// badge style's padding would set a heading one column right of the prose
-	// under it, and "which board is this" belongs on the frame anyway.
-	title := boardDisplayName(m.infoBoard)
+	panels := []string{
+		m.renderInfoPanel(infoFieldMeta, "Info", m.renderInfoMeta(), width, infoMetaHeight, origin, 0),
+		m.renderInfoPanel(infoFieldName, "Name", m.renderInfoName(innerWidth), width, infoNameHeight, origin, infoMetaHeight),
+		m.renderInfoPanel(infoFieldDesc, m.descPanelTitle(), m.renderInfoDesc(innerWidth, descHeight-2),
+			width, descHeight, origin, infoMetaHeight+infoNameHeight),
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, panels...)
+}
+
+// descPanelTitle carries the archived tag: it is the one panel an archived
+// board still draws in full, and the tag has to be somewhere the eye lands
+// before the edit is refused.
+func (m *Model) descPanelTitle() string {
 	if m.infoBoard != "" && store.IsSprintArchived(m.infoBoard) {
-		title += " [archived]"
+		return "Description [archived]"
 	}
+	return "Description"
+}
 
-	var body, hint string
-	if m.infoEditing {
-		setDescWidth(&m.infoDesc, innerWidth)
-		m.infoDesc.SetHeight(bodyHeight)
-		body = m.infoDesc.View()
-		hint = dimStyle.Render("enter save · esc discard · shift+enter newline")
-	} else {
-		body = m.renderInfoBody(innerWidth, bodyHeight)
-		hint = dimStyle.Render("enter edit · esc close")
+// renderInfoPanel draws one panel and registers its click zone. Panels main
+// can't edit are drawn dim and register nothing, so neither j/k nor the mouse
+// can land on a field that would only refuse.
+func (m *Model) renderInfoPanel(field int, title, content string, width, height int, origin point, dy int) string {
+	if field != infoFieldDesc && !m.infoRenamable() {
+		return renderPanel(title, dimStyle.Render(content), width, height, dimGray, false)
 	}
+	focused := m.infoField == field
+	color := softWhite
+	if focused {
+		color = cyan
+	}
+	m.addZone(hitZone{kind: zoneInfoField, x: origin.x, y: origin.y + dy, w: width, h: height, idx: field})
+	return renderPanel(title, content, width, height, color, focused)
+}
 
-	// Pad the body out to its full height so the hint lands on the last line
-	// inside the border rather than floating under the text.
-	lines := strings.Split(body, "\n")
-	for len(lines) < bodyHeight {
-		lines = append(lines, "")
+// renderInfoMeta is the Info panel's one line: the prefix new ticket ids carry,
+// and the board's shape at a glance. While the prefix is being edited the
+// counts give way to what the change would do to existing ids — the part that
+// isn't obvious from typing two letters into a field.
+func (m *Model) renderInfoMeta() string {
+	if m.infoEditing && m.infoField == infoFieldMeta {
+		return m.infoPrefixIn.View() + m.infoIDHint()
 	}
-	content := strings.Join(append(lines[:bodyHeight], "", hint), "\n")
-	return renderPanel(title, content, width, height, cyan, true)
+	prefix := lipgloss.NewStyle().Foreground(white).Bold(true).Render(prefixLabel(m.infoPrefix))
+	return prefix + "  " + formatCounts(m.infoCounts)
+}
+
+// infoIDHint spells out what a changed prefix does to existing ids. Silent
+// while the prefix is untouched.
+func (m *Model) infoIDHint() string {
+	next := strings.ToUpper(strings.TrimSpace(m.infoPrefixIn.Value()))
+	if next == "" || next == strings.ToUpper(m.infoPrefix) {
+		return ""
+	}
+	return dimStyle.Render(fmt.Sprintf("  %s1 → %s1", prefixLabel(m.infoPrefix), next))
+}
+
+func (m *Model) renderInfoName(width int) string {
+	if m.infoEditing && m.infoField == infoFieldName {
+		m.infoNameIn.Width = max(4, width-2)
+		return m.infoNameIn.View()
+	}
+	return lipgloss.NewStyle().Bold(true).Foreground(white).Render(m.infoName)
+}
+
+func (m *Model) renderInfoDesc(width, height int) string {
+	if m.infoEditing && m.infoField == infoFieldDesc {
+		setDescWidth(&m.infoDesc, width)
+		m.infoDesc.SetHeight(height)
+		return m.infoDesc.View()
+	}
+	return m.renderInfoBody(width, height)
 }
 
 // renderInfoBody wraps and vertically clips the description, tracking its own
@@ -253,18 +481,18 @@ func (m *Model) renderInfoBody(width, height int) string {
 	return lipgloss.NewStyle().Foreground(softWhite).Render(strings.Join(lines, "\n"))
 }
 
-// refreshInfoText re-reads the open popup's description on the board tick, so
-// an agent's edit shows up the way a ticket's does rather than leaving a
-// snapshot on screen. The board being described may not be the one this Model
-// watches, so it is read directly.
-//
-// Never while editing: the text on screen is then the user's, and replacing it
-// under the cursor would lose what they typed. A save from stale text is caught
-// by saveInfoEdit's re-read instead.
-func (m *Model) refreshInfoText() {
-	if m.view != infoView || m.infoEditing {
+// scrollInfo walks the description under the wheel. j/k belong to the field
+// cursor here, the way they do in the ticket detail.
+func (m *Model) scrollInfo(dir int) {
+	if m.infoEditing {
 		return
 	}
+	m.infoScroll = min(m.infoScrollMax, max(0, m.infoScroll+dir))
+}
+
+// refreshInfoBoard re-reads the open popup's board. The board being described
+// may not be the one this Model watches, so it is read directly.
+func (m *Model) refreshInfoBoard() {
 	s, err := boardStore(m.infoBoard)
 	if err != nil {
 		return
@@ -273,6 +501,19 @@ func (m *Model) refreshInfoText() {
 		return
 	}
 	if board, err := s.Load(); err == nil {
-		m.infoText = board.Description
+		m.readInfoBoard(board)
 	}
+}
+
+// refreshInfoText re-reads the open popup on the board tick, so an agent's edit
+// shows up the way a ticket's does rather than leaving a snapshot on screen.
+//
+// Never while editing: the text on screen is then the user's, and replacing it
+// under the cursor would lose what they typed. A save from stale text is caught
+// by saveInfoDesc's re-read instead.
+func (m *Model) refreshInfoText() {
+	if m.view != infoView || m.infoEditing {
+		return
+	}
+	m.refreshInfoBoard()
 }

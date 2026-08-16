@@ -80,9 +80,46 @@ matches shortcodes only, so `:wip` stays text and the `enter` that submits a
 ticket still submits it. `alt+e` is for browsing when you don't know what you
 want; `:` is for when you do.
 
-Both offer only emoji whose width terminals agree on, so neither can skew a
-board. That agreement is narrower than you would hope — see
-[`kanban add --help`](#cli).
+Both offer only emoji a terminal can be made to draw at the width kanban laid
+out for — which is a narrower set than you would hope, and the reason is below.
+
+### Emoji and terminal width
+
+The board draws its columns by padding every line to the same width. If the
+terminal spends a different number of cells on a character than kanban measured,
+that line ends up short and its borders slide — taking every column to its right
+with it. Terminals disagree about emoji more than you would expect: the tables
+they carry range from Unicode 6, which predates emoji being wide at all, to
+modern grapheme-aware ones.
+
+kanban asks which one you have the first time it runs, and remembers the
+answer. `?` → **Display** is the same question afterwards. Both list the
+profiles and redraw under whichever the cursor is on, so you choose the one
+whose sample box lines up rather than guessing:
+
+```
+  * ● grapheme    Ghostty, iTerm2, WezTerm, VS Code
+      narrow      xterm.js, Codex
+
+  ┌──────────────────┐
+  │ 🐛 a ticket      │     both rows are laid out to the same
+  │ plain text       │     width — if they line up, the profile
+  └──────────────────┘     matches this terminal
+```
+
+`enter` chooses it, and it is saved to `config.json` so it outlives the session.
+
+Under a narrow profile the board lays out a few columns short of the window and
+injects the missing cells behind the glyph that owes them. That is the only
+place the correction can happen — with an emoji in the string, lipgloss's width
+minus the terminal's is fixed, and padding moves both totals together, so it
+cannot be closed while laying out. It restores the grid rather than disguising
+it, which is why the mouse still lands where you click.
+
+Two cases stay beyond it, because injecting spaces can only ever *add* cells: a
+ZWJ sequence (`👨‍👩‍👧`) on a narrow terminal, and a keycap (`#️⃣`) on a grapheme one.
+Both are drawn wider than kanban laid out for, and both are best avoided in
+titles.
 
 There are three ways to the board's description. `i` opens it from the board and
 from the board picker, clicking the board name in the footer opens it from any

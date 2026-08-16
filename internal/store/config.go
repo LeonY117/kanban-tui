@@ -41,6 +41,13 @@ type Config struct {
 	// Only actions that differ from their default are stored, so a later change
 	// to a default reaches anyone who never overrode it.
 	Keys map[string]string `json:"keys,omitempty"`
+
+	// TerminalWidth names how the terminal measures emoji: "grapheme" (the
+	// default, and what lipgloss assumes) or "narrow" for one that spends a
+	// single cell on them. `?` → Display picks it by showing you. It is a
+	// property of the terminal rather than of the board, but config.json is
+	// per-root and that is close enough to per-machine to be useful.
+	TerminalWidth string `json:"terminalWidth,omitempty"`
 }
 
 func configPath() string { return filepath.Join(defaultRoot(), configFile) }

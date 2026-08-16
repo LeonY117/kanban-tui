@@ -151,7 +151,7 @@ func TestApplyConfigRebindsTheLiveKeymap(t *testing.T) {
 func TestHelpTextUsesReboundKeysOnEveryView(t *testing.T) {
 	restoreBindings(t)
 	refused, _ := ApplyConfig(store.Config{Keys: map[string]string{
-		"board.rename":      "n",
+		"board.info":        "n",
 		"board.pin":         "b",
 		"card.reorderUp":    "U",
 		"card.reorderDown":  "D",
@@ -172,7 +172,7 @@ func TestHelpTextUsesReboundKeysOnEveryView(t *testing.T) {
 
 	m := &Model{view: pickerView, pickerShowArchived: true}
 	for _, want := range []string{
-		"n rename", "b pin", "U/D reorder", "y archive", "i unarchive", "Z hide archived", "esc/w close",
+		"n info", "b pin", "U/D reorder", "y archive", "i unarchive", "Z hide archived", "esc/w close",
 	} {
 		if got := m.helpText(); !strings.Contains(got, want) {
 			t.Errorf("picker help %q does not contain %q", got, want)
@@ -260,13 +260,13 @@ func TestAnOverrideBeatsANewDefault(t *testing.T) {
 // config that could claim `t` would be handed a key that silently loses to the
 // alias, so the alias is reserved like the column jumps.
 func TestTheTagAliasCannotBeClaimed(t *testing.T) {
-	resolved, refused := sanitizeBindings(map[string]string{"board.rename": tagPickerAlias})
+	resolved, refused := sanitizeBindings(map[string]string{"board.pin": tagPickerAlias})
 
-	if got := resolved["board.rename"]; got == tagPickerAlias {
-		t.Errorf("board.rename = %q, want the alias refused", got)
+	if got := resolved["board.pin"]; got == tagPickerAlias {
+		t.Errorf("board.pin = %q, want the alias refused", got)
 	}
-	if len(refused) != 1 || refused[0] != "board.rename" {
-		t.Errorf("refused = %v, want just board.rename", refused)
+	if len(refused) != 1 || refused[0] != "board.pin" {
+		t.Errorf("refused = %v, want just board.pin", refused)
 	}
 }
 

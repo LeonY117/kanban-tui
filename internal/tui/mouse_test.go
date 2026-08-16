@@ -2,8 +2,6 @@ package tui
 
 import (
 	"testing"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // Every list selects on the first click and acts on a second click of the row
@@ -161,29 +159,6 @@ func TestClickFocusesAnAddPopupField(t *testing.T) {
 	m.mouseClick(mouseAt(desc.x, desc.y))
 	if !m.addDescEditing {
 		t.Error("the second click did not open the description editor")
-	}
-}
-
-func TestClickPicksARenameFormField(t *testing.T) {
-	m, _ := boardWith(t, "a|TODO")
-	withSprint(t, "demo")
-
-	m.enterPicker()
-	m.pickerIdx = 1
-	m.startPickerRename()
-	m.View()
-
-	prefix := zoneOf(t, m, zoneRenameField, 0, renameFocusPrefix)
-	m.mouseClick(mouseAt(prefix.x, prefix.y))
-	if m.renameFocus != renameFocusPrefix {
-		t.Fatalf("focus = %d, want the prefix field", m.renameFocus)
-	}
-	// The highlight is not the point — a blurred input drops every key it is
-	// handed, so moving the label alone left the user typing into nothing.
-	before := m.renamePrefix.Value()
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Z")})
-	if m.renamePrefix.Value() == before {
-		t.Errorf("prefix still %q after typing — the clicked field never took the keyboard", before)
 	}
 }
 

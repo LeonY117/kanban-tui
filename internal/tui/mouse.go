@@ -22,11 +22,11 @@ const (
 	zoneSettingsRow
 	zoneSettingsTab
 	zoneTagRow
-	zoneMetaField   // one field inside a detail Info panel: 0 status, 1 assign, 2 tags
-	zoneAddField    // one field of the new-ticket popup, an addFocus* value
-	zoneEmojiCell   // one emoji in the add popup's picker grid, a filtered index
-	zoneRenameField // one input of the sprint rename form, a renameFocus* value
-	zoneBoardBadge  // the board name in the footer — opens the board description
+	zoneMetaField  // one field inside a detail Info panel: 0 status, 1 assign, 2 tags
+	zoneAddField   // one field of the new-ticket popup, an addFocus* value
+	zoneEmojiCell  // one emoji in the add popup's picker grid, a filtered index
+	zoneInfoField  // one panel of the board popup, an infoField* value
+	zoneBoardBadge // the board name in the footer — opens the board popup
 )
 
 // hitZone is a rectangle registered during render so mouse events can be
@@ -110,6 +110,12 @@ func (m *Model) mouseScroll(msg tea.MouseMsg, dir int) (tea.Model, tea.Cmd) {
 		m.descScroll = 0
 	case zoneArchiveDetail:
 		m.scrollDescription(dir)
+	case zoneInfoField:
+		// j/k walk the panels here, the way they do in the ticket detail, so
+		// the wheel is what a description too long for the popup scrolls with.
+		if z.idx == infoFieldDesc {
+			m.scrollInfo(dir)
+		}
 	case zonePickerRow:
 		m.movePickerCursor(dir)
 	case zoneMoveRow:
@@ -318,8 +324,8 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if filtered := m.emojiFiltered(); z.idx < len(filtered) {
 			m.applyPickedEmoji(filtered[z.idx].Emoji)
 		}
-	case zoneRenameField:
-		m.setRenameFocus(z.idx)
+	case zoneInfoField:
+		return m.clickInfoField(z.idx, repeat)
 	case zoneSettingsRow:
 		// Where this rule started: a single click that began key capture
 		// swallowed the next thing the user pressed.
@@ -330,6 +336,38 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.settings.notice = ""
 	case zoneSettingsTab:
 		m.setSettingsSection(settingsSection(z.idx))
+	}
+	return m, nil
+}
+
+func (m *Model) clickInfoField(field int, repeat bool) (tea.Model, tea.Cmd) {
+	// An open board editor has to be dealt with before the field cursor
+	// moves, exactly as the ticket editors are above. Moving it alone left
+	// infoEditing true against a field whose widget was never built: the
+	// next render called SetWidth on a zero-value textarea and took the
+	// whole TUI down, and where it didn't crash it aimed the next enter at
+	// a different field's stale input — a discarded name could be saved by
+	// an enter meant for the description.
+	if m.infoEditing && field == m.infoField {
+		return m, nil // a click inside the open field changes nothing
+	}
+	if m.infoEditing {
+		// Clicking away commits, the way it does on a card. A refused save
+		// keeps the editor open, and the cursor must stay on the field
+		// still holding the text rather than walk off it.
+		m.saveInfoEdit()
+		if m.infoEditing {
+			return m, nil
+		}
+	}
+
+	// Same first-click-selects rule as the ticket detail's panels, and for
+	// the same reason: a misjudged click must not open an editor over the
+	// board you were only reading.
+	alreadySelected := repeat && m.infoField == field
+	m.infoField = field
+	if alreadySelected {
+		return m.startInfoEdit()
 	}
 	return m, nil
 }

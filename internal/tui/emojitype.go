@@ -127,7 +127,10 @@ func (m *Model) focusedTextTarget() (emojiTarget, bool) {
 			return emojiToEditDesc, true
 		}
 	case infoView:
-		if m.infoEditing {
+		// The description only. A sprint name is letters, digits, '_' and '-',
+		// and a prefix is four letters at most — expanding `:tada:` into either
+		// writes something the store will refuse.
+		if m.infoEditing && m.infoField == infoFieldDesc {
 			return emojiToInfoDesc, true
 		}
 	}

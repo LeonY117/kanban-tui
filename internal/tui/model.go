@@ -201,13 +201,6 @@ type Model struct {
 	pickerShowArchived bool   // when true, picker lists archived sprints below active ones
 	confirmArchive     string // non-empty = mid-confirm prompt for that sprint name
 
-	// Sprint rename form, hosted inside the picker popup.
-	renameTarget     string // non-empty = the sprint being renamed
-	renameFromPrefix string // its prefix when the form opened, for the id hint
-	renameName       textinput.Model
-	renamePrefix     textinput.Model
-	renameFocus      int // renameFocusName | renameFocusPrefix
-
 	move moveState
 
 	settings settingsState
@@ -237,15 +230,22 @@ type Model struct {
 
 	windowTitle string // board name last written to the terminal title
 
-	// The board-description popup — see info.go. infoBoard is the board being
-	// described ("" for main), which is not always the one this Model is on.
-	infoBoard     string
-	infoText      string
-	infoScroll    int
-	infoScrollMax int
-	infoEditing   bool
-	infoDesc      textarea.Model
-	infoReturn    viewMode // the view this popup closes back onto
+	// The board popup — see info.go. infoBoard is the board being edited ("" for
+	// main), which is not always the one this Model is on; the rest is the
+	// snapshot its three panels draw from.
+	infoBoard       string
+	infoName        string
+	infoPrefix      string
+	infoCounts      map[model.Status]int
+	infoText        string
+	infoField       int // infoFieldPrefix | infoFieldName | infoFieldDesc
+	infoScroll      int
+	infoScrollMax   int
+	infoEditing     bool
+	infoNameInput   textinput.Model
+	infoPrefixInput textinput.Model
+	infoDesc        textarea.Model
+	infoReturn      viewMode // the view this popup closes back onto
 
 	// Focus sits on the board name in the footer rather than on a card — see
 	// footerfocus.go.
@@ -2581,7 +2581,13 @@ func (m *Model) submitAdd() {
 // addPopupSize is the new-ticket popup's outer size. Split out from viewAdd so
 // the help-line width test can assert against the same geometry the renderer
 // uses, rather than restating the numbers.
-func (m *Model) addPopupSize() (int, int) {
+func (m *Model) addPopupSize() (int, int) { return m.formPopupSize() }
+
+// formPopupSize is the shape of an editing popup: a meta line, a one-line
+// field, a description that takes the rest, a help line. The new-ticket form
+// and the board popup are the same object filled with different fields, so
+// they are the same box — moving between them must not move the frame.
+func (m *Model) formPopupSize() (int, int) {
 	popupWidth := 66
 	if popupWidth > m.width-4 {
 		popupWidth = m.width - 4
@@ -2859,11 +2865,10 @@ func (m *Model) addHelpLine() string {
 // ─── Board picker ───────────────────────────────────────────────────
 
 func (m *Model) enterPicker() (tea.Model, tea.Cmd) {
-	// Each open is a clean default view — show-archived, confirm and rename
-	// state are session-scoped to one popup, not persistent.
+	// Each open is a clean default view — show-archived and confirm state are
+	// session-scoped to one popup, not persistent.
 	m.pickerShowArchived = false
 	m.confirmArchive = ""
-	m.renameTarget = ""
 	if !m.loadPickerData() {
 		return m, nil
 	}
@@ -2941,9 +2946,6 @@ func (m *Model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.confirmArchive != "" {
 		return m.updatePickerConfirm(msg)
 	}
-	if m.renameTarget != "" {
-		return m.updatePickerRename(msg)
-	}
 	switch {
 	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
@@ -2966,8 +2968,6 @@ func (m *Model) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.pickerTogglePin()
 	case key.Matches(msg, keys.TagPicker):
 		return m.enterTagPicker()
-	case key.Matches(msg, keys.Rename):
-		return m.startPickerRename()
 	case key.Matches(msg, keys.MoveUp):
 		return m.pickerReorderPin(-1)
 	case key.Matches(msg, keys.MoveDown):
@@ -3070,149 +3070,6 @@ func (m *Model) pinnedBlockEdge(idx, dir int) (bool, string) {
 		return true, "already last in the pinned block — press p to unpin"
 	}
 	return false, ""
-}
-
-// renameFocus values — also the tab cycle order.
-const (
-	renameFocusName = iota
-	renameFocusPrefix
-)
-
-// startPickerRename opens the two-field rename form on the highlighted sprint:
-// its name, and the prefix its ticket ids carry.
-func (m *Model) startPickerRename() (tea.Model, tea.Cmd) {
-	e, ok := m.selectedPickerBoard()
-	if !ok {
-		return m, nil
-	}
-	if e.name == "" {
-		m.notice = "main board can't be renamed"
-		return m, nil
-	}
-	if e.archived {
-		m.notice = "archived sprints are read-only — press u to unarchive"
-		return m, nil
-	}
-
-	nameIn := textinput.New()
-	nameIn.Prompt = ""
-	nameIn.CharLimit = 64
-	nameIn.Width = 28 // a 64-char name would otherwise push past the popup edge
-	nameIn.SetValue(e.name)
-	nameIn.CursorEnd()
-	nameIn.Focus()
-	m.renameName = nameIn
-
-	prefixIn := textinput.New()
-	prefixIn.Prompt = ""
-	prefixIn.CharLimit = 4
-	prefixIn.Width = 4
-	prefixIn.SetValue(e.prefix)
-	prefixIn.CursorEnd()
-	prefixIn.Blur()
-	m.renamePrefix = prefixIn
-
-	m.renameFocus = renameFocusName
-	m.renameFromPrefix = e.prefix
-	m.renameTarget = e.name
-	return m, textinput.Blink
-}
-
-func (m *Model) updatePickerRename(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// The fields swallow runes, so j/k can't move between them — tab and the
-	// arrow keys do.
-	switch msg.Type {
-	case tea.KeyEsc:
-		m.cancelPickerRename()
-		return m, nil
-	case tea.KeyEnter:
-		return m.submitPickerRename()
-	case tea.KeyTab, tea.KeyDown:
-		m.focusRenameField(1)
-		return m, nil
-	case tea.KeyShiftTab, tea.KeyUp:
-		m.focusRenameField(-1)
-		return m, nil
-	}
-
-	var cmd tea.Cmd
-	if m.renameFocus == renameFocusName {
-		m.renameName, cmd = m.renameName.Update(msg)
-	} else {
-		m.renamePrefix, cmd = m.renamePrefix.Update(msg)
-	}
-	return m, cmd
-}
-
-func (m *Model) focusRenameField(dir int) {
-	m.setRenameFocus((m.renameFocus + dir + 2) % 2)
-}
-
-// setRenameFocus moves the keyboard to one field of the rename form. The
-// highlight and the focused widget have to move together: a blurred textinput
-// drops every key it is handed, so setting the index alone leaves the form
-// looking focused while what you type goes nowhere.
-func (m *Model) setRenameFocus(idx int) {
-	m.renameFocus = idx
-	if m.renameFocus == renameFocusName {
-		m.renameName.Focus()
-		m.renamePrefix.Blur()
-		return
-	}
-	m.renamePrefix.Focus()
-	m.renameName.Blur()
-}
-
-func (m *Model) cancelPickerRename() {
-	m.renameTarget = ""
-	m.renameName.Blur()
-	m.renamePrefix.Blur()
-}
-
-// submitPickerRename applies the form. A rejected change leaves the form open on
-// the values the user typed, with the reason in the footer — retyping a name
-// from scratch to fix one character would be the worse trade.
-func (m *Model) submitPickerRename() (tea.Model, tea.Cmd) {
-	target := m.renameTarget
-	newName := strings.TrimSpace(m.renameName.Value())
-	newPrefix := strings.TrimSpace(m.renamePrefix.Value())
-	if newName == "" {
-		newName = target
-	}
-
-	// What actually changed, decided before the write so the notice can't claim
-	// more than happened. An empty prefix field means "leave it alone", which is
-	// UpdateSprint's own reading of it.
-	renamed := newName != target
-	retagged := newPrefix != "" && !strings.EqualFold(newPrefix, m.renameFromPrefix)
-
-	if err := store.UpdateSprint(target, newName, newPrefix); err != nil {
-		m.notice = err.Error()
-		return m, nil
-	}
-	m.cancelPickerRename()
-
-	// Only re-point the live model when its directory actually moved —
-	// switchBoard resets column focus, cursors and scroll, so doing it on an
-	// unchanged submit would throw away the user's place on the board.
-	if renamed && m.sprintName == target {
-		if err := m.switchBoard(newName); err != nil {
-			m.err = err
-			return m, nil
-		}
-	}
-	m.reloadPickerEntriesOn(newName)
-	switch {
-	case renamed && retagged:
-		m.notice = fmt.Sprintf("renamed %q to %q, ids now carry %s", target, newName, strings.ToUpper(newPrefix))
-	case renamed:
-		m.notice = fmt.Sprintf("renamed %q to %q", target, newName)
-	case retagged:
-		m.notice = fmt.Sprintf("%q ids now carry %s", newName, strings.ToUpper(newPrefix))
-	default:
-		m.notice = "nothing changed"
-	}
-	return m, nil
 }
 
 // reloadPickerEntriesOn refreshes the list and parks the cursor on a named
@@ -3375,9 +3232,6 @@ func (m *Model) viewPicker() string {
 	if m.confirmArchive != "" {
 		rowCount += 2 // blank + confirm prompt
 	}
-	if m.renameTarget != "" {
-		rowCount += 4 // blank + heading + name + prefix
-	}
 	popupWidth, popupHeight := m.listPopupSize(m.pickerWidestRow, rowCount)
 
 	backdrop := m.popupBackdrop(m.popupReturnView)
@@ -3456,9 +3310,6 @@ func (m *Model) renderPickerPopup(width, height int, origin point) string {
 		prompt := fmt.Sprintf("archive %q? [y/N]", m.confirmArchive)
 		rows = append(rows, "", lipgloss.NewStyle().Foreground(peach).Bold(true).Render(prompt))
 	}
-	if m.renameTarget != "" {
-		rows = append(rows, m.renameFormRows(innerWidth)...)
-	}
 
 	visible := height - 2
 	if visible < 1 {
@@ -3466,9 +3317,9 @@ func (m *Model) renderPickerPopup(width, height int, origin point) string {
 	}
 	if len(rows) > visible {
 		start := pickerLineOf(lines, m.pickerIdx) - visible/2
-		if m.renameTarget != "" || m.confirmArchive != "" {
-			// Both live at the bottom of the list and both want keys: anchor
-			// there so a short terminal never hides the thing being typed into.
+		if m.confirmArchive != "" {
+			// It lives at the bottom of the list and wants keys: anchor there so
+			// a short terminal never hides the thing being answered.
 			start = len(rows) - visible
 		}
 		if start < 0 {
@@ -3481,28 +3332,11 @@ func (m *Model) renderPickerPopup(width, height int, origin point) string {
 		rowOffset = start
 	}
 
-	// The rename form's two inputs are the last rows in the list, and the window
-	// above is anchored to the bottom whenever it is open, so they are always on
-	// screen to be clicked.
-	if m.renameTarget != "" && len(rows) >= 2 {
-		for i, focus := range []int{renameFocusName, renameFocusPrefix} {
-			m.addZone(hitZone{
-				kind: zoneRenameField,
-				x:    origin.x + 2,
-				y:    origin.y + 1 + len(rows) - 2 + i,
-				w:    innerWidth,
-				h:    1,
-				idx:  focus,
-			})
-		}
-	}
-
 	// Board rows are clickable; the divider and the confirm prompt rows
-	// (appended after the boards) are not. While the rename form or the archive
-	// confirm owns the keyboard, no row is: moving the highlight would leave it
-	// pointing at a board the form isn't editing, and a click would close the
-	// popup and silently discard what was typed.
-	rowsAreLive := m.renameTarget == "" && m.confirmArchive == ""
+	// (appended after the boards) are not. While the archive confirm owns the
+	// keyboard, no row is: moving the highlight would leave it pointing at a
+	// board the prompt isn't asking about.
+	rowsAreLive := m.confirmArchive == ""
 	for i := 0; rowsAreLive && i < len(rows); i++ {
 		idx := rowOffset + i
 		if idx >= len(lines) {
@@ -3523,41 +3357,6 @@ func (m *Model) renderPickerPopup(width, height int, origin point) string {
 
 	content := lipgloss.NewStyle().PaddingLeft(1).Render(strings.Join(rows, "\n"))
 	return renderPanel("Boards", content, width, height, green, true)
-}
-
-// renameFormRows renders the rename form under the board list: a heading, then
-// the name and prefix fields. The focused field's label carries the accent —
-// styling the inputs themselves mangles the cursor textinput draws.
-func (m *Model) renameFormRows(width int) []string {
-	const labelWidth = 8
-	label := func(text string, focused bool) string {
-		style := lipgloss.NewStyle().Foreground(midGray).Width(labelWidth)
-		if focused {
-			style = style.Foreground(green).Bold(true)
-		}
-		return style.Render(text)
-	}
-	// No sprint name in the heading — the name field below is already showing
-	// it, and a 64-char one would push the popup past its width cap.
-	heading := lipgloss.NewStyle().Foreground(peach).Bold(true).Render("rename sprint")
-
-	return []string{
-		"",
-		heading,
-		label("name", m.renameFocus == renameFocusName) + m.renameName.View(),
-		label("prefix", m.renameFocus == renameFocusPrefix) + m.renamePrefix.View() + m.renameIDHint(),
-	}
-}
-
-// renameIDHint spells out what a changed prefix does to existing ids — the part
-// that isn't obvious from typing two letters into a field. Silent when the
-// prefix is untouched.
-func (m *Model) renameIDHint() string {
-	next := strings.ToUpper(strings.TrimSpace(m.renamePrefix.Value()))
-	if next == "" || next == strings.ToUpper(m.renameFromPrefix) {
-		return ""
-	}
-	return dimStyle.Render(fmt.Sprintf("  %s1 → %s1", m.renameFromPrefix, next))
 }
 
 func renderPickerRow(e pickerEntry, width int, selected, current bool) string {
@@ -3625,9 +3424,12 @@ func (m *Model) helpText() string {
 		return hints
 	case infoView:
 		if m.infoEditing {
-			return "enter save | esc discard | shift+enter newline"
+			if m.infoField == infoFieldDesc {
+				return "enter save | esc discard | shift+enter newline"
+			}
+			return "enter save | esc discard"
 		}
-		return "enter edit | esc close"
+		return fmt.Sprintf("j/k fields | enter/%s edit | esc close", hk("card.edit"))
 	case emojiView:
 		if m.emojiPick.filtering {
 			return "type filter | ctrl+n/p move | enter keep filter | esc clear"
@@ -3649,16 +3451,13 @@ func (m *Model) helpText() string {
 		if m.confirmArchive != "" {
 			return fmt.Sprintf("archive %q? y / n", m.confirmArchive)
 		}
-		if m.renameTarget != "" {
-			return "tab/↑↓ fields | enter apply | esc cancel"
-		}
 		if m.pickerShowArchived {
-			return fmt.Sprintf("j/k select | enter switch | %s info | %s tags | %s rename | %s pin | %s/%s reorder | %s archive | %s unarchive | %s hide archived | esc/%s close",
-				hk("board.info"), hk("board.tags"), hk("board.rename"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
+			return fmt.Sprintf("j/k select | enter switch | %s info | %s tags | %s pin | %s/%s reorder | %s archive | %s unarchive | %s hide archived | esc/%s close",
+				hk("board.info"), hk("board.tags"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
 				hk("card.archive"), hk("board.unarchive"), hk("board.archiveView"), hk("board.picker"))
 		}
-		return fmt.Sprintf("j/k select | enter switch | %s info | %s tags | %s rename | %s pin | %s/%s reorder | %s archive | %s show archived | esc/%s close",
-			hk("board.info"), hk("board.tags"), hk("board.rename"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
+		return fmt.Sprintf("j/k select | enter switch | %s info | %s tags | %s pin | %s/%s reorder | %s archive | %s show archived | esc/%s close",
+			hk("board.info"), hk("board.tags"), hk("board.pin"), hk("card.reorderUp"), hk("card.reorderDown"),
 			hk("card.archive"), hk("board.archiveView"), hk("board.picker"))
 	case archiveView:
 		if m.archiveSearch.active() {

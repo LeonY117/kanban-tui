@@ -93,17 +93,20 @@ func (m *Model) readInfoBoard(board *model.Board) {
 	m.infoCounts = store.CountByStatus(board)
 }
 
-// infoRenamable reports whether this board's name and prefix are editable at
-// all. Main's are not: its directory is the root rather than a name, and its
-// ids are bare numbers. Its two upper panels render dim and j/k skips them.
+// infoRenamable reports whether this board has a name and a prefix to change.
+// Main doesn't: its directory is the root rather than a name, and its ids are
+// bare numbers. Its two fields still take the cursor — they just draw dim and
+// refuse the edit. Skipping them instead left j/k doing nothing at all on the
+// board the TUI opens on, which reads as a broken popup rather than a fixed one.
 func (m *Model) infoRenamable() bool { return m.infoBoard != "" }
 
-// infoFirstField is where j/k stops going up — the description alone on main.
-func (m *Model) infoFirstField() int {
-	if m.infoRenamable() {
-		return infoFieldPrefix
+// mainFieldRefusal explains why main has nothing to put in a field, at the
+// moment the edit is attempted.
+func mainFieldRefusal(field int) string {
+	if field == infoFieldPrefix {
+		return "main's ids are bare numbers — only sprints carry a prefix"
 	}
-	return infoFieldDesc
+	return "main is the root board — only sprints can be renamed"
 }
 
 // moveInfoField walks j/k down the popup. Stacked, that is three stops; split,
@@ -111,21 +114,21 @@ func (m *Model) infoFirstField() int {
 // between them.
 func (m *Model) moveInfoField(dir int) {
 	if !m.infoSplitRow {
-		m.infoField = min(infoFieldDesc, max(m.infoFirstField(), m.infoField+dir))
+		m.infoField = min(infoFieldDesc, max(infoFieldPrefix, m.infoField+dir))
 		return
 	}
 	if dir > 0 {
 		m.infoField = infoFieldDesc
 		return
 	}
-	if m.infoField == infoFieldDesc && m.infoRenamable() {
+	if m.infoField == infoFieldDesc {
 		m.infoField = infoFieldName
 	}
 }
 
 // moveInfoAcross is h/l on the split row: the name sits left of the prefix.
 func (m *Model) moveInfoAcross(dir int) {
-	if !m.infoSplitRow || !m.infoRenamable() || m.infoField == infoFieldDesc {
+	if !m.infoSplitRow || m.infoField == infoFieldDesc {
 		return
 	}
 	if dir < 0 {
@@ -139,6 +142,10 @@ func (m *Model) moveInfoAcross(dir int) {
 func (m *Model) startInfoEdit() (tea.Model, tea.Cmd) {
 	if m.infoBoard != "" && store.IsSprintArchived(m.infoBoard) {
 		m.notice = "sprint " + m.infoBoard + " is archived — unarchive it to edit"
+		return m, nil
+	}
+	if !m.infoRenamable() && m.infoField != infoFieldDesc {
+		m.notice = mainFieldRefusal(m.infoField)
 		return m, nil
 	}
 	switch m.infoField {
@@ -457,19 +464,26 @@ func infoRowSplit(innerWidth int) (nameWidth, prefixWidth int) {
 }
 
 // renderInfoPanelAt draws one field of the name row and registers its zone.
-// Fields main has nothing to put in draw dim and register nothing, so neither
-// the cursor nor the mouse can land on one that would only refuse.
+// Focus is drawn even on main, whose fields hold nothing to change: the cursor
+// still walks through them, and a highlight that refused to move would be the
+// harder thing to explain. The dim value is what says there is nothing here.
 func (m *Model) renderInfoPanelAt(title string, field int, content string, width int, at point) string {
-	focused := m.infoField == field && m.infoRenamable()
+	focused := m.infoField == field
 	color := softWhite
 	if focused {
 		color = cyan
 	}
-	if !m.infoRenamable() {
-		return renderPanel(title, dimStyle.Render(content), width, infoNameHeight, dimGray, false)
-	}
 	m.addZone(hitZone{kind: zoneInfoField, x: at.x, y: at.y, w: width, h: infoNameHeight, idx: field})
 	return renderPanel(title, content, width, infoNameHeight, color, focused)
+}
+
+// infoValueStyle is how a field's stored value is drawn: dim when the board has
+// nothing to put there, so main reads as fixed rather than as empty.
+func (m *Model) infoValueStyle() lipgloss.Style {
+	if !m.infoRenamable() {
+		return lipgloss.NewStyle().Foreground(dimGray)
+	}
+	return lipgloss.NewStyle().Bold(true).Foreground(white)
 }
 
 // renderInfoPrefixBox is the split layout's prefix field. The id preview lives
@@ -479,7 +493,7 @@ func (m *Model) renderInfoPrefixBox() string {
 	if m.infoEditing && m.infoField == infoFieldPrefix {
 		return m.infoPrefixIn.View()
 	}
-	return lipgloss.NewStyle().Bold(true).Foreground(white).Render(prefixLabel(m.infoPrefix))
+	return m.infoValueStyle().Render(prefixLabel(m.infoPrefix))
 }
 
 // infoFrameTitle names the board being edited, the way the new-ticket popup's
@@ -491,16 +505,6 @@ func (m *Model) infoFrameTitle() string {
 		title += " [archived]"
 	}
 	return title
-}
-
-// inertOr dims a field main has nothing to put in it. Its directory is the root
-// rather than a name and its ids are bare numbers, so neither the cursor nor
-// the mouse is allowed to land there.
-func (m *Model) inertOr(field int, color lipgloss.Color) lipgloss.Color {
-	if field != infoFieldDesc && !m.infoRenamable() {
-		return dimGray
-	}
-	return color
 }
 
 // renderInfoMeta is the popup's metadata line — the prefix new ticket ids
@@ -524,21 +528,19 @@ func (m *Model) renderInfoMeta(origin point) string {
 	label := prefixLabel(m.infoPrefix)
 	var prefix string
 	switch {
-	case !m.infoRenamable():
-		prefix = dimStyle.Render(label)
 	case m.infoEditing && m.infoField == infoFieldPrefix:
 		// The widget's own View, not a styled copy of its value: stacking a
 		// style on it mangles the cursor, and the cursor is what separates
 		// "typing here" from "selected".
 		return m.infoPrefixIn.View() + m.infoIDHint()
 	case m.infoField == infoFieldPrefix:
+		// Selection beats the dim: the cursor walks main's prefix too, and a
+		// highlight you cannot see is a cursor you have lost.
 		prefix = selectedFieldStyle.Render(label)
 	default:
-		prefix = lipgloss.NewStyle().Foreground(white).Bold(true).Render(label)
+		prefix = m.infoValueStyle().Render(label)
 	}
-	if m.infoRenamable() {
-		m.addZone(hitZone{kind: zoneInfoField, x: origin.x, y: origin.y, w: lipgloss.Width(prefix), h: 1, idx: infoFieldPrefix})
-	}
+	m.addZone(hitZone{kind: zoneInfoField, x: origin.x, y: origin.y, w: lipgloss.Width(prefix), h: 1, idx: infoFieldPrefix})
 	return prefix + "  " + formatCounts(m.infoCounts)
 }
 
@@ -557,7 +559,7 @@ func (m *Model) infoHelpLine() string {
 		parts = []string{"enter: save", "esc: discard"}
 	default:
 		nav := "j/k: field"
-		if m.infoSplitRow && m.infoRenamable() {
+		if m.infoSplitRow {
 			nav = "j/k/h/l: field"
 		}
 		parts = []string{nav, "enter: edit", "z: layout", "esc: close"}
@@ -582,7 +584,7 @@ func (m *Model) renderInfoName(width int) string {
 		m.infoNameIn.Width = max(4, width-2)
 		return m.infoNameIn.View()
 	}
-	return lipgloss.NewStyle().Bold(true).Foreground(white).Render(m.infoName)
+	return m.infoValueStyle().Render(m.infoName)
 }
 
 func (m *Model) renderInfoDesc(width, height int) string {

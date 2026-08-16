@@ -329,9 +329,6 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		// the same reason: a misjudged click must not open an editor over the
 		// board you were only reading.
 		already := repeat && m.infoField == z.idx
-		if z.idx != infoFieldDesc && !m.infoRenamable() {
-			return m, nil
-		}
 		m.infoField = z.idx
 		if already {
 			return m.startInfoEdit()

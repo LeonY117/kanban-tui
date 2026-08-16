@@ -538,25 +538,55 @@ func TestInfoNoOpSaveKeepsBoardPosition(t *testing.T) {
 	}
 }
 
-// Main's name is its root directory and its ids are bare numbers, so neither
-// panel is a field. They render dim and the cursor cannot reach them.
-func TestInfoMainHasNoNameOrPrefixField(t *testing.T) {
-	m := testModel(t, "a ticket")
-	m.Update(keyPress("i"))
+// Main's name is its root directory and its ids are bare numbers, so there is
+// nothing to edit there — but the cursor still walks through both fields. Making
+// them unreachable left j/k doing nothing at all on the board the TUI opens on,
+// which is a broken popup, not a fixed one (Leon, 2026-08-16).
+func TestInfoMainFieldsTakeTheCursorAndRefuseTheEdit(t *testing.T) {
+	for _, split := range []bool{false, true} {
+		name := map[bool]string{false: "stacked", true: "split"}[split]
+		t.Run(name, func(t *testing.T) {
+			m := testModel(t, "a ticket")
+			m.infoSplitRow = split
+			m.Update(keyPress("i"))
+			if m.infoField != infoFieldDesc {
+				t.Fatalf("landed on field %d, want the description", m.infoField)
+			}
 
-	if m.infoField != infoFieldDesc {
-		t.Fatalf("landed on field %d, want the description", m.infoField)
-	}
-	m.Update(keyPress("k"))
-	if m.infoField != infoFieldDesc {
-		t.Errorf("k reached field %d on main, want to stay on the description", m.infoField)
-	}
+			m.Update(keyPress("k"))
+			if m.infoField != infoFieldName {
+				t.Fatalf("k left the cursor on field %d — main's name must still take it", m.infoField)
+			}
+			m.Update(keyPress("enter"))
+			if m.infoEditing {
+				t.Error("main's name was opened for editing")
+			}
+			if !strings.Contains(m.notice, "renamed") {
+				t.Errorf("notice = %q, want it to say why main can't be renamed", m.notice)
+			}
 
-	m.View()
-	for _, z := range m.zones {
-		if z.kind == zoneInfoField && z.idx != infoFieldDesc {
-			t.Errorf("main's panel %d is clickable", z.idx)
-		}
+			// And the prefix, reached the way its layout reaches it.
+			m.notice = ""
+			if split {
+				m.Update(keyPress("l"))
+			} else {
+				m.Update(keyPress("k"))
+			}
+			if m.infoField != infoFieldPrefix {
+				t.Fatalf("cursor on field %d, want main's prefix", m.infoField)
+			}
+			m.Update(keyPress("enter"))
+			if m.infoEditing {
+				t.Error("main's prefix was opened for editing")
+			}
+			if !strings.Contains(m.notice, "prefix") {
+				t.Errorf("notice = %q, want it to say why main has no prefix", m.notice)
+			}
+
+			// The mouse gets the same answer, so a click is never a dead end.
+			m.View()
+			zoneOf(t, m, zoneInfoField, 0, infoFieldName)
+		})
 	}
 }
 
@@ -610,27 +640,6 @@ func TestInfoFieldsWalkWithJK(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// Main has no name and no prefix, so the split row is inert end to end — h/l
-// must not park the cursor on a box that would only refuse.
-func TestInfoSplitRowInertOnMain(t *testing.T) {
-	m := testModel(t, "a ticket")
-	m.infoSplitRow = true
-	m.Update(keyPress("i"))
-
-	for _, k := range []string{"k", "h", "l", "k"} {
-		m.Update(keyPress(k))
-		if m.infoField != infoFieldDesc {
-			t.Fatalf("%q reached field %d on main, want to stay on the description", k, m.infoField)
-		}
-	}
-	m.View()
-	for _, z := range m.zones {
-		if z.kind == zoneInfoField && z.idx != infoFieldDesc {
-			t.Errorf("main's %d box is clickable under the split layout", z.idx)
-		}
 	}
 }
 

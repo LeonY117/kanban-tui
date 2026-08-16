@@ -266,10 +266,10 @@ statement that you still want it in front of you.
 ### Renaming a board
 
 `r` in the picker opens the board popup with the sprint's name ready to type;
-the panel above it holds the prefix its ticket ids carry. Changing the prefix
-rewrites the short id of every ticket on the board **and in its archive**,
-keeping the number — `KA7` becomes `KB7` — so the part people actually quote
-survives. It's refused outright if another board already issued one of the
+the box beside it holds the prefix its ticket ids carry, reached with `l`.
+Changing the prefix rewrites the short id of every ticket on the board **and in
+its archive**, keeping the number — `KA7` becomes `KB7` — so the part people
+actually quote survives. It's refused outright if another board already issued one of the
 target ids, per id rather than per prefix, since two boards are allowed to share
 a prefix and interleave their numbers.
 
@@ -278,8 +278,9 @@ being derived from the name, so a board created before prefixes existed doesn't
 quietly change which ids it hands out next.
 
 Main has neither to change: its directory is the root rather than a name, and
-its ids are bare numbers. Its two upper panels draw dim and the cursor skips
-past them to the description.
+its ids are bare numbers. Its two fields draw dim but still take the cursor —
+`enter` on one says why rather than doing nothing, which is the same answer an
+archived sprint gives.
 
 ## Storage
 

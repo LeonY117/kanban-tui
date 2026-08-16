@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/LeonY117/kanban-tui/internal/model"
 	"github.com/LeonY117/kanban-tui/internal/store"
@@ -725,5 +726,242 @@ func TestInfoDescriptionTakesTheRemainingHeight(t *testing.T) {
 	if want := popupHeight - 7; desc.h != want {
 		t.Errorf("description panel is %d rows, want %d — a one-line board should still get the full box",
 			desc.h, want)
+	}
+}
+
+// ─── Mouse against an open editor ───────────────────────────────────
+
+// Clicking another panel mid-edit used to move the field cursor and leave the
+// edit open against a widget that was never built — the next render called
+// SetWidth on a zero-value textarea and took the whole TUI down (/ship, 2026-08-16).
+func TestInfoClickAwayFromAnOpenEditorDoesNotCrash(t *testing.T) {
+	m := pickerModel(t, "demo")
+	m.width, m.height = 110, 34
+	selectBoard(t, m, "demo")
+	m.updatePicker(keyPress("r")) // opens the name field for typing
+	if !m.infoEditing || m.infoField != infoFieldName {
+		t.Fatalf("setup: editing=%v field=%d", m.infoEditing, m.infoField)
+	}
+	m.View()
+
+	desc := zoneOf(t, m, zoneInfoField, 0, infoFieldDesc)
+	m.mouseClick(mouseAt(desc.x, desc.y))
+	m.View() // panicked here before the guard
+}
+
+// Clicking away commits the field rather than losing it, the way it does on a
+// card — and the cursor only moves once the write is actually accepted.
+func TestInfoClickAwayCommitsTheField(t *testing.T) {
+	m := pickerModel(t, "demo")
+	m.width, m.height = 110, 34
+	selectBoard(t, m, "demo")
+	m.updatePicker(keyPress("r"))
+	m.infoNameIn.SetValue("renamed-by-clicking-away")
+	m.View()
+
+	desc := zoneOf(t, m, zoneInfoField, 0, infoFieldDesc)
+	m.mouseClick(mouseAt(desc.x, desc.y))
+
+	if m.infoEditing {
+		t.Error("still editing after clicking another panel")
+	}
+	if !store.SprintExists("renamed-by-clicking-away") {
+		t.Error("the click discarded the rename instead of committing it")
+	}
+	if m.infoField != infoFieldDesc {
+		t.Errorf("field = %d, want the clicked panel", m.infoField)
+	}
+}
+
+// A refused write keeps the editor open, so the click must not walk the cursor
+// off the field still holding the text.
+func TestInfoClickAwayFromARefusedEditStaysPut(t *testing.T) {
+	m := pickerModel(t, "alpha", "beta")
+	m.width, m.height = 110, 34
+	selectBoard(t, m, "beta")
+	m.updatePicker(keyPress("r"))
+	m.infoNameIn.SetValue("alpha") // already taken
+	m.View()
+
+	desc := zoneOf(t, m, zoneInfoField, 0, infoFieldDesc)
+	m.mouseClick(mouseAt(desc.x, desc.y))
+
+	if !m.infoEditing || m.infoField != infoFieldName {
+		t.Errorf("editing=%v field=%d — a refused save must keep the field and its text",
+			m.infoEditing, m.infoField)
+	}
+	if m.infoNameIn.Value() != "alpha" {
+		t.Errorf("typed value lost: %q", m.infoNameIn.Value())
+	}
+	if !store.SprintExists("beta") {
+		t.Error("beta was renamed anyway")
+	}
+}
+
+// Clicking inside the box already being edited rebuilt the widget from the
+// stored text, silently reverting everything typed since it opened.
+func TestInfoClickInsideTheOpenEditorKeepsTheDraft(t *testing.T) {
+	m := pickerModel(t, "demo")
+	m.width, m.height = 110, 34
+	setDesc(t, "demo", "stored text")
+	selectBoard(t, m, "demo")
+	m.Update(keyPress("i"))
+	m.Update(keyPress("enter"))
+	m.infoDesc.SetValue("a paragraph typed but not yet saved")
+	m.View()
+
+	desc := zoneOf(t, m, zoneInfoField, 0, infoFieldDesc)
+	m.mouseClick(mouseAt(desc.x, desc.y))
+
+	if got := m.infoDesc.Value(); got != "a paragraph typed but not yet saved" {
+		t.Errorf("editor value = %q — the click reverted the draft", got)
+	}
+	if !m.infoEditing {
+		t.Error("the click closed an editor it was only meant to reposition")
+	}
+}
+
+// lastClick outlives the popup, so a reopened popup could match a click from
+// the previous visit and open an editor on the very first press.
+func TestInfoReopeningNeedsTwoClicksAgain(t *testing.T) {
+	m := pickerModel(t, "demo")
+	m.width, m.height = 110, 34
+	selectBoard(t, m, "demo")
+	m.Update(keyPress("i"))
+	m.View()
+	desc := zoneOf(t, m, zoneInfoField, 0, infoFieldDesc)
+	m.mouseClick(mouseAt(desc.x, desc.y)) // selects
+	m.Update(keyPress("esc"))             // close
+
+	m.Update(keyPress("i")) // reopen
+	m.View()
+	m.mouseClick(mouseAt(desc.x, desc.y))
+	if m.infoEditing {
+		t.Error("the first click of a fresh popup opened the editor")
+	}
+}
+
+// ─── Where the popup closes back to ─────────────────────────────────
+
+// Renaming the live board resets the cursors and drops the archive cache, so
+// closing back into a view rendered from that state showed a ticket that was no
+// longer selected — and the next save wrote to the one that used to be.
+func TestInfoRenameLeavesDerivedViews(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		open func(m *Model)
+	}{
+		{"split", func(m *Model) { m.cursors[1] = 2; m.enterSplit(); m.splitFocus = 1; m.refreshDetailEditors() }},
+		{"archive", func(m *Model) { m.enterArchive() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := boardWith(t, "main-a|TODO")
+			withSprint(t, "demo", "first|TODO", "second|TODO", "third|TODO")
+			if err := m.switchBoard("demo"); err != nil {
+				t.Fatal(err)
+			}
+			m.width, m.height = 110, 34
+			tc.open(m)
+
+			m.View()
+			badge := zoneOf(t, m, zoneBoardBadge, 0, 0)
+			m.mouseClick(mouseAt(badge.x, badge.y))
+			m.infoField = infoFieldName
+			m.Update(keyPress("enter"))
+			m.infoNameIn.SetValue("tools")
+			m.Update(keyPress("enter"))
+			m.Update(keyPress("esc"))
+
+			if m.view != boardView {
+				t.Errorf("closed onto view %v, want the board — the view behind the popup was rendered from state the rename invalidated", m.view)
+			}
+			if sel := m.selectedTicket(); sel != nil && m.editTicketID != "" && sel.ID != m.editTicketID {
+				t.Errorf("detail editors still bound to %s while %q is selected", m.editTicketID, sel.Title)
+			}
+		})
+	}
+}
+
+// The popup opened from the picker still closes back onto it: the picker is
+// reloaded explicitly, and returning to it is the point of opening it there.
+func TestInfoRenameFromPickerStillClosesToThePicker(t *testing.T) {
+	m := pickerModel(t, "demo")
+	m.width, m.height = 110, 34
+	openRename(t, m, "demo")
+	m.infoNameIn.SetValue("tools")
+	m.Update(keyPress("enter"))
+	m.Update(keyPress("esc"))
+
+	if m.view != pickerView {
+		t.Errorf("view = %v, want the picker", m.view)
+	}
+}
+
+// ─── Reading a description longer than the box ──────────────────────
+
+// The popup is a fixed size, so a long description is clipped. j/k walk into
+// the text once the field cursor has nowhere further to go, and the panel says
+// how far down it is — clipping it silently was the regression.
+func TestInfoLongDescriptionScrollsAndSaysSo(t *testing.T) {
+	m := pickerModel(t, "demo")
+	setDesc(t, "demo", strings.Repeat("a long line of board context. ", 60))
+	selectBoard(t, m, "demo")
+	m.width, m.height = 110, 34
+	m.Update(keyPress("i"))
+	view := m.View()
+
+	if m.infoScrollMax == 0 {
+		t.Fatal("setup: the description fits, nothing to scroll")
+	}
+	if !strings.Contains(ansi.Strip(view), "1/") {
+		t.Errorf("no overflow marker on the description panel:\n%s", ansi.Strip(view))
+	}
+
+	m.Update(keyPress("j"))
+	if m.infoScroll != 1 {
+		t.Errorf("j left infoScroll at %d — the text below the box is unreachable", m.infoScroll)
+	}
+	for i := 0; i < m.infoScrollMax+3; i++ {
+		m.Update(keyPress("j"))
+	}
+	if m.infoScroll != m.infoScrollMax {
+		t.Errorf("infoScroll = %d, want it clamped at %d", m.infoScroll, m.infoScrollMax)
+	}
+	// Back up through the text, then out to the name row.
+	for i := 0; i < m.infoScrollMax; i++ {
+		m.Update(keyPress("k"))
+	}
+	if m.infoScroll != 0 || m.infoField != infoFieldDesc {
+		t.Fatalf("scroll=%d field=%d, want the top of the description", m.infoScroll, m.infoField)
+	}
+	m.Update(keyPress("k"))
+	if m.infoField != infoFieldName {
+		t.Errorf("k at the top of the text did not step out to the name row (field %d)", m.infoField)
+	}
+}
+
+// A store refusal puts its instruction last, and the panel clips without a
+// mark — so the half that says what to do about it was the half that vanished.
+func TestInfoLongRefusalIsTruncatedNotClipped(t *testing.T) {
+	m := pickerModel(t, "alpha", "beta")
+	if err := store.ArchiveSprint("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	m.width, m.height = 110, 34
+	m.reloadPickerEntries()
+	openRename(t, m, "beta")
+	m.infoNameIn.SetValue("alpha") // taken by an archived sprint: a long message
+	m.Update(keyPress("enter"))
+
+	if !strings.Contains(m.notice, "unarchive") {
+		t.Fatalf("setup: notice %q is not the long refusal", m.notice)
+	}
+	line := ansi.Strip(m.infoHelpLine())
+	if lipgloss.Width(line) > m.infoInnerWidth() {
+		t.Errorf("help line is %d cells inside a %d-cell panel: %q",
+			lipgloss.Width(line), m.infoInnerWidth(), line)
+	}
+	if !strings.Contains(line, "…") {
+		t.Errorf("the refusal was cut with no mark that it continues: %q", line)
 	}
 }

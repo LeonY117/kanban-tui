@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -77,6 +79,10 @@ func (m *Model) enterInfo(name string) {
 		m.infoReturn = m.view
 	}
 	m.view = infoView
+	// One click selects, a second acts — but lastClick outlives the popup, so
+	// a reopened popup could match a click from the last visit and open an
+	// editor on the very first press.
+	m.lastClick = clickTarget{}
 	m.infoBoard = name
 	m.readInfoBoard(board)
 	m.infoScroll = 0
@@ -112,7 +118,23 @@ func mainFieldRefusal(field int) string {
 
 // moveInfoField walks j/k down the popup. The name and prefix share a row and
 // so count as one stop, with h/l choosing between them.
+//
+// Past the last field, down keeps going into the description's own text. The
+// popup is a fixed size now, so a description longer than the box is clipped —
+// and with j/k spent on the fields there would otherwise be no key at all that
+// reaches the rest of it, which on an archived sprint (where enter refuses)
+// would put the tail out of reach entirely.
 func (m *Model) moveInfoField(dir int) {
+	if m.infoField == infoFieldDesc {
+		if dir > 0 && m.infoScroll < m.infoScrollMax {
+			m.infoScroll++
+			return
+		}
+		if dir < 0 && m.infoScroll > 0 {
+			m.infoScroll--
+			return
+		}
+	}
 	if dir > 0 {
 		m.infoField = infoFieldDesc
 		return
@@ -250,9 +272,11 @@ func (m *Model) saveInfoPrefix() {
 	m.cancelInfoEdit()
 	m.refreshInfoBoard()
 	// Every short id on the board just changed, so anything drawing them is
-	// stale — the cards behind the popup included.
+	// stale — the cards behind the popup included, and the archive browser's
+	// rows, which hold ids this retag rewrote.
 	if m.infoBoard == m.sprintName {
 		m.reload()
+		m.returnToBoardIfDerived()
 	}
 	m.reloadPickerEntriesOn(m.infoBoard)
 	m.notice = fmt.Sprintf("%q ids now carry %s", m.infoBoard, m.infoPrefix)
@@ -269,6 +293,7 @@ func (m *Model) followBoardRename(oldName, newName string) {
 			m.err = err
 			return
 		}
+		m.returnToBoardIfDerived()
 	}
 	m.refreshInfoBoard()
 	m.reloadPickerEntriesOn(newName)
@@ -316,6 +341,30 @@ func (m *Model) saveInfoDesc() {
 		m.board.Description = m.infoText
 	}
 	m.notice = "description saved"
+}
+
+// returnToBoardIfDerived sends the popup home to the board when the write it
+// just made invalidated what the view behind it was showing. switchBoard resets
+// the cursors and drops the archive cache, and a retag rewrites every short id
+// including the archived ones — so closing back into the split, detail, column
+// or archive view lands on state captured before the write: a detail pane whose
+// editors still point at the ticket that *was* selected, so the next save writes
+// to a card nobody is looking at, or an archive rendered empty.
+//
+// The picker settled this the same way — pickerActivate lands on the board after
+// a switch — and it is the honest answer: the board you were looking at moved.
+// The picker itself is exempt; it is reloaded explicitly and closing back onto it
+// is the point of opening the popup from there.
+func (m *Model) returnToBoardIfDerived() {
+	switch m.infoReturn {
+	case splitView, detailView, columnView, archiveView:
+		m.infoReturn = boardView
+		// Every route back into an editing view re-seeds these, so this is
+		// belt and braces — but a ticket id left pointing at a selection the
+		// write just reset is exactly the state the next reader has to prove
+		// harmless, and re-seeding costs a line.
+		m.refreshDetailEditors()
+	}
 }
 
 func (m *Model) closeInfo() {
@@ -412,7 +461,12 @@ func (m *Model) renderInfoPopup(width, height int, origin point) string {
 	// description takes the remainder, which is the point of a fixed-size box:
 	// a board's context gets room to be read rather than a line and a half.
 	descHeight := max(infoMinDesc, height-7)
-	descPanel := renderPanel("Description", m.renderInfoDesc(innerWidth-2, descHeight-2),
+	// Body before title: rendering it is what measures the overflow, and the
+	// title is where the overflow gets announced. A fixed-size box clips a long
+	// description silently otherwise — the text just stops, with nothing saying
+	// there is more below.
+	descBody := m.renderInfoDesc(innerWidth-2, descHeight-2)
+	descPanel := renderPanel(m.descPanelTitle(), descBody,
 		innerWidth, descHeight, descColor, m.infoField == infoFieldDesc)
 	m.addZone(hitZone{kind: zoneInfoField, x: rowX, y: rowY + 4, w: innerWidth, h: descHeight, idx: infoFieldDesc})
 
@@ -481,6 +535,16 @@ func (m *Model) renderInfoPrefixBox() string {
 	return m.infoValueStyle().Render(prefixLabel(m.infoPrefix))
 }
 
+// descPanelTitle says when there is more text than the box shows. Only the
+// panel's own frame can carry it: the body is the clipped text itself, and a
+// line spent on a marker inside would be a line of description lost.
+func (m *Model) descPanelTitle() string {
+	if m.infoScrollMax > 0 && !m.infoEditing {
+		return fmt.Sprintf("Description  %d/%d", m.infoScroll+1, m.infoScrollMax+1)
+	}
+	return "Description"
+}
+
 // infoFrameTitle names the board being edited, the way the new-ticket popup's
 // frame says "New ticket". The archived tag rides here because it explains
 // every refusal the fields below can give.
@@ -511,7 +575,11 @@ func (m *Model) renderInfoMeta() string {
 // next to the field that rejected it.
 func (m *Model) infoHelpLine() string {
 	if m.notice != "" {
-		return lipgloss.NewStyle().Foreground(peach).Render(m.notice)
+		// Truncated, not clipped: renderPanel cuts at the panel edge with no
+		// mark, and a store refusal puts its instruction last — "run `kanban
+		// sprints unarchive alpha`" is exactly what falls off.
+		return lipgloss.NewStyle().Foreground(peach).
+			Render(ansi.Truncate(m.notice, m.infoInnerWidth()-2, "…"))
 	}
 	var parts []string
 	switch {

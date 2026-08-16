@@ -325,6 +325,25 @@ func (m *Model) mouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.applyPickedEmoji(filtered[z.idx].Emoji)
 		}
 	case zoneInfoField:
+		// An open board editor has to be dealt with before the field cursor
+		// moves, exactly as the ticket editors are above. Moving it alone left
+		// infoEditing true against a field whose widget was never built: the
+		// next render called SetWidth on a zero-value textarea and took the
+		// whole TUI down, and where it didn't crash it aimed the next enter at
+		// a different field's stale input — a discarded name could be saved by
+		// an enter meant for the description.
+		if m.infoEditing {
+			if z.idx == m.infoField {
+				return m, nil // a click inside the open field changes nothing
+			}
+			// Clicking away commits, the way it does on a card. A refused save
+			// keeps the editor open, and the cursor must stay on the field
+			// still holding the text rather than walk off it.
+			m.saveInfoEdit()
+			if m.infoEditing {
+				return m, nil
+			}
+		}
 		// Same first-click-selects rule as the ticket detail's panels, and for
 		// the same reason: a misjudged click must not open an editor over the
 		// board you were only reading.

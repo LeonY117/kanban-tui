@@ -543,103 +543,67 @@ func TestInfoNoOpSaveKeepsBoardPosition(t *testing.T) {
 // them unreachable left j/k doing nothing at all on the board the TUI opens on,
 // which is a broken popup, not a fixed one (Leon, 2026-08-16).
 func TestInfoMainFieldsTakeTheCursorAndRefuseTheEdit(t *testing.T) {
-	for _, split := range []bool{false, true} {
-		name := map[bool]string{false: "stacked", true: "split"}[split]
-		t.Run(name, func(t *testing.T) {
-			m := testModel(t, "a ticket")
-			m.infoSplitRow = split
-			m.Update(keyPress("i"))
-			if m.infoField != infoFieldDesc {
-				t.Fatalf("landed on field %d, want the description", m.infoField)
-			}
-
-			m.Update(keyPress("k"))
-			if m.infoField != infoFieldName {
-				t.Fatalf("k left the cursor on field %d — main's name must still take it", m.infoField)
-			}
-			m.Update(keyPress("enter"))
-			if m.infoEditing {
-				t.Error("main's name was opened for editing")
-			}
-			if !strings.Contains(m.notice, "renamed") {
-				t.Errorf("notice = %q, want it to say why main can't be renamed", m.notice)
-			}
-
-			// And the prefix, reached the way its layout reaches it.
-			m.notice = ""
-			if split {
-				m.Update(keyPress("l"))
-			} else {
-				m.Update(keyPress("k"))
-			}
-			if m.infoField != infoFieldPrefix {
-				t.Fatalf("cursor on field %d, want main's prefix", m.infoField)
-			}
-			m.Update(keyPress("enter"))
-			if m.infoEditing {
-				t.Error("main's prefix was opened for editing")
-			}
-			if !strings.Contains(m.notice, "prefix") {
-				t.Errorf("notice = %q, want it to say why main has no prefix", m.notice)
-			}
-
-			// The mouse gets the same answer, so a click is never a dead end.
-			m.View()
-			zoneOf(t, m, zoneInfoField, 0, infoFieldName)
-		})
+	m := testModel(t, "a ticket")
+	m.Update(keyPress("i"))
+	if m.infoField != infoFieldDesc {
+		t.Fatalf("landed on field %d, want the description", m.infoField)
 	}
+
+	m.Update(keyPress("k"))
+	if m.infoField != infoFieldName {
+		t.Fatalf("k left the cursor on field %d — main's name must still take it", m.infoField)
+	}
+	m.Update(keyPress("enter"))
+	if m.infoEditing {
+		t.Error("main's name was opened for editing")
+	}
+	if !strings.Contains(m.notice, "renamed") {
+		t.Errorf("notice = %q, want it to say why main can't be renamed", m.notice)
+	}
+
+	m.notice = ""
+	m.Update(keyPress("l"))
+	if m.infoField != infoFieldPrefix {
+		t.Fatalf("cursor on field %d, want main's prefix", m.infoField)
+	}
+	m.Update(keyPress("enter"))
+	if m.infoEditing {
+		t.Error("main's prefix was opened for editing")
+	}
+	if !strings.Contains(m.notice, "prefix") {
+		t.Errorf("notice = %q, want it to say why main has no prefix", m.notice)
+	}
+
+	// The mouse gets the same answer, so a click is never a dead end.
+	m.View()
+	zoneOf(t, m, zoneInfoField, 0, infoFieldName)
 }
 
-// j/k walk the panels, the way they do in the ticket detail. Stacked that is
-// three stops; split, the name and prefix share a row and h/l picks between
-// them. Both layouts live behind `z` until one is chosen.
-func TestInfoFieldsWalkWithJK(t *testing.T) {
-	for _, layout := range []struct {
-		split bool
-		name  string
-		steps []struct {
-			key  string
-			want int
-		}
+// j/k walk the rows and h/l crosses the name row — the ticket detail's motion,
+// with the name and prefix sharing one stop.
+func TestInfoFieldsWalkWithJKHL(t *testing.T) {
+	m := pickerModel(t, "demo")
+	selectBoard(t, m, "demo")
+	m.Update(keyPress("i"))
+
+	for _, step := range []struct {
+		key  string
+		want int
 	}{
-		{false, "stacked", []struct {
-			key  string
-			want int
-		}{
-			{"k", infoFieldName},
-			{"k", infoFieldPrefix},
-			{"k", infoFieldPrefix}, // clamps at the top
-			{"j", infoFieldName},
-			{"j", infoFieldDesc},
-			{"j", infoFieldDesc}, // clamps at the bottom
-		}},
-		{true, "split", []struct {
-			key  string
-			want int
-		}{
-			{"k", infoFieldName}, // the row, entered on its left cell
-			{"l", infoFieldPrefix},
-			{"l", infoFieldPrefix}, // clamps at the right edge
-			{"h", infoFieldName},
-			{"h", infoFieldName}, // clamps at the left edge
-			{"k", infoFieldName}, // already on the top row
-			{"j", infoFieldDesc},
-			{"j", infoFieldDesc},
-			{"h", infoFieldDesc}, // h/l is the row's business, not the description's
-		}},
+		{"k", infoFieldName}, // the row, entered on its left cell
+		{"l", infoFieldPrefix},
+		{"l", infoFieldPrefix}, // clamps at the right edge
+		{"h", infoFieldName},
+		{"h", infoFieldName}, // clamps at the left edge
+		{"k", infoFieldName}, // already on the top row
+		{"j", infoFieldDesc},
+		{"j", infoFieldDesc},
+		{"h", infoFieldDesc}, // h/l is the row's business, not the description's
 	} {
-		t.Run(layout.name, func(t *testing.T) {
-			m := pickerModel(t, "demo")
-			selectBoard(t, m, "demo")
-			m.infoSplitRow = layout.split
-			m.Update(keyPress("i"))
-			for _, step := range layout.steps {
-				m.Update(keyPress(step.key))
-				if m.infoField != step.want {
-					t.Fatalf("%q left the cursor on field %d, want %d", step.key, m.infoField, step.want)
-				}
-			}
-		})
+		m.Update(keyPress(step.key))
+		if m.infoField != step.want {
+			t.Fatalf("%q left the cursor on field %d, want %d", step.key, m.infoField, step.want)
+		}
 	}
 }
 

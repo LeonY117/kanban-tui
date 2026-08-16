@@ -244,7 +244,6 @@ type Model struct {
 	infoEditing   bool
 	infoNameIn    textinput.Model
 	infoPrefixIn  textinput.Model
-	infoSplitRow  bool // COMPARISON TOGGLE (z): name and prefix share a row
 
 	infoDesc   textarea.Model
 	infoReturn viewMode // the view this popup closes back onto
@@ -364,7 +363,6 @@ func NewModel(s *store.Store, sprintName string) (*Model, error) {
 		focusedCol:    1, // default to Todo
 		lastModTime:   modTime,
 		archived:      archived,
-		infoSplitRow:  true, // COMPARISON TOGGLE (z) — see info.go
 	}, nil
 }
 
